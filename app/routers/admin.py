@@ -231,6 +231,11 @@ async def admin_dashboard(
             <div class="hint">Events Manager → Settings → Conversions API → Generate Access Token</div>
           </div>
           <div class="form-group">
+            <label>Website Domain (সিকিউরিটির জন্য)</label>
+            <input type="text" name="domain" placeholder="buykori.me">
+            <div class="hint">🔒 এই ডোমেইন ছাড়া অন্য কেউ API Key ব্যবহার করতে পারবে না। খালি রাখলে সব ডোমেইন থেকে কাজ করবে।</div>
+          </div>
+          <div class="form-group">
             <label>Test Event Code (Optional)</label>
             <input type="text" name="test_event_code" placeholder="TEST12345">
             <div class="hint">শুধু টেস্টিং করার সময় দিন, লাইভে খালি রাখুন</div>
@@ -301,6 +306,7 @@ async def add_client(
     pixel_id: str = Form(...),
     access_token: str = Form(...),
     test_event_code: str = Form(None),
+    domain: str = Form(None),
     db: AsyncSession = Depends(get_db),
 ):
     # ─── Input Validation ──────────────────────────────────────────────────
@@ -320,11 +326,20 @@ async def add_client(
         error_msg = " | ".join(errors)
         return admin_redirect(error_msg, "error")
 
+    # Domain sanitize — https://, http://, trailing slash সরাও
+    clean_domain = None
+    if domain and domain.strip():
+        clean_domain = domain.strip().lower()
+        for prefix in ["https://", "http://", "www."]:
+            clean_domain = clean_domain.removeprefix(prefix)
+        clean_domain = clean_domain.rstrip("/")
+
     new_client = Client(
         name=name,
         pixel_id=pixel_id,
         access_token=encrypt_token(access_token),  # 🔐 Encrypted at rest
         test_event_code=test_event_code.strip() if test_event_code else None,
+        domain=clean_domain,
         api_key=secrets.token_urlsafe(32),
     )
     db.add(new_client)

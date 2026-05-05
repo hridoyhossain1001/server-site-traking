@@ -197,7 +197,39 @@ async def receive_events(
             detail=f"Too many events in one request. Max {MAX_EVENTS_PER_REQUEST}.",
         )
 
-    client_ip = request.client.host if request.client else None
+    # ─── Domain Whitelisting (API Key চুরি প্রতিরোধ) ─────────────────
+    # Client-এর domain সেট করা থাকলে, শুধু সেই ডোমেইন থেকে রিকোয়েস্ট নেবে
+    if client.domain:
+        origin = request.headers.get("origin", "") or ""
+        referer = request.headers.get("referer", "") or ""
+        allowed_domain = client.domain.lower().strip()
+        if allowed_domain not in origin.lower() and allowed_domain not in referer.lower():
+            logger.warning(
+                f"[{client.name}] Domain mismatch! "
+                f"Allowed: {allowed_domain}, Origin: {origin}, Referer: {referer}"
+            )
+            raise HTTPException(
+                status_code=403,
+                detail="Unauthorized domain. এই API Key আপনার ডোমেইনে রেজিস্টার্ড নয়।",
+            )
+
+    # ─── Real IP Detection (Heroku/Cloudflare X-Forwarded-For হেডার থেকে) ──
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        client_ip = forwarded.split(",")[0].strip()
+    else:
+        client_ip = request.client.host if request.client else None
+
+    # ─── Auto-inject real IP & User-Agent into user_data ─────────────────
+    # ফ্রন্টএন্ড থেকে placeholder IP (8.8.8.8) বা কোনো IP না আসলে
+    # সার্ভার নিজেই ইউজারের আসল IP বসিয়ে দেবে
+    PLACEHOLDER_IPS = {"8.8.8.8", "127.0.0.1", "0.0.0.0", None, ""}
+    for event in payload.data:
+        if event.user_data:
+            if event.user_data.client_ip_address in PLACEHOLDER_IPS:
+                event.user_data.client_ip_address = client_ip
+            if not event.user_data.client_user_agent:
+                event.user_data.client_user_agent = request.headers.get("user-agent")
 
     enforce_usage_limits(client, len(payload.data))
     unique_events = await reserve_unique_events(db, client, payload.data)
