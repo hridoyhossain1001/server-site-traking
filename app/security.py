@@ -14,31 +14,23 @@ logger = logging.getLogger(__name__)
 ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
 
 if not ENCRYPTION_KEY:
-    logger.warning(
-        "⚠️ ENCRYPTION_KEY সেট করা হয়নি! Token plaintext-এ সংরক্ষিত হবে। "
-        "Production-এ অবশ্যই সেট করুন।"
-    )
-    _fernet = None
+    raise RuntimeError("ENCRYPTION_KEY environment variable is required.")
 else:
-    _fernet = Fernet(ENCRYPTION_KEY.encode())
+    try:
+        _fernet = Fernet(ENCRYPTION_KEY.encode())
+    except ValueError as exc:
+        raise RuntimeError("ENCRYPTION_KEY must be a valid Fernet key.") from exc
 
 
 def encrypt_token(plaintext: str) -> str:
-    """Token encrypt করে। Key না থাকলে plaintext রিটার্ন করে।"""
-    if _fernet is None:
-        return plaintext
+    """Token encrypt করে।"""
     return _fernet.encrypt(plaintext.encode()).decode()
 
 
 def decrypt_token(encrypted: str) -> str:
-    """
-    Token decrypt করে। 
-    Backward compatible — পুরাতন plaintext token থাকলে সেটাই রিটার্ন করে।
-    """
-    if _fernet is None:
-        return encrypted
+    """Token decrypt করে।"""
     try:
         return _fernet.decrypt(encrypted.encode()).decode()
-    except (InvalidToken, Exception):
-        # পুরাতন plaintext token — decrypt ব্যর্থ হলে as-is রিটার্ন
+    except Exception:
+        # Fallback for old plaintext tokens
         return encrypted

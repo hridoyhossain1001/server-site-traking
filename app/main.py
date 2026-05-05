@@ -1,5 +1,4 @@
 import logging
-import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,16 +28,9 @@ async def lifespan(app: FastAPI):
         await conn.run_sync(Base.metadata.create_all)
     logger.info("✅ ডাটাবেস সংযোগ সফল।")
 
-    # 🔄 Retry background task শুরু করো
-    from app.services.retry_service import retry_failed_events
-    retry_task = asyncio.create_task(retry_failed_events())
-    logger.info("🔄 Retry service চালু হয়েছে।")
-
     yield
 
     # Shutdown — cleanup
-    retry_task.cancel()
-
     # 🔒 HTTP client বন্ধ করো
     from app.services.capi_service import close_http_client
     await close_http_client()

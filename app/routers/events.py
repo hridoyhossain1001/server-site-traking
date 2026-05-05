@@ -1,113 +1,164 @@
 import json
-import time
 import logging
+import os
+import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from fastapi import APIRouter, Depends, Request, HTTPException, BackgroundTasks
-from sqlalchemy import select, and_, func as sql_func
+
+from fastapi import APIRouter, Depends, HTTPException, Request, BackgroundTasks
+from sqlalchemy import and_, func as sql_func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.schemas.event import EventsPayload, EventsResponse
-from app.dependencies import get_current_client
-from app.services.capi_service import send_to_facebook
-from app.models.client import Client
-from app.models.event_log import EventLog
 from app.database import get_db, AsyncSessionLocal
+from app.dependencies import get_current_client
+from app.models.client import Client
+from app.models.event_dedup import EventDedup
+from app.models.event_log import EventLog
+from app.schemas.event import EventsPayload, EventsResponse
+from app.services.capi_service import send_to_facebook
 from app.services.retry_service import save_failed_event
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+MAX_EVENTS_PER_REQUEST = int(os.getenv("MAX_EVENTS_PER_REQUEST", "500"))
 
-# ─── In-Memory Rate Limiting ────────────────────────────────────────────────
-# DB query বাদ দিয়ে memory-তে count রাখো (per worker)
-# Key = client_id, Value = list of timestamps
 _rate_counters: dict[int, list[float]] = defaultdict(list)
 _daily_counters: dict[int, tuple[str, int]] = {}  # (date_str, count)
 
-
-def check_rate_limit(client_id: int, rate_limit: int, event_count: int) -> bool:
-    """In-memory rate limit check — DB query বাদ! O(n) cleanup + O(1) check"""
+def enforce_usage_limits(
+    client: Client,
+    incoming_event_count: int,
+) -> None:
+    """In-memory rate limit and daily quota checks."""
+    rate_limit = client.rate_limit or 5000
     now = time.time()
-    # 60 সেকেন্ডের পুরাতন entries বাদ দাও
-    _rate_counters[client_id] = [
-        t for t in _rate_counters[client_id] if now - t < 60
+    
+    # 60 সেকেন্ডের পুরানো এন্ট্রি মুছে ফেলো
+    _rate_counters[client.id] = [
+        t for t in _rate_counters[client.id] if now - t < 60
     ]
-    if len(_rate_counters[client_id]) + event_count > rate_limit:
-        return False
-    _rate_counters[client_id].extend([now] * event_count)
-    return True
+    
+    recent_count = len(_rate_counters[client.id])
+    if recent_count + incoming_event_count > rate_limit:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded! {recent_count}/{rate_limit} events/min",
+        )
+    _rate_counters[client.id].extend([now] * incoming_event_count)
+
+    if client.daily_quota:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        if client.id in _daily_counters:
+            stored_date, count = _daily_counters[client.id]
+            if stored_date != today:
+                _daily_counters[client.id] = (today, incoming_event_count)
+            else:
+                if count + incoming_event_count > client.daily_quota:
+                    raise HTTPException(
+                        status_code=429,
+                        detail=f"Daily quota exceeded! Today {count}/{client.daily_quota} events sent.",
+                    )
+                _daily_counters[client.id] = (today, count + incoming_event_count)
+        else:
+            _daily_counters[client.id] = (today, incoming_event_count)
 
 
-def check_daily_quota(client_id: int, daily_quota: int | None, event_count: int) -> bool:
-    """In-memory daily quota check — DB query বাদ!"""
-    if not daily_quota:
-        return True
-
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-    if client_id in _daily_counters:
-        stored_date, count = _daily_counters[client_id]
-        if stored_date != today:
-            # নতুন দিন — reset
-            _daily_counters[client_id] = (today, event_count)
-            return True
-        if count + event_count > daily_quota:
-            return False
-        _daily_counters[client_id] = (today, count + event_count)
-    else:
-        _daily_counters[client_id] = (today, event_count)
-
-    return True
-
-
-# ─── Background DB Write Function ───────────────────────────────────────────
-async def save_event_logs(
-    client_id: int,
+async def reserve_unique_events(
+    db: AsyncSession,
+    client: Client,
     events: list,
+) -> list:
+    """
+    Reserve event IDs atomically before sending to Facebook.
+    The unique index on (client_id, event_id) closes the concurrent duplicate race.
+    """
+    candidate_ids: list[str] = []
+    seen_ids: set[str] = set()
+    for event in events:
+        if not event.event_id or event.event_id in seen_ids:
+            continue
+        seen_ids.add(event.event_id)
+        candidate_ids.append(event.event_id)
+
+    if not candidate_ids:
+        return [event for event in events if not event.event_id]
+
+    rows = [{"client_id": client.id, "event_id": event_id} for event_id in candidate_ids]
+    stmt = (
+        pg_insert(EventDedup)
+        .values(rows)
+        .on_conflict_do_nothing(index_elements=["client_id", "event_id"])
+        .returning(EventDedup.event_id)
+    )
+
+    try:
+        result = await db.execute(stmt)
+        reserved_ids = set(result.scalars().all())
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
+
+    unique_events = []
+    accepted_ids: set[str] = set()
+    for event in events:
+        if not event.event_id:
+            unique_events.append(event)
+            continue
+        if event.event_id in accepted_ids:
+            logger.info(f"[{client.name}] Duplicate event skipped in request: {event.event_id}")
+            continue
+        accepted_ids.add(event.event_id)
+        if event.event_id not in reserved_ids:
+            logger.info(f"[{client.name}] Duplicate event skipped: {event.event_id}")
+            continue
+        unique_events.append(event)
+
+    return unique_events
+
+
+async def save_success_logs_bg(
+    client_id: int,
+    events_data: list,
     fb_result: dict | None,
     client_ip: str | None,
-):
-    """
-    Background task — response পাঠানোর পর DB-তে event log লেখে।
-    Client-কে অপেক্ষা করাতে হয় না!
-    """
+) -> None:
     try:
         async with AsyncSessionLocal() as db:
             log_entries = [
                 EventLog(
                     client_id=client_id,
-                    event_name=ev.event_name,
-                    event_id=ev.event_id,
+                    event_name=event.get("event_name") or "unknown",
+                    event_id=event.get("event_id"),
                     event_count=1,
                     status="success",
                     fb_response=json.dumps(fb_result) if fb_result else None,
                     ip_address=client_ip,
                 )
-                for ev in events
+                for event in events_data
             ]
-            db.add_all(log_entries)  # Bulk insert — একটা query-তে সব!
+            db.add_all(log_entries)
             await db.commit()
     except Exception as e:
-        logger.error(f"Background log save error: {e}")
+        logger.error(f"Background success log save error: {e}")
 
 
-async def save_error_log_bg(
+async def save_failure_log_and_retry_bg(
     client_id: int,
     event_names: str,
-    event_count: int,
+    events_data: list,
     error_msg: str,
     client_ip: str | None,
-    events_data: list,
-):
-    """Background task — error log + retry queue save"""
+) -> None:
     try:
         async with AsyncSessionLocal() as db:
             log_entry = EventLog(
                 client_id=client_id,
                 event_name=event_names,
-                event_count=event_count,
+                event_count=len(events_data),
                 status="failed",
                 error_message=error_msg[:500],
                 ip_address=client_ip,
@@ -115,10 +166,11 @@ async def save_error_log_bg(
             db.add(log_entry)
             await db.commit()
 
-            # Retry queue-তে সেভ করো
-            await save_failed_event(db, client_id, events_data, error_msg)
+            saved = await save_failed_event(db, client_id, events_data, error_msg)
+            if not saved:
+                logger.error(f"[Client {client_id}] Failed events were not saved to retry queue.")
     except Exception as e:
-        logger.error(f"Background error log save failed: {e}")
+        logger.error(f"Background failure log save error: {e}")
 
 
 @router.post(
@@ -135,96 +187,62 @@ async def receive_events(
 ):
     """
     ক্লায়েন্টের API Key ভেরিফাই করে Facebook CAPI-তে ইভেন্ট ফরওয়ার্ড করে।
-    
-    🚀 Optimizations:
-    - Batch deduplication (N queries → 1)
-    - In-memory rate limiting (DB query বাদ)
-    - Background DB writes (response আগে, write পরে)
-    - Bulk insert (N inserts → 1)
+    Deduplication DB unique constraint দিয়ে atomic করা হয়েছে।
     """
     if not payload.data:
         raise HTTPException(status_code=400, detail="ইভেন্ট ডাটা খালি!")
+    if len(payload.data) > MAX_EVENTS_PER_REQUEST:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Too many events in one request. Max {MAX_EVENTS_PER_REQUEST}.",
+        )
 
     client_ip = request.client.host if request.client else None
 
-    # ─── In-Memory Rate Limit Check (DB query বাদ!) ───────────────────
-    rate_limit = client.rate_limit or 5000
-    if not check_rate_limit(client.id, rate_limit, len(payload.data)):
-        raise HTTPException(
-            status_code=429,
-            detail=f"Rate limit exceeded! Max {rate_limit} events/min"
-        )
-
-    # ─── In-Memory Daily Quota Check (DB query বাদ!) ──────────────────
-    if not check_daily_quota(client.id, client.daily_quota, len(payload.data)):
-        raise HTTPException(
-            status_code=429,
-            detail=f"Daily quota exceeded! Max {client.daily_quota} events/day"
-        )
-
-    # ─── Batch Deduplication: একটা query-তে সব event_id চেক (N→1) ────
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
-    event_ids = [e.event_id for e in payload.data if e.event_id]
-
-    existing_ids: set = set()
-    if event_ids:
-        existing_result = await db.execute(
-            select(EventLog.event_id).where(
-                and_(
-                    EventLog.client_id == client.id,
-                    EventLog.event_id.in_(event_ids),
-                    EventLog.status == "success",
-                    EventLog.created_at >= cutoff,
-                )
-            )
-        )
-        existing_ids = set(existing_result.scalars().all())
-
-    # Unique events filter করো
-    unique_events = []
-    for event in payload.data:
-        if event.event_id and event.event_id in existing_ids:
-            logger.info(f"[{client.name}] Duplicate event skipped: {event.event_id}")
-            continue
-        unique_events.append(event)
+    enforce_usage_limits(client, len(payload.data))
+    unique_events = await reserve_unique_events(db, client, payload.data)
 
     if not unique_events:
         return EventsResponse(
             status="success",
             events_received=0,
-            message="সব ইভেন্ট আগেই পাঠানো হয়েছে (deduplicated)"
+            message="সব ইভেন্ট আগেই পাঠানো হয়েছে (deduplicated)",
         )
 
-    event_names = ", ".join(set(e.event_name for e in unique_events))
+    event_names = ", ".join(sorted({event.event_name for event in unique_events}))
 
     try:
-        # CAPI সার্ভিসে ডাটা পাঠানো (persistent HTTP client ব্যবহার করে)
         result = await send_to_facebook(client, unique_events)
-
-        # ✅ Background-এ DB write করো — client-কে অপেক্ষা করাতে হবে না!
-        background_tasks.add_task(
-            save_event_logs, client.id, unique_events, result, client_ip
-        )
-
-        return EventsResponse(
-            status="success",
-            events_received=len(unique_events),
-            message="সফলভাবে Facebook-এ পাঠানো হয়েছে"
-        )
-
     except Exception as e:
-        # ❌ ব্যর্থ হলে error log + retry queue (background-এ)
         error_msg = str(e)
         logger.error(f"Client {client.name} | Error: {error_msg}")
 
-        events_as_dicts = [ev.model_dump(exclude_none=True) for ev in unique_events]
+        events_as_dicts = [event.model_dump(exclude_none=True) for event in unique_events]
         background_tasks.add_task(
-            save_error_log_bg,
-            client.id, event_names, len(unique_events),
-            error_msg, client_ip, events_as_dicts
+            save_failure_log_and_retry_bg,
+            client.id,
+            event_names,
+            events_as_dicts,
+            error_msg,
+            client_ip,
         )
 
         raise HTTPException(
             status_code=502,
-            detail="Facebook API তে সমস্যা — ইভেন্ট retry queue-তে রাখা হয়েছে"
-        )
+            detail="Facebook API তে সমস্যা — ইভেন্ট retry queue-তে রাখা হয়েছে",
+        ) from e
+
+    events_as_dicts = [event.model_dump(exclude_none=True) for event in unique_events]
+    background_tasks.add_task(
+        save_success_logs_bg,
+        client.id,
+        events_as_dicts,
+        result,
+        client_ip,
+    )
+
+    return EventsResponse(
+        status="success",
+        events_received=len(unique_events),
+        message="সফলভাবে Facebook-এ পাঠানো হয়েছে",
+    )

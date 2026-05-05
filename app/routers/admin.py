@@ -2,6 +2,7 @@ import os
 import html
 import secrets
 import logging
+from urllib.parse import urlencode
 from fastapi import APIRouter, Depends, HTTPException, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
@@ -103,16 +104,17 @@ STYLE = """
 
 def base_html(title: str, body: str, msg: str = "", msg_type: str = "success") -> str:
     alert_html = ""
+    safe_title = html.escape(title, quote=True)
     if msg:
         safe_msg = html.escape(msg)
-        safe_type = html.escape(msg_type)
+        safe_type = "error" if msg_type == "error" else "success"
         alert_html = f'<div class="alert alert-{safe_type}">{safe_msg}</div>'
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{title} — CAPI Gateway</title>
+  <title>{safe_title} — CAPI Gateway</title>
   {STYLE}
 </head>
 <body>
@@ -134,6 +136,11 @@ function copyText(id){{
 </script>
 </body>
 </html>"""
+
+
+def admin_redirect(msg: str, msg_type: str = "success") -> RedirectResponse:
+    query = urlencode({"msg": msg, "msg_type": msg_type})
+    return RedirectResponse(url=f"/api/v1/admin?{query}", status_code=303)
 
 
 # ─── ROUTES ──────────────────────────────────────────────────────────────────
@@ -311,10 +318,7 @@ async def add_client(
 
     if errors:
         error_msg = " | ".join(errors)
-        return RedirectResponse(
-            url=f"/api/v1/admin?msg={error_msg}&msg_type=error",
-            status_code=303,
-        )
+        return admin_redirect(error_msg, "error")
 
     new_client = Client(
         name=name,
@@ -328,10 +332,7 @@ async def add_client(
     await db.refresh(new_client)
     logger.info(f"New client added: {name}")
 
-    return RedirectResponse(
-        url=f"/api/v1/admin?msg=✅+{name}+সফলভাবে+যোগ+হয়েছে!&msg_type=success",
-        status_code=303,
-    )
+    return admin_redirect(f"✅ {name} সফলভাবে যোগ হয়েছে!")
 
 
 @router.get("/admin/client/{client_id}/instructions", response_class=HTMLResponse, include_in_schema=False)
@@ -350,23 +351,26 @@ async def client_instructions(
     base_url = str(request.base_url).rstrip("/")
 
     endpoint = f"{base_url}/api/v1/events"
+    safe_client_name = html.escape(client.name, quote=True)
+    safe_api_key = html.escape(client.api_key, quote=True)
+    safe_endpoint = html.escape(endpoint, quote=True)
 
     body = f"""
     <h1 class="page-title">📋 Client Instructions</h1>
-    <p class="page-sub">এই পেজটি <strong>{client.name}</strong>-কে পাঠিয়ে দিন অথবা GTM সেটআপে ব্যবহার করুন</p>
+    <p class="page-sub">এই পেজটি <strong>{safe_client_name}</strong>-কে পাঠিয়ে দিন অথবা GTM সেটআপে ব্যবহার করুন</p>
 
     <div class="card" style="margin-bottom:20px">
       <div class="card-title"><span class="icon">🔑</span> আপনার API Key</div>
       <p style="color:#888;font-size:13px;margin-bottom:10px">এই Key-টি গোপন রাখুন। শুধু GTM Server Container-এ ব্যবহার করুন।</p>
       <button class="copy-btn" onclick="copyText('api_key')">Copy</button>
-      <div class="instr-box" id="api_key">{client.api_key}</div>
+      <div class="instr-box" id="api_key">{safe_api_key}</div>
     </div>
 
     <div class="card" style="margin-bottom:20px">
       <div class="card-title"><span class="icon">🌐</span> CAPI Endpoint URL</div>
       <p style="color:#888;font-size:13px;margin-bottom:10px">GTM HTTP Request Tag-এ এই URL দিন।</p>
       <button class="copy-btn" onclick="copyText('endpoint')">Copy</button>
-      <div class="instr-box" id="endpoint">{endpoint}</div>
+      <div class="instr-box" id="endpoint">{safe_endpoint}</div>
     </div>
 
     <div class="card" style="margin-bottom:20px">
@@ -377,12 +381,12 @@ async def client_instructions(
         <p><strong style="color:#fff">Step 2:</strong> একটি নতুন <strong>Tag → HTTP Request</strong> তৈরি করুন।</p>
         <br>
         <p><strong style="color:#fff">Step 3:</strong> নিচের সেটিংস দিন:</p>
-        <div class="instr-box" id="gtm_settings">URL: {endpoint}
+        <div class="instr-box" id="gtm_settings">URL: {safe_endpoint}
 Method: POST
 Content-Type: application/json
 
 Headers:
-  X-API-Key: {client.api_key}
+  X-API-Key: {safe_api_key}
 
 Body (JSON):
 {{
@@ -430,7 +434,7 @@ async def deactivate_client(
 ):
     await db.execute(update(Client).where(Client.id == client_id).values(is_active=False))
     await db.commit()
-    return RedirectResponse(url="/api/v1/admin?msg=ক্লায়েন্ট+Deactivate+করা+হয়েছে&msg_type=success", status_code=303)
+    return admin_redirect("ক্লায়েন্ট Deactivate করা হয়েছে")
 
 
 @router.post("/admin/client/{client_id}/activate", include_in_schema=False)
@@ -441,4 +445,4 @@ async def activate_client(
 ):
     await db.execute(update(Client).where(Client.id == client_id).values(is_active=True))
     await db.commit()
-    return RedirectResponse(url="/api/v1/admin?msg=ক্লায়েন্ট+Activate+করা+হয়েছে&msg_type=success", status_code=303)
+    return admin_redirect("ক্লায়েন্ট Activate করা হয়েছে")

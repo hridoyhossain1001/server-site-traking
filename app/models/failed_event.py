@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey, JSON
+from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, JSON, String, Text
 from sqlalchemy.sql import func
 from app.database import Base
 
@@ -6,6 +6,9 @@ from app.database import Base
 class FailedEvent(Base):
     """ব্যর্থ ইভেন্ট — পরবর্তীতে retry করা হবে"""
     __tablename__ = "failed_events"
+    __table_args__ = (
+        Index("ix_failed_events_retry_claim", "status", "retry_count", "created_at"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     client_id = Column(Integer, ForeignKey("clients.id"), nullable=False, index=True)

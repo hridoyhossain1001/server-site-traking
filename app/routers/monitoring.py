@@ -3,7 +3,7 @@ Monitoring Router — সিস্টেম স্বাস্থ্য পর�
 এবং Facebook API কানেক্টিভিটি চেক।
 """
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends
 from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,9 +13,10 @@ from app.database import get_db
 from app.models.client import Client
 from app.models.event_log import EventLog
 from app.models.failed_event import FailedEvent
+from app.routers.admin import verify_admin
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(verify_admin)])
 
 
 @router.get("/health/detailed", tags=["Monitoring"])

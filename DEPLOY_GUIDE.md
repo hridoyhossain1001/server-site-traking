@@ -11,7 +11,8 @@ Server site traking/
 │   ├── security.py          # Fernet token encryption/decryption
 │   ├── models/
 │   │   ├── client.py        # Client model (quota/rate fields)
-│   │   ├── event_log.py     # Event log (success/failed + event_id dedup)
+│   │   ├── event_dedup.py   # Atomic event_id reservation table
+│   │   ├── event_log.py     # Event log (success/failed)
 │   │   └── failed_event.py  # Failed event retry queue
 │   ├── schemas/event.py     # Pydantic schemas
 │   ├── routers/
@@ -25,9 +26,9 @@ Server site traking/
 │   ├── env.py               # Async Alembic migrations
 │   ├── script.py.mako       # Migration template
 │   └── versions/            # Migration files
-├── requirements.txt         # 10 dependencies
-├── Procfile                 # Heroku: uvicorn, 1 worker
-├── runtime.txt              # Python 3.13.0
+├── requirements.txt         # Python dependencies
+├── Procfile                 # Heroku: web + retry worker
+├── runtime.txt              # Python runtime
 ├── alembic.ini              # DB migration config
 ├── DEPLOY_GUIDE.md          # এই ফাইল
 └── .env                     # লোকাল টেস্টের জন্য (Heroku-তে push হবে না)
@@ -104,7 +105,7 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 heroku config:set ENCRYPTION_KEY=your-generated-key-here -a capi-gateway-yourname
 ```
 
-> ⚠️ **Important:** `ENCRYPTION_KEY` সেট না করলে access token plaintext-এ সংরক্ষিত হবে। Production-এ অবশ্যই সেট করুন।
+> ⚠️ **Important:** `ENCRYPTION_KEY` না থাকলে app start হবে না। Production-এ এটি অবশ্যই সেট করতে হবে।
 
 ---
 
@@ -112,6 +113,8 @@ heroku config:set ENCRYPTION_KEY=your-generated-key-here -a capi-gateway-yournam
 
 ```powershell
 git push heroku main
+heroku run alembic upgrade head -a capi-gateway-yourname
+heroku ps:scale web=1 worker=1 -a capi-gateway-yourname
 ```
 
 ---
@@ -126,9 +129,9 @@ heroku open -a capi-gateway-yourname
 - **Health Check:** `https://capi-gateway-yourname.herokuapp.com/`
 - **Admin Panel:** `https://capi-gateway-yourname.herokuapp.com/api/v1/admin`
 - **API Docs:** `https://capi-gateway-yourname.herokuapp.com/docs`
-- **System Status:** `https://capi-gateway-yourname.herokuapp.com/api/v1/health/detailed`
-- **FB Connectivity:** `https://capi-gateway-yourname.herokuapp.com/api/v1/health/facebook`
-- **Client Stats:** `https://capi-gateway-yourname.herokuapp.com/api/v1/stats/clients`
+- **System Status:** `https://capi-gateway-yourname.herokuapp.com/api/v1/health/detailed` (admin login লাগবে)
+- **FB Connectivity:** `https://capi-gateway-yourname.herokuapp.com/api/v1/health/facebook` (admin login লাগবে)
+- **Client Stats:** `https://capi-gateway-yourname.herokuapp.com/api/v1/stats/clients` (admin login লাগবে)
 
 ---
 
@@ -154,11 +157,11 @@ SSL অটো সেটআপ হবে।
 |---------|-------------|
 | **Multi-Tenant Events** | একাধিক ক্লায়েন্ট, আলাদা API Key ও Pixel ID |
 | **Token Encryption** | Fernet-এ encrypted, DB-তে plaintext থাকে না |
-| **Event Deduplication** | একই event_id ২৪ ঘণ্টার মধ্যে দ্বিতীয়বার পাঠালে skip |
+| **Event Deduplication** | DB unique constraint দিয়ে একই client/event_id দ্বিতীয়বার পাঠানো আটকায় |
 | **Per-Client Rate Limit** | প্রতিটি ক্লায়েন্টের আলাদা rate limit (default 5000/min) |
 | **Daily Quota** | প্রতিদিন সর্বোচ্চ event সংখ্যা (default 100K) |
-| **Retry Queue** | ব্যর্থ event স্বয়ংক্রিয়ভাবে retry হয় (5x, exponential backoff) |
-| **Monitoring** | Health check, FB connectivity, per-client stats |
+| **Retry Queue** | আলাদা worker failed event retry করে (5x, exponential backoff) |
+| **Monitoring** | Admin login-protected health, FB connectivity, per-client stats |
 | **Admin Dashboard** | Dark UI, real-time analytics, client management |
 
 ---
@@ -171,6 +174,9 @@ heroku logs --tail -a capi-gateway-yourname
 
 # অ্যাপ রিস্টার্ট করুন
 heroku restart -a capi-gateway-yourname
+
+# Retry worker চালু আছে কিনা দেখুন
+heroku ps -a capi-gateway-yourname
 
 # ডাটাবেস চেক করুন
 heroku pg:info -a capi-gateway-yourname

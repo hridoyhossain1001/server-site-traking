@@ -6,3 +6,6 @@ __pycache__/
 .pytest_cache/
 venv/
 .venv/
+inst.html
+*.local.html
+load-results*.json

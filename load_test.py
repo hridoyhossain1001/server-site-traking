@@ -1,9 +1,12 @@
 import asyncio
+import os
 import time
 import httpx
 
-API_KEY = "8ywUZzNpEaZA2_lOVTgHKU5H5DGz-1UVAbEuKvnY9uo"
-URL = "https://still-stream-48626-bb0ac4cda957.herokuapp.com/api/v1/events"
+API_KEY = os.getenv("CAPI_LOAD_TEST_API_KEY")
+URL = os.getenv("CAPI_LOAD_TEST_URL", "http://localhost:8000/api/v1/events")
+CONCURRENCY = int(os.getenv("CAPI_LOAD_TEST_CONCURRENCY", "80"))
+TOTAL_REQUESTS = int(os.getenv("CAPI_LOAD_TEST_REQUESTS", "1000"))
 
 async def send_request(client, i):
     data = {
@@ -32,8 +35,11 @@ async def send_request(client, i):
         return e.__class__.__name__, time.time() - start_time
 
 async def main():
-    concurrency = 80
-    total_requests = 1000
+    if not API_KEY:
+        raise SystemExit("Set CAPI_LOAD_TEST_API_KEY before running the load test.")
+
+    concurrency = CONCURRENCY
+    total_requests = TOTAL_REQUESTS
     
     print(f"Starting load test: {total_requests} requests with {concurrency} concurrency...")
     

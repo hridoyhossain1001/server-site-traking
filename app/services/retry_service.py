@@ -2,18 +2,16 @@
 Retry Service — ব্যর্থ ইভেন্ট পুনরায় Facebook-এ পাঠানোর সার্ভিস।
 Background task হিসেবে চলে, exponential backoff সহ।
 """
-import json
 import asyncio
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import select, and_, update
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import AsyncSessionLocal
 from app.models.client import Client
 from app.models.failed_event import FailedEvent
-from app.models.event_log import EventLog
 from app.schemas.event import EventData
 from app.services.capi_service import send_to_facebook
 
@@ -28,7 +26,7 @@ async def save_failed_event(
     client_id: int,
     events_data: list,
     error_message: str,
-):
+) -> bool:
     """ব্যর্থ ইভেন্ট DB-তে সংরক্ষণ করো retry-এর জন্য"""
     try:
         failed = FailedEvent(
@@ -39,8 +37,61 @@ async def save_failed_event(
         db.add(failed)
         await db.commit()
         logger.info(f"[Client {client_id}] Failed event saved for retry")
+        return True
     except Exception as e:
+        await db.rollback()
         logger.error(f"Failed to save failed event: {e}")
+        return False
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
+def _retry_is_due(failed: FailedEvent, now: datetime) -> bool:
+    delay_index = min(failed.retry_count, len(RETRY_DELAYS) - 1)
+    if not failed.last_retry_at:
+        return True
+    elapsed = (now - _as_utc(failed.last_retry_at)).total_seconds()
+    return elapsed >= RETRY_DELAYS[delay_index]
+
+
+async def claim_due_failed_events(db: AsyncSession, limit: int = 20) -> list[FailedEvent]:
+    """
+    Retry করার আগে row lock করে claim করা হয়।
+    একাধিক worker থাকলেও একই failed event একসাথে পাঠানো হবে না।
+    """
+    now = datetime.now(timezone.utc)
+    result = await db.execute(
+        select(FailedEvent)
+        .where(
+            and_(
+                FailedEvent.status.in_(["pending", "retrying"]),
+                FailedEvent.retry_count < FailedEvent.max_retries,
+            )
+        )
+        .order_by(FailedEvent.created_at.asc())
+        .limit(limit)
+        .with_for_update(skip_locked=True)
+    )
+    failed_events = result.scalars().all()
+
+    due_events: list[FailedEvent] = []
+    for failed in failed_events:
+        if not _retry_is_due(failed, now):
+            continue
+        failed.status = "retrying"
+        failed.last_retry_at = now
+        due_events.append(failed)
+
+    if due_events:
+        await db.commit()
+    else:
+        await db.rollback()
+
+    return due_events
 
 
 async def retry_failed_events():
@@ -51,25 +102,9 @@ async def retry_failed_events():
     while True:
         try:
             async with AsyncSessionLocal() as db:
-                # Pending failed events নিয়ে আসো
-                result = await db.execute(
-                    select(FailedEvent).where(
-                        and_(
-                            FailedEvent.status.in_(["pending", "retrying"]),
-                            FailedEvent.retry_count < FailedEvent.max_retries,
-                        )
-                    ).order_by(FailedEvent.created_at.asc()).limit(20)
-                )
-                failed_events = result.scalars().all()
+                failed_events = await claim_due_failed_events(db)
 
                 for failed in failed_events:
-                    # Exponential backoff চেক
-                    delay_index = min(failed.retry_count, len(RETRY_DELAYS) - 1)
-                    if failed.last_retry_at:
-                        elapsed = (datetime.now(timezone.utc) - failed.last_retry_at).total_seconds()
-                        if elapsed < RETRY_DELAYS[delay_index]:
-                            continue
-
                     # Client তথ্য আনো
                     client_result = await db.execute(
                         select(Client).where(Client.id == failed.client_id)
@@ -114,3 +149,7 @@ async def retry_failed_events():
 
         # ৬০ সেকেন্ড অপেক্ষা করো
         await asyncio.sleep(60)
+
+
+if __name__ == "__main__":
+    asyncio.run(retry_failed_events())

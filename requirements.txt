@@ -9,3 +9,5 @@ python-multipart==0.0.20
 slowapi==0.1.9
 cryptography==44.0.0
 orjson==3.10.12
+python-dotenv==1.0.1
+packaging==24.2
