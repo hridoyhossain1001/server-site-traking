@@ -351,7 +351,11 @@ async def admin_dashboard(
     stats = f"""
     <div class="left-col">
       <h1 class="page-title">Dashboard</h1>
-      <p class="page-sub">আপনার সকল ক্লায়েন্ট এখান থেকে ম্যানেজ করুন</p>
+      <p class="page-sub">আপনার সকল ক্লায়েন্ট এখান থেকে ম্যানেজ করুন<br><br>
+        <a href="/client" target="_blank" style="display:inline-flex;align-items:center;gap:6px;background:rgba(126,87,194,0.15);color:#9575cd;padding:6px 12px;border-radius:6px;font-size:13px;text-decoration:none;border:1px solid rgba(126,87,194,0.3);">
+          <span style="font-size:14px">💻</span> Client Portal Login Page
+        </a>
+      </p>
       <div class="stat-row">
         <div class="stat-box"><div class="num">{len(clients)}</div><div class="lbl">Total Clients</div></div>
         <div class="stat-box"><div class="num">{active_count}</div><div class="lbl">Active Clients</div></div>

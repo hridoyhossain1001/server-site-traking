@@ -10,6 +10,7 @@ from app.database import engine, Base
 from app.routers.events import router as events_router
 from app.routers.admin import router as admin_router
 from app.routers.monitoring import router as monitoring_router
+from app.routers.client_portal import router as client_portal_router
 from app.limiter import limiter
 
 # ─── Logging Setup ───────────────────────────────────────────────────────────
@@ -72,6 +73,7 @@ app.add_middleware(
 app.include_router(events_router, prefix="/api/v1", tags=["Events"])
 app.include_router(admin_router,  prefix="/api/v1", tags=["Admin"])
 app.include_router(monitoring_router, prefix="/api/v1", tags=["Monitoring"])
+app.include_router(client_portal_router, tags=["Client Portal"])
 
 
 # ─── Health Check ─────────────────────────────────────────────────────────────
