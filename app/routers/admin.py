@@ -229,6 +229,13 @@ STYLE = """
     padding: 6px 12px; font-size: 12px; cursor: pointer; transition: all 0.2s ease; float: right; margin-top: -4px;
   }
   .copy-btn:hover { background: var(--primary); }
+  .tabs { display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 10px; overflow-x: auto; }
+  .tab-btn { background: none; border: none; color: var(--text-muted); font-size: 15px; font-weight: 600; cursor: pointer; padding: 8px 16px; border-radius: 8px; transition: all 0.3s; white-space: nowrap; }
+  .tab-btn:hover { color: #fff; background: rgba(255,255,255,0.05); }
+  .tab-btn.active { color: #fff; background: rgba(126, 87, 194, 0.2); border: 1px solid rgba(126, 87, 194, 0.4); }
+  .tab-content { display: none; animation: fadeIn 0.3s ease; }
+  .tab-content.active { display: block; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
 </style>
 """
 
@@ -542,19 +549,26 @@ async def client_instructions(
 
     <div class="card" style="margin-bottom:20px">
       <div class="card-title"><span class="icon">🔑</span> আপনার API Key</div>
-      <p style="color:#888;font-size:13px;margin-bottom:10px">এই Key-টি গোপন রাখুন। শুধু GTM Server Container-এ ব্যবহার করুন।</p>
+      <p style="color:#888;font-size:13px;margin-bottom:10px">এই Key-টি গোপন রাখুন। এটি দিয়ে আপনার ওয়েবসাইট বা GTM থেকে ইভেন্ট পাঠানো হবে।</p>
       <button class="copy-btn" onclick="copyText('api_key')">Copy</button>
       <div class="instr-box" id="api_key">{safe_api_key}</div>
     </div>
 
     <div class="card" style="margin-bottom:20px">
       <div class="card-title"><span class="icon">🌐</span> CAPI Endpoint URL</div>
-      <p style="color:#888;font-size:13px;margin-bottom:10px">GTM HTTP Request Tag-এ এই URL দিন।</p>
+      <p style="color:#888;font-size:13px;margin-bottom:10px">সব ধরনের ওয়েবসাইট বা GTM থেকে এই URL-এ POST রিকোয়েস্ট পাঠাতে হবে।</p>
       <button class="copy-btn" onclick="copyText('endpoint')">Copy</button>
       <div class="instr-box" id="endpoint">{safe_endpoint}</div>
     </div>
 
-    <div class="card" style="margin-bottom:20px">
+    <div class="tabs">
+      <button class="tab-btn active" onclick="openTab(event, 'tab-gtm')">GTM Server</button>
+      <button class="tab-btn" onclick="openTab(event, 'tab-wp')">WordPress / PHP</button>
+      <button class="tab-btn" onclick="openTab(event, 'tab-custom')">Custom (cURL/Node)</button>
+    </div>
+
+    <!-- ─── GTM TAB ─── -->
+    <div id="tab-gtm" class="tab-content active card" style="margin-bottom:20px">
       <div class="card-title"><span class="icon">⚙️</span> GTM Server Container Setup</div>
       <div style="color:#aaa;font-size:14px;line-height:1.8">
         <p><strong style="color:#fff">Step 1:</strong> আপনার Google Tag Manager-এ <strong>Server Container</strong> তৈরি করুন।</p>
@@ -586,23 +600,119 @@ Body (JSON):
 }}</div>
         <br>
         <p><strong style="color:#fff">Step 4:</strong> Trigger — <strong>All Events</strong> বা নির্দিষ্ট ইভেন্ট সেট করুন।</p>
+      </div>
+    </div>
+
+    <!-- ─── WORDPRESS TAB ─── -->
+    <div id="tab-wp" class="tab-content card" style="margin-bottom:20px">
+      <div class="card-title"><span class="icon">📝</span> WordPress / WooCommerce Setup</div>
+      <div style="color:#aaa;font-size:14px;line-height:1.8">
+        <p>যেকোনো ওয়ার্ডপ্রেস সাইটে (বা উকমার্স-এ) প্লাগিন ছাড়া কোড দিয়ে CAPI ইভেন্ট পাঠাতে পারবেন।</p>
+        <p><strong style="color:#fff">Step 1:</strong> <code>WPCode</code> প্লাগিন ইনস্টল করুন অথবা আপনার থিমের <code>functions.php</code> ফাইলে যান।</p>
         <br>
-        <p><strong style="color:#fff">Step 5:</strong> Facebook Events Manager-এ গিয়ে <strong>Test Events</strong> ট্যাবে চেক করুন।</p>
+        <p><strong style="color:#fff">Step 2:</strong> নিচের PHP কোডটি যুক্ত করুন (এটি একটি PageView ইভেন্টের উদাহরণ):</p>
+        <div class="instr-box" id="wp_settings">&lt;?php
+add_action('wp_footer', 'send_capi_pageview_event');
+function send_capi_pageview_event() {{
+    $api_url = '{safe_endpoint}';
+    $api_key = '{safe_api_key}';
+    
+    // User data collection
+    $ip_address = $_SERVER['REMOTE_ADDR'];
+    $user_agent = $_SERVER['HTTP_USER_AGENT'];
+    $page_url = "https://$_SERVER[HTTP_HOST]$_SERVER[REQUEST_URI]";
+    $fbc = isset($_COOKIE['_fbc']) ? $_COOKIE['_fbc'] : '';
+    $fbp = isset($_COOKIE['_fbp']) ? $_COOKIE['_fbp'] : '';
+    
+    $body = json_encode([
+        "data" =&gt; [[
+            "event_name" =&gt; "PageView",
+            "event_time" =&gt; time(),
+            "event_id" =&gt; uniqid('evt_'),
+            "event_source_url" =&gt; $page_url,
+            "user_data" =&gt; [
+                "client_ip_address" =&gt; $ip_address,
+                "client_user_agent" =&gt; $user_agent,
+                "fbc" =&gt; $fbc,
+                "fbp" =&gt; $fbp
+            ]
+        ]]
+    ]);
+
+    $response = wp_remote_post($api_url, [
+        'method'      =&gt; 'POST',
+        'timeout'     =&gt; 15,
+        'redirection' =&gt; 5,
+        'blocking'    =&gt; false, // Non-blocking request for speed
+        'headers'     =&gt; [
+            'Content-Type' =&gt; 'application/json',
+            'X-API-Key'    =&gt; $api_key
+        ],
+        'body'        =&gt; $body
+    ]);
+}}
+?&gt;</div>
+        <p style="font-size: 13px; margin-top: 10px; color: #888;">* <strong>blocking => false</strong> দেওয়া হয়েছে যাতে ওয়েবসাইট স্লো না হয়। WooCommerce Purchase-এর জন্য Action Hook (যেমন: <code>woocommerce_thankyou</code>) ব্যবহার করে Data Layer অনুযায়ী Event Name পরিবর্তন করে নিতে হবে।</p>
+      </div>
+    </div>
+
+    <!-- ─── CUSTOM / CURL TAB ─── -->
+    <div id="tab-custom" class="tab-content card" style="margin-bottom:20px">
+      <div class="card-title"><span class="icon">💻</span> Custom Backend (cURL / API)</div>
+      <div style="color:#aaa;font-size:14px;line-height:1.8">
+        <p>যেকোনো কাস্টম ফ্রেমওয়ার্ক (Laravel, Node.js, Python, etc.) থেকে নিচের cURL ফরম্যাট ব্যবহার করে ইভেন্ট পাঠাতে পারবেন।</p>
+        <div class="instr-box" id="curl_settings">curl -X POST "{safe_endpoint}" \\
+  -H "Content-Type: application/json" \\
+  -H "X-API-Key: {safe_api_key}" \\
+  -d '{{
+    "data": [{{
+      "event_name": "Purchase",
+      "event_time": '$(date +%s)',
+      "event_id": "order_12345",
+      "event_source_url": "https://example.com/checkout/success",
+      "user_data": {{
+        "client_ip_address": "192.168.1.1",
+        "client_user_agent": "Mozilla/5.0...",
+        "em": ["f660ab912ec121d1b1e928a0bb4bc61b15f5ad44d5efdc4e1c92a25e99b8e44a"]
+      }},
+      "custom_data": {{
+        "value": 150.50,
+        "currency": "USD"
+      }}
+    }}]
+  }}'</div>
+        <p style="font-size: 13px; margin-top: 10px; color: #888;">* ইউজার ডেটা (যেমন ইমেইল বা ফোন নম্বর) পাঠালে অবশ্যই <strong>SHA-256 Hash</strong> করে পাঠাতে হবে। IP এবং User Agent হ্যাশ করার দরকার নেই।</p>
       </div>
     </div>
 
     <div class="card">
       <div class="card-title"><span class="icon">📌</span> Important Notes</div>
       <ul style="color:#aaa;font-size:13px;line-height:2;padding-left:20px">
-        <li>প্রতিটি ইভেন্টে <strong style="color:#fff">event_id</strong> পাঠান (Deduplication-এর জন্য খুবই জরুরি)</li>
-        <li>Browser Pixel এবং Server Pixel — দুটোই চালু রাখুন, একই event_id ব্যবহার করুন</li>
-        <li>_fbc এবং _fbp cookie পাঠান — এতে match rate অনেক বাড়ে</li>
-        <li>লাইভ যাওয়ার আগে Test Event Code দিয়ে টেস্ট করুন</li>
+        <li>প্রতিটি ইভেন্টে <strong style="color:#fff">event_id</strong> পাঠানো খুবই জরুরি (Facebook Deduplication-এর জন্য)।</li>
+        <li>Browser Pixel এবং Server Pixel — দুটোই চালু রাখুন, এবং উভয় জায়গা থেকে <strong>একই event_id</strong> পাঠাবেন।</li>
+        <li><code>_fbc</code> এবং <code>_fbp</code> কুকি পাঠালে ইভেন্ট ম্যাচ রেট (Match Rate) অনেক বাড়ে।</li>
+        <li>Facebook Events Manager-এ গিয়ে <strong>Test Events</strong> ট্যাবে চেক করুন সবকিছু ঠিকমতো কাজ করছে কিনা।</li>
       </ul>
     </div>
 
     <br>
     <a href="/api/v1/admin" style="color:#6c63ff;font-size:14px">← Dashboard-এ ফিরে যান</a>
+
+    <script>
+    function openTab(evt, tabId) {{
+      var i, tabcontent, tablinks;
+      tabcontent = document.getElementsByClassName("tab-content");
+      for (i = 0; i < tabcontent.length; i++) {{
+        tabcontent[i].className = tabcontent[i].className.replace(" active", "");
+      }}
+      tablinks = document.getElementsByClassName("tab-btn");
+      for (i = 0; i < tablinks.length; i++) {{
+        tablinks[i].className = tablinks[i].className.replace(" active", "");
+      }}
+      document.getElementById(tabId).className += " active";
+      evt.currentTarget.className += " active";
+    }}
+    </script>
     """
     return HTMLResponse(base_html(f"Instructions — {client.name}", body))
 
