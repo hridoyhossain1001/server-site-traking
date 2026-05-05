@@ -3,6 +3,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import ORJSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
@@ -35,20 +36,26 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Shutdown
+    # Shutdown — cleanup
     retry_task.cancel()
+
+    # 🔒 HTTP client বন্ধ করো
+    from app.services.capi_service import close_http_client
+    await close_http_client()
+
     logger.info("🛑 CAPI Gateway বন্ধ হচ্ছে...")
     await engine.dispose()
 
 
-# ─── FastAPI App ──────────────────────────────────────────────────────────────
+# ─── FastAPI App (ORJSONResponse = 2-3x faster JSON serialization) ────────
 app = FastAPI(
     title="CAPI Gateway",
     description="Multi-tenant Facebook Conversion API Gateway — Server-Side Tracking as a Service",
-    version="1.0.0",
+    version="1.1.0",
     lifespan=lifespan,
     docs_url="/docs",         # Swagger UI
     redoc_url="/redoc",
+    default_response_class=ORJSONResponse,  # 🚀 orjson = C-based, 2-3x faster!
 )
 
 app.state.limiter = limiter
@@ -75,6 +82,6 @@ async def health_check():
     return {
         "status": "running",
         "service": "CAPI Gateway",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "message": "🔥 Server-Side Tracking Gateway চলছে!",
     }

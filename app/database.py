@@ -18,9 +18,11 @@ DATABASE_URL = raw_url
 engine = create_async_engine(
     DATABASE_URL,
     echo=False,
-    pool_size=5,        # Heroku essential-0 = max 20 connections
-    max_overflow=5,     # Total max = pool_size + max_overflow = 10 per worker
-    pool_recycle=300,   # Recycle stale connections every 5 min
+    pool_size=3,          # 4 workers × 3 = 12 base connections
+    max_overflow=2,       # 4 workers × 2 = 8 overflow, total max = 20 (Heroku limit)
+    pool_recycle=300,     # Recycle stale connections every 5 min
+    pool_pre_ping=True,   # Dead connection auto-detect — avoids "connection reset" errors
+    pool_timeout=10,      # Max 10s wait for a connection from pool
 )
 
 AsyncSessionLocal = async_sessionmaker(
