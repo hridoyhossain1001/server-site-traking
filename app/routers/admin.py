@@ -1,25 +1,29 @@
 import os
+import html
 import secrets
 import logging
 from fastapi import APIRouter, Depends, HTTPException, Form, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
 from app.database import get_db
 from app.models.client import Client
+from app.security import encrypt_token
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 security = HTTPBasic()
 
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "1122334455")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
+if not ADMIN_PASSWORD:
+    raise RuntimeError("⛔ ADMIN_PASSWORD environment variable is required!")
 
 
 def verify_admin(credentials: HTTPBasicCredentials = Depends(security)):
-    is_user_ok = credentials.username == ADMIN_USERNAME
-    is_pass_ok = credentials.password == ADMIN_PASSWORD
+    is_user_ok = secrets.compare_digest(credentials.username, ADMIN_USERNAME)
+    is_pass_ok = secrets.compare_digest(credentials.password, ADMIN_PASSWORD)
     if not (is_user_ok and is_pass_ok):
         raise HTTPException(
             status_code=401,
@@ -144,6 +148,41 @@ async def admin_dashboard(
     clients = result.scalars().all()
     active_count = sum(1 for c in clients if c.is_active)
 
+    # ─── Event Analytics Query ────────────────────────────────────────────
+    from datetime import datetime, timezone
+    from sqlalchemy import func as sql_func, and_
+    from app.models.event_log import EventLog
+    from app.models.failed_event import FailedEvent
+
+    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    # আজকের সফল ইভেন্ট
+    success_r = await db.execute(
+        select(sql_func.coalesce(sql_func.sum(EventLog.event_count), 0)).where(
+            and_(EventLog.status == "success", EventLog.created_at >= today)
+        )
+    )
+    events_today = success_r.scalar() or 0
+
+    # আজকের ব্যর্থ
+    fail_r = await db.execute(
+        select(sql_func.count(EventLog.id)).where(
+            and_(EventLog.status == "failed", EventLog.created_at >= today)
+        )
+    )
+    failed_today = fail_r.scalar() or 0
+
+    # Pending retries
+    retry_r = await db.execute(
+        select(sql_func.count(FailedEvent.id)).where(
+            FailedEvent.status.in_(["pending", "retrying"])
+        )
+    )
+    retries = retry_r.scalar() or 0
+
+    total_calls = events_today + failed_today
+    success_rate = round(events_today / total_calls * 100, 1) if total_calls > 0 else 100.0
+
     # ─── Stats ─────────────────────────────────────────────────────────────
     stats = f"""
     <h1 class="page-title">Dashboard</h1>
@@ -151,6 +190,14 @@ async def admin_dashboard(
     <div class="stat-row">
       <div class="stat-box"><div class="num">{len(clients)}</div><div class="lbl">Total Clients</div></div>
       <div class="stat-box"><div class="num">{active_count}</div><div class="lbl">Active Clients</div></div>
+    </div>
+    <div class="stat-row">
+      <div class="stat-box"><div class="num" style="color:#00c853">{events_today:,}</div><div class="lbl">📊 আজকের Events</div></div>
+      <div class="stat-box"><div class="num" style="color:#ff4d4d">{failed_today}</div><div class="lbl">❌ Failed Today</div></div>
+    </div>
+    <div class="stat-row">
+      <div class="stat-box"><div class="num" style="color:#6c63ff">{success_rate}%</div><div class="lbl">✅ Success Rate</div></div>
+      <div class="stat-box"><div class="num" style="color:#ffab00">{retries}</div><div class="lbl">🔄 Pending Retries</div></div>
     </div>
     """
 
@@ -195,11 +242,14 @@ async def admin_dashboard(
             )
             toggle_action = "deactivate" if c.is_active else "activate"
             toggle_label = "❌ Deactivate" if c.is_active else "✅ Activate"
+            safe_name = html.escape(c.name)
+            safe_pixel = html.escape(c.pixel_id)
+            safe_key = html.escape(c.api_key)
             rows += f"""
             <tr>
-              <td><strong>{c.name}</strong><br><span style="color:#555;font-size:11px">{c.pixel_id}</span></td>
+              <td><strong>{safe_name}</strong><br><span style="color:#555;font-size:11px">{safe_pixel}</span></td>
               <td>{status_badge}</td>
-              <td class="api-key-cell" title="{c.api_key}">{c.api_key[:24]}...</td>
+              <td class="api-key-cell" title="{safe_key}">{safe_key[:24]}...</td>
               <td>
                 <a href="/api/v1/admin/client/{c.id}/instructions" style="text-decoration:none">
                   <button class="btn-sm btn-info">📋 Instructions</button>
@@ -244,10 +294,30 @@ async def add_client(
     test_event_code: str = Form(None),
     db: AsyncSession = Depends(get_db),
 ):
+    # ─── Input Validation ──────────────────────────────────────────────────
+    name = name.strip()
+    pixel_id = pixel_id.strip()
+    access_token = access_token.strip()
+
+    errors = []
+    if not name or len(name) > 100:
+        errors.append("নাম ১-১০০ অক্ষরের মধ্যে হতে হবে।")
+    if not pixel_id.isdigit():
+        errors.append("Pixel ID শুধু সংখ্যা হতে হবে।")
+    if len(access_token) < 10:
+        errors.append("Access Token কমপক্ষে ১০ অক্ষরের হতে হবে।")
+
+    if errors:
+        error_msg = " | ".join(errors)
+        return RedirectResponse(
+            url=f"/api/v1/admin?msg={error_msg}&msg_type=error",
+            status_code=303,
+        )
+
     new_client = Client(
-        name=name.strip(),
-        pixel_id=pixel_id.strip(),
-        access_token=access_token.strip(),
+        name=name,
+        pixel_id=pixel_id,
+        access_token=encrypt_token(access_token),  # 🔐 Encrypted at rest
         test_event_code=test_event_code.strip() if test_event_code else None,
         api_key=secrets.token_urlsafe(32),
     )
@@ -256,7 +326,6 @@ async def add_client(
     await db.refresh(new_client)
     logger.info(f"New client added: {name}")
 
-    from fastapi.responses import RedirectResponse
     return RedirectResponse(
         url=f"/api/v1/admin?msg=✅+{name}+সফলভাবে+যোগ+হয়েছে!&msg_type=success",
         status_code=303,
@@ -359,7 +428,6 @@ async def deactivate_client(
 ):
     await db.execute(update(Client).where(Client.id == client_id).values(is_active=False))
     await db.commit()
-    from fastapi.responses import RedirectResponse
     return RedirectResponse(url="/api/v1/admin?msg=ক্লায়েন্ট+Deactivate+করা+হয়েছে&msg_type=success", status_code=303)
 
 
@@ -371,5 +439,4 @@ async def activate_client(
 ):
     await db.execute(update(Client).where(Client.id == client_id).values(is_active=True))
     await db.commit()
-    from fastapi.responses import RedirectResponse
     return RedirectResponse(url="/api/v1/admin?msg=ক্লায়েন্ট+Activate+করা+হয়েছে&msg_type=success", status_code=303)

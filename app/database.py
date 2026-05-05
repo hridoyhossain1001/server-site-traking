@@ -5,6 +5,9 @@ from sqlalchemy.orm import declarative_base
 # Heroku দেয় DATABASE_URL যেটা postgres:// দিয়ে শুরু হয়
 # SQLAlchemy async-এর জন্য postgresql+asyncpg:// লাগে, তাই replace করছি
 raw_url = os.getenv("DATABASE_URL", "")
+if not raw_url:
+    raise RuntimeError("⛔ DATABASE_URL environment variable is required!")
+
 if raw_url.startswith("postgres://"):
     raw_url = raw_url.replace("postgres://", "postgresql+asyncpg://", 1)
 elif raw_url.startswith("postgresql://"):
@@ -15,8 +18,9 @@ DATABASE_URL = raw_url
 engine = create_async_engine(
     DATABASE_URL,
     echo=False,
-    pool_size=10,
-    max_overflow=20,
+    pool_size=5,        # Heroku essential-0 = max 20 connections
+    max_overflow=5,     # Total max = pool_size + max_overflow = 10 per worker
+    pool_recycle=300,   # Recycle stale connections every 5 min
 )
 
 AsyncSessionLocal = async_sessionmaker(

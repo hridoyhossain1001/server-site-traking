@@ -3,6 +3,7 @@ import logging
 from typing import List
 from app.models.client import Client
 from app.schemas.event import EventData
+from app.security import decrypt_token
 
 logger = logging.getLogger(__name__)
 
@@ -17,16 +18,15 @@ async def send_to_facebook(client: Client, events: List[EventData]) -> dict:
     url = (
         f"https://graph.facebook.com/{FACEBOOK_API_VERSION}"
         f"/{client.pixel_id}/events"
-        f"?access_token={client.access_token}"
     )
 
     # ইভেন্ট ডাটা প্রস্তুত করা
-    events_data = []
-    for event in events:
-        event_dict = event.model_dump(exclude_none=True)
-        events_data.append(event_dict)
+    events_data = [event.model_dump(exclude_none=True) for event in events]
 
-    payload = {"data": events_data}
+    payload = {
+        "data": events_data,
+        "access_token": decrypt_token(client.access_token),  # 🔐 Decrypt before sending
+    }
 
     # Test Event Code থাকলে যোগ করো (FB Events Manager-এ টেস্ট করার সময়)
     if client.test_event_code:
