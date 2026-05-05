@@ -58,13 +58,6 @@ async def send_to_facebook(client: Client, events: List[EventData]) -> dict:
         "access_token": decrypt_token(client.access_token),  # 🔐 Decrypt before sending
     }
 
-    import os
-    import asyncio
-    if os.getenv("MOCK_FACEBOOK_API") == "True":
-        await asyncio.sleep(0.05)  # Simulate 50ms network delay
-        logger.info(f"[{client.name}] MOCK API: {len(events)} events sent successfully.")
-        return {"events_received": len(events), "messages": [], "fbtrace_id": "mock_trace"}
-
     # Test Event Code থাকলে যোগ করো (FB Events Manager-এ টেস্ট করার সময়)
     if client.test_event_code:
         payload["test_event_code"] = client.test_event_code
