@@ -11,6 +11,7 @@ from app.routers.events import router as events_router
 from app.routers.admin import router as admin_router
 from app.routers.monitoring import router as monitoring_router
 from app.routers.client_portal import router as client_portal_router
+from app.routers.tracker import router as tracker_router
 from app.limiter import limiter
 import os
 
@@ -41,12 +42,17 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("ℹ️  Retry Service এই process-এ নিষ্ক্রিয় (ENABLE_RETRY_IN_WEB সেট নেই)।")
 
+    # 🌍 GeoIP Database Load
+    from app.services.geoip_service import download_geoip_db_if_missing, close_geoip_db
+    await download_geoip_db_if_missing()
+
     yield
 
     # Shutdown — cleanup
     # 🔒 HTTP client বন্ধ করো
     from app.services.capi_service import close_http_client
     await close_http_client()
+    close_geoip_db()
 
     logger.info("🛑 CAPI Gateway বন্ধ হচ্ছে...")
     await engine.dispose()
@@ -80,6 +86,7 @@ app.include_router(events_router, prefix="/api/v1", tags=["Events"])
 app.include_router(admin_router,  prefix="/api/v1", tags=["Admin"])
 app.include_router(monitoring_router, prefix="/api/v1", tags=["Monitoring"])
 app.include_router(client_portal_router, tags=["Client Portal"])
+app.include_router(tracker_router, tags=["Tracker"])  # /t.js, /c — root level, no prefix
 
 
 # ─── Health Check ─────────────────────────────────────────────────────────────

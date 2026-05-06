@@ -28,6 +28,10 @@ class CachedClient:
     domain: str | None
     rate_limit: int
     daily_quota: int
+    tiktok_pixel_id: str | None
+    tiktok_access_token: str | None
+    ga4_measurement_id: str | None
+    ga4_api_secret: str | None
 
 
 _client_cache: dict[str, tuple[CachedClient, float]] = {}
@@ -47,6 +51,10 @@ def _snapshot(client: Client) -> CachedClient:
         domain=client.domain,
         rate_limit=client.rate_limit or 5000,
         daily_quota=client.daily_quota or 100000,
+        tiktok_pixel_id=getattr(client, 'tiktok_pixel_id', None),
+        tiktok_access_token=getattr(client, 'tiktok_access_token', None),
+        ga4_measurement_id=getattr(client, 'ga4_measurement_id', None),
+        ga4_api_secret=getattr(client, 'ga4_api_secret', None),
     )
 
 

@@ -15,6 +15,9 @@ from app.models.event_dedup import EventDedup
 from app.models.event_log import EventLog
 from app.schemas.event import EventsPayload, EventsResponse
 from app.services.capi_service import send_to_facebook
+from app.services.tiktok_service import send_to_tiktok
+from app.services.geoip_service import get_location_data
+from app.services.ga4_service import send_to_ga4
 from app.services.retry_service import save_failed_event
 from app.services.usage_service import check_usage_limits_db, increment_usage_counters_db
 
@@ -209,6 +212,19 @@ async def receive_events(
             if not event.user_data.client_user_agent:
                 event.user_data.client_user_agent = request.headers.get("user-agent")
 
+            # ─── GeoIP Enrichment ──────────────────────────────────────────
+            if event.user_data.client_ip_address:
+                loc_data = get_location_data(event.user_data.client_ip_address)
+                if loc_data:
+                    if loc_data.get("ct") and not event.user_data.ct:
+                        event.user_data.ct = loc_data["ct"]
+                    if loc_data.get("st") and not event.user_data.st:
+                        event.user_data.st = loc_data["st"]
+                    if loc_data.get("country") and not event.user_data.country:
+                        event.user_data.country = loc_data["country"]
+                    if loc_data.get("zp") and not event.user_data.zp:
+                        event.user_data.zp = loc_data["zp"]
+
     # ─── Step 1: Usage Limit CHECK (read-only, no counter increment) ──
     await check_usage_limits_db(db, client, len(payload.data))
 
@@ -270,6 +286,24 @@ async def receive_events(
         result,
         client_ip,
     )
+
+    # ─── Step 5.5: TikTok CAPI (parallel, non-blocking) ───────────────
+    if client.tiktok_pixel_id and client.tiktok_access_token:
+        background_tasks.add_task(send_to_tiktok, client, unique_events)
+
+    # ─── Step 5.6: GA4 Server-Side (parallel, non-blocking) ───────────
+    if client.ga4_measurement_id and client.ga4_api_secret:
+        # Dictify events for GA4 to extract standard params
+        ga4_events = [evt.model_dump(exclude_none=True) for evt in unique_events]
+        background_tasks.add_task(
+            send_to_ga4,
+            events=ga4_events,
+            measurement_id=client.ga4_measurement_id,
+            api_secret=client.ga4_api_secret,
+            cookies=request.cookies,
+            ip_address=client_ip,
+            user_agent=request.headers.get("user-agent", "")
+        )
 
     return EventsResponse(
         status="success",

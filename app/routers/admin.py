@@ -403,6 +403,32 @@ async def admin_dashboard(
             <input type="text" name="test_event_code" placeholder="TEST12345">
             <div class="hint">শুধু টেস্টিং করার সময় দিন, লাইভে খালি রাখুন</div>
           </div>
+          <div style="border-top:1px solid var(--border);margin:16px 0;padding-top:16px">
+            <div style="font-size:13px;color:#9575cd;margin-bottom:12px;font-weight:600">🎵 TikTok CAPI (Optional)</div>
+          </div>
+          <div class="form-group">
+            <label>TikTok Pixel ID</label>
+            <input type="text" name="tiktok_pixel_id" placeholder="C1234567890">
+            <div class="hint">TikTok Events Manager → Pixel ID</div>
+          </div>
+          <div class="form-group">
+            <label>TikTok Access Token</label>
+            <input type="text" name="tiktok_access_token" placeholder="">
+            <div class="hint">TikTok Business → Settings → Access Token</div>
+          </div>
+          <div style="border-top:1px solid var(--border);margin:16px 0;padding-top:16px">
+            <div style="font-size:13px;color:#00a1f1;margin-bottom:12px;font-weight:600">📊 GA4 Server-Side (Optional)</div>
+          </div>
+          <div class="form-group">
+            <label>GA4 Measurement ID</label>
+            <input type="text" name="ga4_measurement_id" placeholder="G-XXXXXXXXXX">
+            <div class="hint">GA4 Data Streams → Measurement ID</div>
+          </div>
+          <div class="form-group">
+            <label>GA4 API Secret</label>
+            <input type="text" name="ga4_api_secret" placeholder="">
+            <div class="hint">GA4 Data Streams → Measurement Protocol API Secrets</div>
+          </div>
           <button type="submit" class="btn">✅ ক্লায়েন্ট যোগ করুন</button>
         </form>
       </div>
@@ -487,6 +513,10 @@ async def add_client(
     access_token: str = Form(...),
     test_event_code: str = Form(None),
     domain: str = Form(None),
+    tiktok_pixel_id: str = Form(None),
+    tiktok_access_token: str = Form(None),
+    ga4_measurement_id: str = Form(None),
+    ga4_api_secret: str = Form(None),
     db: AsyncSession = Depends(get_db),
 ):
     # ─── Input Validation ──────────────────────────────────────────────────
@@ -521,6 +551,10 @@ async def add_client(
         test_event_code=test_event_code.strip() if test_event_code else None,
         domain=clean_domain,
         api_key=secrets.token_urlsafe(32),
+        tiktok_pixel_id=tiktok_pixel_id.strip() if tiktok_pixel_id and tiktok_pixel_id.strip() else None,
+        tiktok_access_token=encrypt_token(tiktok_access_token.strip()) if tiktok_access_token and tiktok_access_token.strip() else None,
+        ga4_measurement_id=ga4_measurement_id.strip() if ga4_measurement_id and ga4_measurement_id.strip() else None,
+        ga4_api_secret=encrypt_token(ga4_api_secret.strip()) if ga4_api_secret and ga4_api_secret.strip() else None,
     )
     db.add(new_client)
     await db.commit()

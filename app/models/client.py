@@ -18,4 +18,11 @@ class Client(Base):
     domain = Column(String, nullable=True)                         # ক্লায়েন্টের ওয়েবসাইট ডোমেইন
     rate_limit = Column(Integer, default=5000)                     # প্রতি মিনিটে সর্বোচ্চ রিকোয়েস্ট
     daily_quota = Column(Integer, default=100000)                  # প্রতিদিন সর্বোচ্চ ইভেন্ট
+    # ─── TikTok CAPI Integration ──────────────────────────────────────────
+    tiktok_pixel_id = Column(String, nullable=True)               # TikTok Pixel ID (optional)
+    tiktok_access_token = Column(String, nullable=True)           # TikTok Access Token (encrypted, optional)
+    # ─── GA4 Server-Side Integration ──────────────────────────────────────
+    ga4_measurement_id = Column(String, nullable=True)            # GA4 Measurement ID (e.g. G-XXXXX)
+    ga4_api_secret = Column(String, nullable=True)                # GA4 API Secret (encrypted)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
