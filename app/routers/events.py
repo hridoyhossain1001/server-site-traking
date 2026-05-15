@@ -4,7 +4,7 @@ import os
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, HTTPException, Request, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Request, BackgroundTasks, Query
 from sqlalchemy import and_, func as sql_func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +20,7 @@ from app.services.geoip_service import get_location_data
 from app.services.ga4_service import send_to_ga4
 from app.services.retry_service import save_failed_event
 from app.services.usage_service import check_usage_limits_db, increment_usage_counters_db
+from app.models.pending_event import PendingEvent
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +150,7 @@ async def receive_events(
     background_tasks: BackgroundTasks,
     client: CachedClient = Depends(get_current_client),
     db: AsyncSession = Depends(get_db),
+    hold: bool = Query(False, description="True হলে Purchase event hold হবে"),
 ):
     """
     ক্লায়েন্টের API Key ভেরিফাই করে Facebook CAPI-তে ইভেন্ট ফরওয়ার্ড করে।
@@ -206,24 +208,28 @@ async def receive_events(
     # সার্ভার নিজেই ইউজারের আসল IP বসিয়ে দেবে
     PLACEHOLDER_IPS = {"8.8.8.8", "127.0.0.1", "0.0.0.0", None, ""}
     for event in payload.data:
-        if event.user_data:
-            if event.user_data.client_ip_address in PLACEHOLDER_IPS:
-                event.user_data.client_ip_address = client_ip
-            if not event.user_data.client_user_agent:
-                event.user_data.client_user_agent = request.headers.get("user-agent")
+        # Ensure user_data exists (schema now allows Optional)
+        if not event.user_data:
+            from app.schemas.event import UserData
+            event.user_data = UserData()
+        if event.user_data.client_ip_address in PLACEHOLDER_IPS:
+            event.user_data.client_ip_address = client_ip
+        if not event.user_data.client_user_agent:
+            event.user_data.client_user_agent = request.headers.get("user-agent")
 
-            # ─── GeoIP Enrichment ──────────────────────────────────────────
-            if event.user_data.client_ip_address:
-                loc_data = get_location_data(event.user_data.client_ip_address)
-                if loc_data:
-                    if loc_data.get("ct") and not event.user_data.ct:
-                        event.user_data.ct = loc_data["ct"]
-                    if loc_data.get("st") and not event.user_data.st:
-                        event.user_data.st = loc_data["st"]
-                    if loc_data.get("country") and not event.user_data.country:
-                        event.user_data.country = loc_data["country"]
-                    if loc_data.get("zp") and not event.user_data.zp:
-                        event.user_data.zp = loc_data["zp"]
+        # ─── GeoIP Enrichment ──────────────────────────────────────────
+        if event.user_data.client_ip_address:
+            loc_data = get_location_data(event.user_data.client_ip_address)
+            if loc_data:
+                from app.schemas.event import _clean_and_hash
+                if loc_data.get("ct") and not event.user_data.ct:
+                    event.user_data.ct = [_clean_and_hash(loc_data["ct"], "ct")]
+                if loc_data.get("st") and not event.user_data.st:
+                    event.user_data.st = [_clean_and_hash(loc_data["st"], "st")]
+                if loc_data.get("country") and not event.user_data.country:
+                    event.user_data.country = [_clean_and_hash(loc_data["country"], "country")]
+                if loc_data.get("zp") and not event.user_data.zp:
+                    event.user_data.zp = [_clean_and_hash(loc_data["zp"], "zp")]
 
     # ─── Step 1: Usage Limit CHECK (read-only, no counter increment) ──
     await check_usage_limits_db(db, client, len(payload.data))
@@ -243,6 +249,64 @@ async def receive_events(
             events_received=0,
             message="সব ইভেন্ট আগেই পাঠানো হয়েছে (deduplicated)",
         )
+
+    # ─── Step 3.5: Deferred Purchase — Purchase events হোল্ড করো ──────
+    # ক্লায়েন্টের deferred_purchase ON থাকলে বা hold=true query param থাকলে
+    # Purchase events pending_events টেবিলে সেভ হবে, Facebook-এ যাবে না
+    should_hold = hold or client.deferred_purchase
+    deferred_count = 0  # default — no deferred events
+
+    if should_hold:
+        deferred_events = []
+        immediate_events = []
+
+        for event in unique_events:
+            if event.event_name == "Purchase":
+                deferred_events.append(event)
+            else:
+                immediate_events.append(event)
+
+        # Purchase events → pending_events টেবিলে সেভ
+        deferred_count = 0
+        for event in deferred_events:
+            event_dict = event.model_dump(exclude_none=True)
+            # order_id বের করো: custom_data.order_id বা event_id থেকে
+            order_id = None
+            if event.custom_data and hasattr(event.custom_data, 'order_id') and event.custom_data.order_id:
+                order_id = event.custom_data.order_id
+            elif event.event_id:
+                order_id = event.event_id
+            else:
+                order_id = f"auto-{event.event_time}-{id(event)}"
+
+            try:
+                async with db.begin_nested():
+                    pending = PendingEvent(
+                        client_id=client.id,
+                        order_id=order_id,
+                        event_data=event_dict,
+                        status="pending",
+                    )
+                    db.add(pending)
+                    await db.flush()  # unique constraint check
+                deferred_count += 1
+                logger.info(f"[{client.name}] 📦 Purchase hold: {order_id}")
+            except Exception as e:
+                logger.warning(f"[{client.name}] Duplicate pending order: {order_id}")
+
+        if deferred_count > 0:
+            await db.commit()
+
+        # immediate_events (non-Purchase) না থাকলে return
+        if not immediate_events:
+            return EventsResponse(
+                status="success",
+                events_received=deferred_count,
+                message=f"📦 {deferred_count}টি Purchase event হোল্ড করা হয়েছে — কনফার্ম করলে Facebook-এ যাবে",
+            )
+
+        # বাকি events (PageView, AddToCart etc.) Facebook-এ পাঠাও
+        unique_events = immediate_events
 
     event_names = ", ".join(sorted({event.event_name for event in unique_events}))
 
@@ -305,8 +369,32 @@ async def receive_events(
             user_agent=request.headers.get("user-agent", "")
         )
 
+    # ─── Step 5.7: Outbound Webhook (parallel, non-blocking) ──────────
+    if client.webhook_url:
+        from app.services.webhook_service import send_webhook
+        for evt in unique_events:
+            evt_dict = evt.model_dump(exclude_none=True)
+            background_tasks.add_task(
+                send_webhook,
+                client.webhook_url,
+                "event.sent",
+                {
+                    "client_name": client.name,
+                    "event_name": evt_dict.get("event_name"),
+                    "event_id": evt_dict.get("event_id"),
+                    "custom_data": evt_dict.get("custom_data", {}),
+                },
+            )
+
+    # Response message adjust করো — deferred events থাকলে
+    total_received = len(unique_events)
+    msg = "সফলভাবে Facebook-এ পাঠানো হয়েছে"
+    if should_hold and deferred_count > 0:
+        total_received += deferred_count
+        msg = f"✅ {len(unique_events)}টি event Facebook-এ পাঠানো হয়েছে, 📦 {deferred_count}টি Purchase hold আছে"
+
     return EventsResponse(
         status="success",
-        events_received=len(unique_events),
-        message="সফলভাবে Facebook-এ পাঠানো হয়েছে",
+        events_received=total_received,
+        message=msg,
     )

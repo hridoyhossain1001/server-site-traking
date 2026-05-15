@@ -90,7 +90,7 @@ class EventData(BaseModel):
     action_source: str = "website"
     event_id: Optional[str] = None        # Deduplication এর জন্য (খুবই জরুরি!)
     event_source_url: Optional[str] = None
-    user_data: UserData
+    user_data: Optional[UserData] = None
     custom_data: Optional[CustomData] = None
     emq_score: Optional[float] = None      # Event Match Quality Score (internal use)
 

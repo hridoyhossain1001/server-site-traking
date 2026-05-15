@@ -32,11 +32,17 @@ class CachedClient:
     tiktok_access_token: str | None
     ga4_measurement_id: str | None
     ga4_api_secret: str | None
+    deferred_purchase: bool
+    webhook_url: str | None
 
 
 _client_cache: dict[str, tuple[CachedClient, float]] = {}
 CACHE_TTL = 60  # 60 সেকেন্ড — client info cache করে রাখো
 
+def clear_client_cache(api_key: str):
+    """Admin update-এর পর cache ক্লিয়ার করতে ব্যবহৃত হয়"""
+    if api_key in _client_cache:
+        del _client_cache[api_key]
 
 def _snapshot(client: Client) -> CachedClient:
     """ORM object থেকে plain dataclass তৈরি করো — session-independent।"""
@@ -55,6 +61,8 @@ def _snapshot(client: Client) -> CachedClient:
         tiktok_access_token=getattr(client, 'tiktok_access_token', None),
         ga4_measurement_id=getattr(client, 'ga4_measurement_id', None),
         ga4_api_secret=getattr(client, 'ga4_api_secret', None),
+        deferred_purchase=getattr(client, 'deferred_purchase', False) or False,
+        webhook_url=getattr(client, 'webhook_url', None),
     )
 
 

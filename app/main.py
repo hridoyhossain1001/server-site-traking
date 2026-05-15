@@ -12,6 +12,9 @@ from app.routers.admin import router as admin_router
 from app.routers.monitoring import router as monitoring_router
 from app.routers.client_portal import router as client_portal_router
 from app.routers.tracker import router as tracker_router
+from app.routers.deferred_events import router as deferred_events_router
+from app.routers.analytics import router as analytics_router
+from app.routers.debug import router as debug_router
 from app.limiter import limiter
 import os
 
@@ -34,8 +37,8 @@ async def lifespan(app: FastAPI):
     # 🔄 Retry Service — শুধুমাত্র ENABLE_RETRY_IN_WEB=true হলে এই process-এ চলবে
     # Worker dyno না থাকলে Procfile-এ: web: ENABLE_RETRY_IN_WEB=true uvicorn ... --workers 1
     # অথবা Heroku config var-এ সেট করুন। একাধিক worker থাকলে retry duplicate হবে!
+    import asyncio
     if os.getenv("ENABLE_RETRY_IN_WEB", "").lower() in ("true", "1", "yes"):
-        import asyncio
         from app.services.retry_service import retry_failed_events
         asyncio.create_task(retry_failed_events())
         logger.info("⚙️  Background Retry Service স্টার্ট হয়েছে (Web Process)।")
@@ -46,6 +49,11 @@ async def lifespan(app: FastAPI):
     from app.services.cleanup_service import auto_cleanup_database
     asyncio.create_task(auto_cleanup_database())
     logger.info("🧹 Background Auto-Cleanup Service স্টার্ট হয়েছে (30 days retention)।")
+
+    # ⏰ Pending Events Auto-Expiry Service
+    from app.services.expiry_service import expire_old_pending_events
+    asyncio.create_task(expire_old_pending_events())
+    logger.info("⏰ Pending Events Expiry Service স্টার্ট হয়েছে (7 days limit)।")
 
     # 🌍 GeoIP Database Load
     from app.services.geoip_service import download_geoip_db_if_missing, close_geoip_db
@@ -81,7 +89,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],          # যেকোনো ক্লায়েন্ট ওয়েবসাইট থেকে রিকোয়েস্ট আসতে পারে
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["GET", "POST"],
     allow_headers=["X-API-Key", "Content-Type"],
 )
@@ -92,6 +100,9 @@ app.include_router(admin_router,  prefix="/api/v1", tags=["Admin"])
 app.include_router(monitoring_router, prefix="/api/v1", tags=["Monitoring"])
 app.include_router(client_portal_router, tags=["Client Portal"])
 app.include_router(tracker_router, tags=["Tracker"])  # /t.js, /c — root level, no prefix
+app.include_router(deferred_events_router, prefix="/api/v1", tags=["Deferred Events"])
+app.include_router(analytics_router, prefix="/api/v1", tags=["Analytics"])
+app.include_router(debug_router, prefix="/api/v1", tags=["Debug & Testing"])
 
 
 # ─── Health Check ─────────────────────────────────────────────────────────────

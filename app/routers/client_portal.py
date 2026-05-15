@@ -6,12 +6,15 @@ from sqlalchemy import func
 import html
 import datetime
 from typing import Optional
+from sqlalchemy import and_
 
 from app.database import get_db
 from app.models.client import Client
 from app.models.event_log import EventLog
+from app.models.pending_event import PendingEvent
 from app.routers.admin import STYLE, base_html
 from app.security import encrypt_token, decrypt_token
+from app.limiter import limiter
 
 router = APIRouter(tags=["Client Portal"])
 
@@ -50,7 +53,8 @@ async def client_login_page(request: Request):
     return HTMLResponse(base_html("Client Login", body))
 
 @router.post("/client/login", include_in_schema=False)
-async def client_login(response: Response, api_key: str = Form(...), db: AsyncSession = Depends(get_db)):
+@limiter.limit("5/minute")
+async def client_login(request: Request, response: Response, api_key: str = Form(...), db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Client).where(Client.api_key == api_key))
     client = result.scalar_one_or_none()
     
@@ -188,6 +192,140 @@ async def client_dashboard(request: Request, db: AsyncSession = Depends(get_db))
 
     if not recent_logs:
         log_rows_html = '<tr><td colspan="4" style="text-align:center;color:#555;padding:30px">এখনো কোনো ইভেন্ট লগ নেই</td></tr>'
+
+    # ─── Pending Events Query (Deferred Purchase) ─────────────────────
+    pending_html = ""
+    if getattr(client, 'deferred_purchase', False):
+        pending_result = await db.execute(
+            select(PendingEvent)
+            .where(and_(
+                PendingEvent.client_id == client.id,
+                PendingEvent.status == "pending",
+            ))
+            .order_by(PendingEvent.created_at.desc())
+            .limit(50)
+        )
+        pending_events = pending_result.scalars().all()
+
+        # Pending count
+        pending_count_r = await db.execute(
+            select(func.count(PendingEvent.id)).where(and_(
+                PendingEvent.client_id == client.id,
+                PendingEvent.status == "pending",
+            ))
+        )
+        pending_count = pending_count_r.scalar() or 0
+
+        # Today's confirmed
+        confirmed_r = await db.execute(
+            select(func.count(PendingEvent.id)).where(and_(
+                PendingEvent.client_id == client.id,
+                PendingEvent.status == "confirmed",
+                PendingEvent.confirmed_at >= today_start,
+            ))
+        )
+        confirmed_today = confirmed_r.scalar() or 0
+
+        # Today's cancelled
+        cancelled_r = await db.execute(
+            select(func.count(PendingEvent.id)).where(and_(
+                PendingEvent.client_id == client.id,
+                PendingEvent.status == "cancelled",
+            ))
+        )
+        cancelled_count = cancelled_r.scalar() or 0
+
+        now_utc = datetime.datetime.now(datetime.timezone.utc)
+
+        pending_rows = ""
+        for pe in pending_events:
+            edata = pe.event_data or {}
+            cdata = edata.get("custom_data", {})
+            udata = edata.get("user_data", {})
+            value_str = f"৳{cdata.get('value', 0):,.0f}" if cdata.get('value') else "—"
+            phone = ""
+            if udata.get("ph") and isinstance(udata["ph"], list) and udata["ph"]:
+                phone = udata["ph"][0][:12] + "..." if len(str(udata["ph"][0])) > 12 else str(udata["ph"][0])
+            elif udata.get("em") and isinstance(udata["em"], list) and udata["em"]:
+                phone = udata["em"][0][:15] + "..."
+            else:
+                phone = "—"
+            created = pe.created_at
+            if created:
+                if created.tzinfo is None:
+                    created = created.replace(tzinfo=datetime.timezone.utc)
+                age_sec = (now_utc - created).total_seconds()
+                if age_sec < 3600:
+                    age_str = f"{int(age_sec/60)}m ago"
+                elif age_sec < 86400:
+                    age_str = f"{int(age_sec/3600)}h ago"
+                else:
+                    age_str = f"{int(age_sec/86400)}d ago"
+            else:
+                age_str = "—"
+
+            safe_oid = html.escape(pe.order_id)
+            pending_rows += f"""
+            <tr id="row-{safe_oid}">
+              <td><input type="checkbox" class="pending-cb" value="{safe_oid}" style="accent-color:#7e57c2;width:16px;height:16px;"></td>
+              <td style="font-family:monospace;font-size:12px;color:#ccc">{safe_oid}</td>
+              <td style="color:#00e676;font-weight:600">{value_str}</td>
+              <td style="color:#888;font-size:12px">{html.escape(phone)}</td>
+              <td style="color:#888;font-size:12px">{age_str}</td>
+              <td>
+                <button class="btn-sm btn-info" onclick="confirmOrder('{safe_oid}')" style="font-size:11px;padding:5px 10px;">✅ Confirm</button>
+                &nbsp;
+                <button class="btn-sm btn-danger" onclick="cancelOrder('{safe_oid}')" style="font-size:11px;padding:5px 10px;">❌ Cancel</button>
+              </td>
+            </tr>"""
+
+        if not pending_events:
+            pending_rows = '<tr><td colspan="6" style="text-align:center;color:#555;padding:30px">কোনো pending অর্ডার নেই 🎉</td></tr>'
+
+        pending_html = f"""
+    <!-- PENDING ORDERS SECTION -->
+    <div class="card" style="margin-bottom:24px;border:1px solid rgba(255,171,0,0.2);">
+      <div class="card-title"><span class="icon" style="background:rgba(255,171,0,0.15)">📦</span> Pending Purchase Orders
+        <span style="font-size:12px;color:#ffab00;margin-left:8px;">Deferred Purchase সচল</span>
+      </div>
+
+      <div class="stat-row" style="margin-bottom:16px;">
+        <div class="stat-box" style="padding:16px;">
+          <div class="num" style="color:#ffab00;font-size:24px">{pending_count}</div>
+          <div class="lbl" style="font-size:11px">📦 Pending</div>
+        </div>
+        <div class="stat-box" style="padding:16px;">
+          <div class="num" style="color:#00e676;font-size:24px">{confirmed_today}</div>
+          <div class="lbl" style="font-size:11px">✅ Confirmed Today</div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:10px;margin-bottom:16px;">
+        <button class="btn-sm btn-info" onclick="selectAllPending()" style="font-size:12px;">☑️ Select All</button>
+        <button class="btn-sm btn-info" onclick="confirmSelected()" style="font-size:12px;background:rgba(0,230,118,0.1);color:#00e676;border-color:rgba(0,230,118,0.3);">✅ Confirm Selected</button>
+      </div>
+
+      <div id="pending-status" style="display:none;padding:10px 14px;border-radius:8px;margin-bottom:12px;font-size:13px;"></div>
+
+      <div style="overflow-x:auto;">
+        <table class="client-table">
+          <thead>
+            <tr>
+              <th style="width:30px;"></th>
+              <th>Order ID</th>
+              <th>Amount</th>
+              <th>Customer</th>
+              <th>Time</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="pending-tbody">
+            {pending_rows}
+          </tbody>
+        </table>
+      </div>
+    </div>
+        """
 
     # Base URL detection
     base_url = str(request.base_url).rstrip("/")
@@ -342,13 +480,7 @@ capi('setUser', {{
         <p><strong style="color:#fff">ধাপ ৩:</strong> WPCode থেকে "Header & Footer" অপশনে যান।</p>
         <p><strong style="color:#fff">ধাপ ৪:</strong> "Header" বক্সে নিচের কোডটি কপি করে পেস্ট করুন এবং Save দিন:</p>
         <button class="copy-btn" onclick="copyText('wp_pv_easy')" style="margin-bottom:4px">Copy</button>
-        <div class="instr-box" id="wp_pv_easy">&lt;script&gt;
-  (function(w,d,s,l,i){{w[l]=w[l]||function(){{(w[l].q=w[l].q||[]).push(arguments)}};
-  var f=d.getElementsByTagName(s)[0],j=d.createElement(s);j.async=true;
-  j.src='{safe_tracker_url}';f.parentNode.insertBefore(j,f);
-  }})(window,document,'script','tracker');
-  tracker('track', 'PageView');
-&lt;/script&gt;</div>
+        <div class="instr-box" id="wp_pv_easy">&lt;script src="{safe_tracker_url}" defer&gt;&lt;/script&gt;</div>
         
         <div style="margin-top:16px;padding:14px;background:rgba(0,230,118,0.05);border:1px solid rgba(0,230,118,0.15);border-radius:8px;font-size:13px;color:#aaa;line-height:1.9">
           <strong style="color:#00e676">🎉 অভিনন্দন!</strong><br>
@@ -410,15 +542,17 @@ function send_capi_event($event_name, $url, $value, $event_id, $product_id) {{
         $data['data'][0]['custom_data']['content_type'] = 'product';
     }}
 
-    wp_remote_post('{safe_endpoint}?key={safe_api_key}', [
-        'body' =&gt; json_encode($data),
-        'headers' =&gt; ['Content-Type' =&gt; 'application/json'],
-        'blocking' =&gt; false
+    wp_remote_post('{safe_endpoint}', [
+        'body' => json_encode($data),
+        'headers' => [
+            'Content-Type' => 'application/json',
+            'X-API-Key' => '{safe_api_key}'
+        ],
+        'blocking' => false
     ]);
 }}
 ?&gt;</div>
       </div>
-    </div>
     """
 
     body = f"""
@@ -449,6 +583,35 @@ function send_capi_event($event_name, $url, $value, $event_id, $product_id) {{
       <canvas id="eventsChart" height="120"></canvas>
     </div>
 
+    <!-- ADVANCED ANALYTICS -->
+    <div class="card" style="margin-bottom:24px;border:1px solid rgba(126,87,194,0.2);">
+      <div class="card-title"><span class="icon" style="background:rgba(126,87,194,0.15)">📊</span> Advanced Analytics
+        <a href="/api/v1/analytics/export?days=7" style="float:right;font-size:12px;color:#7e57c2;text-decoration:none;" target="_blank">📥 CSV Export (7 Days)</a>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px;">
+        <!-- Conversion Funnel -->
+        <div style="background:var(--card-bg);border:1px solid var(--border);border-radius:12px;padding:20px;">
+          <h4 style="color:#fff;margin:0 0 16px 0;font-size:14px;">🔄 Conversion Funnel</h4>
+          <div id="funnel-container" style="color:#888;font-size:13px;">Loading...</div>
+        </div>
+
+        <!-- Event Breakdown -->
+        <div style="background:var(--card-bg);border:1px solid var(--border);border-radius:12px;padding:20px;">
+          <h4 style="color:#fff;margin:0 0 16px 0;font-size:14px;">📊 Event Breakdown</h4>
+          <canvas id="breakdownChart" height="200"></canvas>
+        </div>
+      </div>
+
+      <!-- Hourly Heatmap -->
+      <div style="background:var(--card-bg);border:1px solid var(--border);border-radius:12px;padding:20px;">
+        <h4 style="color:#fff;margin:0 0 16px 0;font-size:14px;">🕐 Hourly Distribution (Last 7 Days)</h4>
+        <canvas id="hourlyChart" height="80"></canvas>
+      </div>
+    </div>
+
+    {pending_html}
+
     <!-- RECENT EVENT LOGS -->
     <div class="card" style="margin-bottom:24px;">
       <div class="card-title"><span class="icon">📋</span> সর্বশেষ ইভেন্ট লগ (সর্বোচ্চ ৫০টি)</div>
@@ -469,6 +632,49 @@ function send_capi_event($event_name, $url, $value, $event_id, $product_id) {{
       </div>
     </div>
     
+    <!-- DEBUG & TESTING -->
+    <div class="card" style="margin-bottom:24px;border:1px solid rgba(0,230,118,0.2);">
+      <div class="card-title"><span class="icon" style="background:rgba(0,230,118,0.15)">🧪</span> Event Testing & Debug</div>
+      
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
+        <!-- Send Test Event -->
+        <div style="background:var(--card-bg);border:1px solid var(--border);border-radius:12px;padding:20px;">
+          <h4 style="color:#fff;margin:0 0 12px 0;font-size:14px;">🚀 Send Test Event</h4>
+          <select id="test-event-name" style="width:100%;padding:10px;background:#1e1e32;color:#fff;border:1px solid rgba(255,255,255,0.1);border-radius:8px;margin-bottom:10px;font-size:13px;">
+            <option value="PageView">PageView</option>
+            <option value="ViewContent">ViewContent</option>
+            <option value="AddToCart">AddToCart</option>
+            <option value="InitiateCheckout">InitiateCheckout</option>
+            <option value="Purchase">Purchase</option>
+            <option value="Lead">Lead</option>
+            <option value="CompleteRegistration">CompleteRegistration</option>
+            <option value="Search">Search</option>
+          </select>
+          <button class="btn-sm btn-info" onclick="sendTestEvent()" style="width:100%;padding:10px;font-size:13px;">🧪 Send Test Event</button>
+          <div id="test-result" style="margin-top:10px;font-size:12px;color:#888;"></div>
+        </div>
+
+        <!-- Validate Payload -->
+        <div style="background:var(--card-bg);border:1px solid var(--border);border-radius:12px;padding:20px;">
+          <h4 style="color:#fff;margin:0 0 12px 0;font-size:14px;">🔍 Validate Event Payload</h4>
+          <textarea id="validate-payload" style="width:100%;height:120px;padding:10px;background:#1e1e32;color:#0f0;border:1px solid rgba(255,255,255,0.1);border-radius:8px;font-family:monospace;font-size:11px;resize:vertical;" placeholder='{{"event_name":"Purchase","event_time":1234567890,"user_data":{{"em":["test@example.com"]}},"custom_data":{{"value":1500,"currency":"BDT"}}}}'></textarea>
+          <button class="btn-sm btn-info" onclick="validatePayload()" style="width:100%;padding:10px;font-size:13px;margin-top:8px;">🔍 Validate</button>
+          <div id="validate-result" style="margin-top:10px;font-size:12px;"></div>
+        </div>
+      </div>
+
+      <!-- Recent Events Live -->
+      <div style="margin-top:20px;background:var(--card-bg);border:1px solid var(--border);border-radius:12px;padding:20px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+          <h4 style="color:#fff;margin:0;font-size:14px;">📡 Live Event Stream (Last Hour)</h4>
+          <button class="btn-sm btn-info" onclick="refreshLiveEvents()" style="font-size:11px;">🔄 Refresh</button>
+        </div>
+        <div id="live-events" style="max-height:300px;overflow-y:auto;font-family:monospace;font-size:11px;color:#888;">
+          Loading...
+        </div>
+      </div>
+    </div>
+
     <div style="margin-top:40px;">
         <h3 style="color:#fff; margin-bottom:16px; font-weight:600;">📋 Setup Instructions</h3>
         {instructions_html}
@@ -571,6 +777,279 @@ function send_capi_event($event_name, $url, $value, $event_id, $product_id) {{
         document.getElementById('generated_code_box').innerText = code;
         document.getElementById('code_result_area').style.display = 'block';
     }}
+    </script>
+
+    <script>
+    // ─── Pending Orders AJAX Functions ─────────────────────────────────
+    var API_KEY = '{safe_api_key}';
+    var BASE_API = '{safe_endpoint}'.replace('/events', '');
+
+    function showStatus(msg, type) {{
+      var el = document.getElementById('pending-status');
+      if (!el) return;
+      el.style.display = 'block';
+      el.style.background = type === 'success' ? 'rgba(0,230,118,0.1)' : 'rgba(255,82,82,0.1)';
+      el.style.border = type === 'success' ? '1px solid rgba(0,230,118,0.2)' : '1px solid rgba(255,82,82,0.2)';
+      el.style.color = type === 'success' ? '#00e676' : '#ff5252';
+      el.innerText = msg;
+      setTimeout(function() {{ el.style.display = 'none'; }}, 5000);
+    }}
+
+    async function confirmOrder(orderId) {{
+      if (!confirm('অর্ডার ' + orderId + ' কনফার্ম করবেন? Purchase event Facebook-এ পাঠানো হবে।')) return;
+      try {{
+        var res = await fetch(BASE_API + '/events/confirm', {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json', 'X-API-Key': API_KEY }},
+          body: JSON.stringify({{ order_id: orderId }})
+        }});
+        var data = await res.json();
+        if (res.ok) {{
+          showStatus('✅ ' + orderId + ' কনফার্ম হয়েছে! Facebook-এ পাঠানো হয়েছে।', 'success');
+          var row = document.getElementById('row-' + orderId);
+          if (row) row.style.opacity = '0.3';
+          setTimeout(function() {{ if (row) row.remove(); }}, 2000);
+        }} else {{
+          showStatus('❌ Error: ' + (data.detail || 'Unknown error'), 'error');
+        }}
+      }} catch(e) {{
+        showStatus('❌ Network error: ' + e.message, 'error');
+      }}
+    }}
+
+    async function cancelOrder(orderId) {{
+      if (!confirm('অর্ডার ' + orderId + ' ক্যান্সেল করবেন? Facebook-এ কিছু পাঠানো হবে না।')) return;
+      try {{
+        var res = await fetch(BASE_API + '/events/cancel', {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json', 'X-API-Key': API_KEY }},
+          body: JSON.stringify({{ order_id: orderId }})
+        }});
+        var data = await res.json();
+        if (res.ok) {{
+          showStatus('❌ ' + orderId + ' ক্যান্সেল হয়েছে।', 'success');
+          var row = document.getElementById('row-' + orderId);
+          if (row) row.style.opacity = '0.3';
+          setTimeout(function() {{ if (row) row.remove(); }}, 2000);
+        }} else {{
+          showStatus('❌ Error: ' + (data.detail || 'Unknown error'), 'error');
+        }}
+      }} catch(e) {{
+        showStatus('❌ Network error: ' + e.message, 'error');
+      }}
+    }}
+
+    function selectAllPending() {{
+      var cbs = document.querySelectorAll('.pending-cb');
+      var allChecked = Array.from(cbs).every(function(cb) {{ return cb.checked; }});
+      cbs.forEach(function(cb) {{ cb.checked = !allChecked; }});
+    }}
+
+    async function confirmSelected() {{
+      var cbs = document.querySelectorAll('.pending-cb:checked');
+      if (cbs.length === 0) {{ showStatus('⚠️ কোনো অর্ডার সিলেক্ট করা হয়নি!', 'error'); return; }}
+      if (!confirm(cbs.length + 'টি অর্ডার কনফার্ম করবেন?')) return;
+
+      var orderIds = Array.from(cbs).map(function(cb) {{ return cb.value; }});
+      try {{
+        var res = await fetch(BASE_API + '/events/confirm/bulk', {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json', 'X-API-Key': API_KEY }},
+          body: JSON.stringify({{ order_ids: orderIds }})
+        }});
+        var data = await res.json();
+        if (res.ok) {{
+          showStatus('✅ ' + data.confirmed + 'টি কনফার্ম হয়েছে, ' + data.failed + 'টি ব্যর্থ।', 'success');
+          orderIds.forEach(function(oid) {{
+            var row = document.getElementById('row-' + oid);
+            if (row) {{ row.style.opacity = '0.3'; setTimeout(function() {{ row.remove(); }}, 2000); }}
+          }});
+        }} else {{
+          showStatus('❌ Error: ' + (data.detail || 'Unknown error'), 'error');
+        }}
+      }} catch(e) {{
+        showStatus('❌ Network error: ' + e.message, 'error');
+      }}
+    }}
+    }}
+    </script>
+
+    <script>
+    // ─── Analytics Charts ─────────────────────────────────────────────────
+    (async function loadAnalytics() {{
+      try {{
+        // Fetch overview data
+        var res = await fetch(BASE_API + '/analytics/overview?days=7', {{
+          headers: {{ 'X-API-Key': API_KEY }}
+        }});
+        if (!res.ok) return;
+        var data = await res.json();
+
+        // Conversion Funnel
+        var fc = document.getElementById('funnel-container');
+        if (fc && data.funnel) {{
+          var funnelColors = ['#7e57c2','#42a5f5','#66bb6a','#ffab00','#00e676'];
+          var maxCount = Math.max(...data.funnel.map(function(f) {{ return f.count; }}), 1);
+          var fhtml = '';
+          data.funnel.forEach(function(step, i) {{
+            var width = Math.max((step.count / maxCount) * 100, 5);
+            var dropText = i > 0 && step.drop_off > 0 ? '<span style="color:#ff5252;font-size:11px;margin-left:8px;">↓' + step.drop_off.toFixed(1) + '%</span>' : '';
+            fhtml += '<div style="margin-bottom:10px;">' +
+              '<div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;">' +
+                '<span style="color:#ccc">' + step.step + dropText + '</span>' +
+                '<span style="color:#fff;font-weight:600">' + step.count.toLocaleString() + '</span>' +
+              '</div>' +
+              '<div style="background:rgba(255,255,255,0.05);border-radius:6px;height:8px;overflow:hidden;">' +
+                '<div style="width:' + width + '%;height:100%;background:' + funnelColors[i % 5] + ';border-radius:6px;transition:width 0.8s ease;"></div>' +
+              '</div></div>';
+          }});
+          fc.innerHTML = fhtml;
+        }}
+
+        // Event Breakdown — Doughnut Chart
+        if (data.event_breakdown && data.event_breakdown.length > 0) {{
+          var bdLabels = data.event_breakdown.map(function(e) {{ return e.event_name; }});
+          var bdData = data.event_breakdown.map(function(e) {{ return e.count; }});
+          var bdColors = ['#7e57c2','#42a5f5','#66bb6a','#ffab00','#ff5252','#00e676','#ff7043','#ab47bc','#26c6da','#8d6e63'];
+          new Chart(document.getElementById('breakdownChart'), {{
+            type: 'doughnut',
+            data: {{
+              labels: bdLabels,
+              datasets: [{{
+                data: bdData,
+                backgroundColor: bdColors.slice(0, bdLabels.length),
+                borderWidth: 0,
+              }}]
+            }},
+            options: {{
+              responsive: true,
+              plugins: {{
+                legend: {{ position: 'right', labels: {{ color: '#ccc', font: {{ size: 11 }} }} }}
+              }}
+            }}
+          }});
+        }}
+
+        // Hourly Heatmap
+        var hRes = await fetch(BASE_API + '/analytics/hourly?days=7', {{
+          headers: {{ 'X-API-Key': API_KEY }}
+        }});
+        if (hRes.ok) {{
+          var hData = await hRes.json();
+          var hLabels = hData.data.map(function(h) {{ return h.hour + ':00'; }});
+          var hCounts = hData.data.map(function(h) {{ return h.count; }});
+          var maxH = Math.max(...hCounts, 1);
+          var hColors = hCounts.map(function(c) {{
+            var intensity = Math.min(c / maxH, 1);
+            return 'rgba(126,87,194,' + (0.2 + intensity * 0.8) + ')';
+          }});
+          new Chart(document.getElementById('hourlyChart'), {{
+            type: 'bar',
+            data: {{
+              labels: hLabels,
+              datasets: [{{
+                label: 'Events',
+                data: hCounts,
+                backgroundColor: hColors,
+                borderRadius: 4,
+              }}]
+            }},
+            options: {{
+              responsive: true,
+              plugins: {{ legend: {{ display: false }} }},
+              scales: {{
+                x: {{ grid: {{ display: false }}, ticks: {{ color: '#666', font: {{ size: 10 }} }} }},
+                y: {{ grid: {{ color: 'rgba(255,255,255,0.05)' }}, ticks: {{ color: '#666' }} }}
+              }}
+            }}
+          }});
+        }}
+      }} catch(e) {{
+        console.log('Analytics load error:', e);
+      }}
+    }})();
+    </script>
+
+    <script>
+    // ─── Debug & Testing Functions ────────────────────────────────────────
+    async function sendTestEvent() {{
+      var evName = document.getElementById('test-event-name').value;
+      var el = document.getElementById('test-result');
+      el.innerHTML = '<span style="color:#ffab00">⏳ পাঠাচ্ছে...</span>';
+      try {{
+        var res = await fetch(BASE_API + '/debug/test-event', {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json', 'X-API-Key': API_KEY }},
+          body: JSON.stringify({{ event_name: evName }})
+        }});
+        var data = await res.json();
+        if (res.ok) {{
+          el.innerHTML = '<span style="color:#00e676">✅ ' + evName + ' event পাঠানো হয়েছে!</span><br><span style="color:#666">ID: ' + data.event_id + '</span>';
+        }} else {{
+          el.innerHTML = '<span style="color:#ff5252">❌ ' + (data.detail || 'Error') + '</span>';
+        }}
+      }} catch(e) {{
+        el.innerHTML = '<span style="color:#ff5252">❌ Network error</span>';
+      }}
+    }}
+
+    async function validatePayload() {{
+      var el = document.getElementById('validate-result');
+      var raw = document.getElementById('validate-payload').value;
+      if (!raw.trim()) {{ el.innerHTML = '<span style="color:#ff5252">Payload দিন!</span>'; return; }}
+      try {{
+        var payload = JSON.parse(raw);
+        var res = await fetch(BASE_API + '/debug/validate', {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json', 'X-API-Key': API_KEY }},
+          body: raw
+        }});
+        var data = await res.json();
+        var emqColor = data.emq_estimate >= 7 ? '#00e676' : data.emq_estimate >= 4 ? '#ffab00' : '#ff5252';
+        var html = '<div style="margin-bottom:8px;"><span style="font-size:16px;color:' + emqColor + ';font-weight:bold">EMQ: ' + data.emq_estimate + '/10</span> ';
+        html += data.is_valid ? '<span style="color:#00e676">✅ Valid</span>' : '<span style="color:#ff5252">❌ Invalid</span>';
+        html += '</div>';
+        data.issues.forEach(function(i) {{
+          var c = i.status === 'ok' ? '#00e676' : i.status === 'warning' ? '#ffab00' : '#ff5252';
+          html += '<div style="color:' + c + ';margin:2px 0;">' + i.message + '</div>';
+        }});
+        el.innerHTML = html;
+      }} catch(e) {{
+        el.innerHTML = '<span style="color:#ff5252">❌ Invalid JSON: ' + e.message + '</span>';
+      }}
+    }}
+
+    async function refreshLiveEvents() {{
+      var el = document.getElementById('live-events');
+      el.innerHTML = '<span style="color:#ffab00">Loading...</span>';
+      try {{
+        var res = await fetch(BASE_API + '/debug/recent?limit=20&minutes=60', {{
+          headers: {{ 'X-API-Key': API_KEY }}
+        }});
+        if (!res.ok) {{ el.innerHTML = '<span style="color:#ff5252">Error loading events</span>'; return; }}
+        var data = await res.json();
+        if (data.events.length === 0) {{
+          el.innerHTML = '<span style="color:#555">No events in the last hour</span>';
+          return;
+        }}
+        var html = '';
+        data.events.forEach(function(ev) {{
+          var statusColor = ev.status === 'success' ? '#00e676' : '#ff5252';
+          var ageStr = ev.age_seconds < 60 ? Math.round(ev.age_seconds) + 's ago' : Math.round(ev.age_seconds / 60) + 'm ago';
+          html += '<div style="padding:6px 8px;border-bottom:1px solid rgba(255,255,255,0.03);display:flex;gap:12px;align-items:center;">';
+          html += '<span style="color:#555;min-width:55px;">' + ageStr + '</span>';
+          html += '<span style="color:' + statusColor + ';min-width:12px;">' + (ev.status === 'success' ? '●' : '○') + '</span>';
+          html += '<span style="color:#ccc;min-width:120px;font-weight:600;">' + ev.event_name + '</span>';
+          html += '<span style="color:#555;font-size:10px;">' + (ev.event_id || '') + '</span>';
+          html += '</div>';
+        }});
+        el.innerHTML = html;
+      }} catch(e) {{
+        el.innerHTML = '<span style="color:#ff5252">Error: ' + e.message + '</span>';
+      }}
+    }}
+    // Auto-load live events
+    refreshLiveEvents();
     </script>
     """
     

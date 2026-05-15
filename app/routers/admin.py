@@ -429,6 +429,24 @@ async def admin_dashboard(
             <input type="text" name="ga4_api_secret" placeholder="">
             <div class="hint">GA4 Data Streams → Measurement Protocol API Secrets</div>
           </div>
+          <div style="border-top:1px solid var(--border);margin:16px 0;padding-top:16px">
+            <div style="font-size:13px;color:#ffab00;margin-bottom:12px;font-weight:600">📦 Deferred Purchase (Optional)</div>
+          </div>
+          <div class="form-group">
+            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;color:#fff">
+              <input type="checkbox" name="deferred_purchase" value="1" style="width:18px;height:18px;accent-color:#7e57c2;cursor:pointer;">
+              🔄 Deferred Purchase সচল করুন
+            </label>
+            <div class="hint">সচল করলে Purchase event সরাসরি Facebook-এ যাবে না — অর্ডার কনফার্ম হলে তবেই যাবে। COD ব্যবসার জন্য পারফেক্ট!</div>
+          </div>
+          <div style="border-top:1px solid var(--border);margin:16px 0;padding-top:16px">
+            <div style="font-size:13px;color:#42a5f5;margin-bottom:12px;font-weight:600">🔗 Webhook (Optional)</div>
+          </div>
+          <div class="form-group">
+            <label>Custom Webhook URL (Outbound)</label>
+            <input type="text" name="webhook_url" placeholder="https://your-server.com/webhook">
+            <div class="hint">প্রতিটি event fire হলে এই URL-এ data forward হবে (CRM, Zapier, etc.)</div>
+          </div>
           <button type="submit" class="btn">✅ ক্লায়েন্ট যোগ করুন</button>
         </form>
       </div>
@@ -450,9 +468,14 @@ async def admin_dashboard(
             safe_pixel = html.escape(c.pixel_id)
             safe_key = html.escape(c.api_key)
             c_events = client_events_map.get(c.id, 0)
+            deferred_badge = (
+                '<span style="background:rgba(255,171,0,0.15);color:#ffab00;border:1px solid rgba(255,171,0,0.3);padding:2px 8px;border-radius:12px;font-size:10px;font-weight:600;margin-left:6px">📦 Deferred</span>'
+                if getattr(c, 'deferred_purchase', False)
+                else ''
+            )
             rows += f"""
             <tr>
-              <td><strong>{safe_name}</strong><br><span style="color:#555;font-size:11px">{safe_pixel}</span></td>
+              <td><strong>{safe_name}</strong>{deferred_badge}<br><span style="color:#555;font-size:11px">{safe_pixel}</span></td>
               <td>{status_badge}</td>
               <td style="color:#00c853;font-weight:600;">{c_events:,}</td>
               <td>
@@ -517,6 +540,8 @@ async def add_client(
     tiktok_access_token: str = Form(None),
     ga4_measurement_id: str = Form(None),
     ga4_api_secret: str = Form(None),
+    deferred_purchase: str = Form(None),
+    webhook_url: str = Form(None),
     db: AsyncSession = Depends(get_db),
 ):
     # ─── Input Validation ──────────────────────────────────────────────────
@@ -555,6 +580,8 @@ async def add_client(
         tiktok_access_token=encrypt_token(tiktok_access_token.strip()) if tiktok_access_token and tiktok_access_token.strip() else None,
         ga4_measurement_id=ga4_measurement_id.strip() if ga4_measurement_id and ga4_measurement_id.strip() else None,
         ga4_api_secret=encrypt_token(ga4_api_secret.strip()) if ga4_api_secret and ga4_api_secret.strip() else None,
+        deferred_purchase=deferred_purchase == "1",
+        webhook_url=webhook_url.strip() if webhook_url and webhook_url.strip() else None,
     )
     db.add(new_client)
     await db.commit()
@@ -706,14 +733,10 @@ Body (JSON):
         <p><strong style="color:#fff">ধাপ ৩:</strong> WPCode থেকে "Header & Footer" অপশনে যান।</p>
         <p><strong style="color:#fff">ধাপ ৪:</strong> "Header" বক্সে নিচের কোডটি কপি করে পেস্ট করুন এবং Save দিন:</p>
         <button class="copy-btn" onclick="copyText('wp_pv_easy')" style="margin-bottom:4px">Copy</button>
-        <div class="instr-box" id="wp_pv_easy">&lt;script&gt;
-  (function(w,d,s,l,i){{w[l]=w[l]||function(){{(w[l].q=w[l].q||[]).push(arguments)}};
-  var f=d.getElementsByTagName(s)[0],j=d.createElement(s);j.async=true;
-  j.src='{safe_endpoint}'.replace('/api/v1/events', '/t.js?key={safe_api_key}');
-  f.parentNode.insertBefore(j,f);
-  }})(window,document,'script','tracker');
-  tracker('track', 'PageView');
-&lt;/script&gt;</div>
+        <div class="instr-box" id="wp_pv_easy">&lt;script src="{safe_endpoint}".replace('/api/v1/events', '/t.js?key={safe_api_key}') defer&gt;&lt;/script&gt;
+
+&lt;!-- অথবা সরাসরি: --&gt;
+&lt;script src="{safe_endpoint.replace('/api/v1/events', '/t.js?key=')}{safe_api_key}" defer&gt;&lt;/script&gt;</div>
         
         <div style="margin-top:16px;padding:14px;background:rgba(0,230,118,0.05);border:1px solid rgba(0,230,118,0.15);border-radius:8px;font-size:13px;color:#aaa;line-height:1.9">
           <strong style="color:#00e676">🎉 অভিনন্দন!</strong><br>
@@ -775,10 +798,13 @@ function send_capi_event($event_name, $url, $value, $event_id, $product_id) {{
         $data['data'][0]['custom_data']['content_type'] = 'product';
     }}
 
-    wp_remote_post('{safe_endpoint}?key={safe_api_key}', [
-        'body' =&gt; json_encode($data),
-        'headers' =&gt; ['Content-Type' =&gt; 'application/json'],
-        'blocking' =&gt; false
+    wp_remote_post('{safe_endpoint}', [
+        'body' => json_encode($data),
+        'headers' => [
+            'Content-Type' => 'application/json',
+            'X-API-Key' => '{safe_api_key}'
+        ],
+        'blocking' => false
     ]);
 }}
 ?&gt;</div>
@@ -910,8 +936,14 @@ async def deactivate_client(
     username: str = Depends(verify_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    await db.execute(update(Client).where(Client.id == client_id).values(is_active=False))
+    result = await db.execute(update(Client).where(Client.id == client_id).values(is_active=False).returning(Client.api_key))
+    api_key = result.scalar()
     await db.commit()
+    
+    if api_key:
+        from app.dependencies import clear_client_cache
+        clear_client_cache(api_key)
+        
     return admin_redirect("ক্লায়েন্ট Deactivate করা হয়েছে")
 
 
@@ -921,6 +953,12 @@ async def activate_client(
     username: str = Depends(verify_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    await db.execute(update(Client).where(Client.id == client_id).values(is_active=True))
+    result = await db.execute(update(Client).where(Client.id == client_id).values(is_active=True).returning(Client.api_key))
+    api_key = result.scalar()
     await db.commit()
+    
+    if api_key:
+        from app.dependencies import clear_client_cache
+        clear_client_cache(api_key)
+        
     return admin_redirect("ক্লায়েন্ট Activate করা হয়েছে")

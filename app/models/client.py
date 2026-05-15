@@ -24,5 +24,9 @@ class Client(Base):
     # ─── GA4 Server-Side Integration ──────────────────────────────────────
     ga4_measurement_id = Column(String, nullable=True)            # GA4 Measurement ID (e.g. G-XXXXX)
     ga4_api_secret = Column(String, nullable=True)                # GA4 API Secret (encrypted)
+    # ─── Deferred Purchase ──────────────────────────────────────────────
+    deferred_purchase = Column(Boolean, default=False)             # ON হলে Purchase event হোল্ড হবে
+    # ─── Webhook (Outbound) ────────────────────────────────────────────
+    webhook_url = Column(String, nullable=True)                    # Custom Webhook URL (outbound)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 

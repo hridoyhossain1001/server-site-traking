@@ -20,8 +20,8 @@ DATABASE_URL = raw_url
 engine = create_async_engine(
     DATABASE_URL,
     echo=False,
-    pool_size=5,          # 2 workers × 5 = 10 base connections
-    max_overflow=5,       # 2 workers × 5 = 10 overflow, total max = 20 (Heroku limit)
+    pool_size=5,          # 1 worker × 5 = 5 base connections (Heroku basic plan)
+    max_overflow=5,       # 1 worker × 5 = 5 overflow, total max = 10
     pool_recycle=300,     # Recycle stale connections every 5 min
     pool_pre_ping=True,   # Dead connection auto-detect — avoids "connection reset" errors
     pool_timeout=10,      # Max 10s wait for a connection from pool

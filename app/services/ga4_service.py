@@ -1,13 +1,12 @@
 import logging
-import httpx
 import uuid
-import time
 from typing import Dict, Any, List
+
+from app.services.capi_service import get_http_client
+from app.security import decrypt_token
 
 logger = logging.getLogger(__name__)
 
-# Shared HTTP client for GA4
-_http_client = httpx.AsyncClient(timeout=10.0)
 
 def extract_ga4_client_id(cookies: dict) -> str:
     """Extract client_id from _ga cookie or generate a random one."""
@@ -40,11 +39,13 @@ def map_event_to_ga4(event_name: str) -> str:
 async def send_to_ga4(events: List[Dict[str, Any]], measurement_id: str, api_secret: str, cookies: dict, ip_address: str, user_agent: str):
     """
     Send events to GA4 via Measurement Protocol.
+    Uses the shared persistent HTTP client from capi_service.
     """
     if not measurement_id or not api_secret:
         return
-        
-    url = f"https://www.google-analytics.com/mp/collect?measurement_id={measurement_id}&api_secret={api_secret}"
+
+    decrypted_secret = decrypt_token(api_secret)
+    url = f"https://www.google-analytics.com/mp/collect?measurement_id={measurement_id}&api_secret={decrypted_secret}"
     client_id = extract_ga4_client_id(cookies)
     
     ga4_events = []
@@ -95,10 +96,9 @@ async def send_to_ga4(events: List[Dict[str, Any]], measurement_id: str, api_sec
         "events": ga4_events
     }
     
-    # Send IP and User Agent overrides if possible (Measurement protocol is limited for this, but can be sent as custom params)
-    
     try:
-        response = await _http_client.post(url, json=payload)
+        http_client = await get_http_client()
+        response = await http_client.post(url, json=payload)
         # GA4 Measurement Protocol always returns 2xx even if invalid, unless request is malformed
         if response.status_code >= 400:
             logger.error(f"GA4 error: {response.text}")
