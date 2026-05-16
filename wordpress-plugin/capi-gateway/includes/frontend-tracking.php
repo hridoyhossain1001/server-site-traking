@@ -17,10 +17,10 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-// ─── Enqueue Tracker Script ────────────────────────────────────────────────────
-add_action( 'wp_enqueue_scripts', 'capigw_enqueue_tracker' );
+// ─── Inject Tracker Script ────────────────────────────────────────────────────
+add_action( 'wp_footer', 'capigw_inject_tracker', 99 );
 
-function capigw_enqueue_tracker() {
+function capigw_inject_tracker() {
     $settings = capigw_get_settings();
 
     // Don't load if no API key
@@ -28,10 +28,7 @@ function capigw_enqueue_tracker() {
         return;
     }
 
-    // Register and enqueue inline tracker
-    wp_enqueue_script( 'capigw-tracker', false, array(), CAPIGW_VERSION, true );
-
-    // Pass config to JS via wp_localize_script
+    // Pass config to JS
     $tracker_data = array(
         'ajax_url'    => admin_url( 'admin-ajax.php' ),
         'nonce'       => wp_create_nonce( 'capigw_track_nonce' ),
@@ -68,10 +65,13 @@ function capigw_enqueue_tracker() {
         $tracker_data['page_type'] = 'thankyou';
     }
 
-    wp_localize_script( 'capigw-tracker', 'capigw_config', $tracker_data );
+    echo "<script id='capigw-tracker-config'>\n";
+    echo "window.capigw_config = " . wp_json_encode( $tracker_data ) . ";\n";
+    echo "</script>\n";
 
-    // Inline tracker JS
-    wp_add_inline_script( 'capigw-tracker', capigw_get_tracker_js() );
+    echo "<script id='capigw-tracker-js'>\n";
+    echo capigw_get_tracker_js() . "\n";
+    echo "</script>\n";
 }
 
 // ─── Tracker JavaScript ────────────────────────────────────────────────────────
@@ -187,10 +187,54 @@ add_action( 'wp_ajax_capigw_track_event', 'capigw_ajax_track_event' );
 add_action( 'wp_ajax_nopriv_capigw_track_event', 'capigw_ajax_track_event' );
 
 function capigw_ajax_track_event() {
-    // Verify nonce
+    // Nonce verification removed to ensure compatibility with page caching plugins (WP Rocket, LiteSpeed, etc.)
+    // Instead, we validate the request origin and restrict allowed event names to prevent bot abuse.
     $nonce = isset( $_POST['nonce'] ) ? sanitize_text_field( wp_unslash( $_POST['nonce'] ) ) : '';
-    if ( ! wp_verify_nonce( $nonce, 'capigw_track_nonce' ) ) {
-        wp_send_json_error( 'Invalid nonce' );
+
+    // ─── Origin Validation (replaces nonce for cache-safe security) ─────
+    $allowed_host = parse_url( home_url(), PHP_URL_HOST );
+    if ( $allowed_host ) {
+        $allowed_host = str_replace( 'www.', '', $allowed_host );
+    } else {
+        $allowed_host = $_SERVER['HTTP_HOST'] ?? '';
+    }
+
+    $request_origin = isset( $_SERVER['HTTP_ORIGIN'] ) ? $_SERVER['HTTP_ORIGIN'] : '';
+    $request_referer = isset( $_SERVER['HTTP_REFERER'] ) ? $_SERVER['HTTP_REFERER'] : '';
+
+    $origin_valid = false;
+    
+    // Check Origin
+    if ( ! empty( $request_origin ) ) {
+        $origin_host = parse_url( $request_origin, PHP_URL_HOST );
+        if ( $origin_host && strpos( str_replace( 'www.', '', $origin_host ), $allowed_host ) !== false ) {
+            $origin_valid = true;
+        }
+    }
+    
+    // Check Referer if Origin is missing or invalid
+    if ( ! $origin_valid && ! empty( $request_referer ) ) {
+        $referer_host = parse_url( $request_referer, PHP_URL_HOST );
+        if ( $referer_host && strpos( str_replace( 'www.', '', $referer_host ), $allowed_host ) !== false ) {
+            $origin_valid = true;
+        }
+    }
+
+    if ( ! $origin_valid ) {
+        wp_send_json_error( 'Invalid origin' );
+    }
+
+    // ─── Whitelist allowed event names ──────────────────────────────────
+    $allowed_events = array( 'PageView', 'ViewContent', 'AddToCart', 'InitiateCheckout', 'Purchase' );
+
+    // Also allow user-defined custom events from the Custom Event Builder
+    if ( defined( 'CAPIGW_CUSTOM_EVENTS_KEY' ) ) {
+        $custom_events = get_option( CAPIGW_CUSTOM_EVENTS_KEY, array() );
+        foreach ( $custom_events as $ce ) {
+            if ( ! empty( $ce['name'] ) && ! empty( $ce['enabled'] ) ) {
+                $allowed_events[] = $ce['name'];
+            }
+        }
     }
 
     $settings   = capigw_get_settings();
@@ -200,8 +244,8 @@ function capigw_ajax_track_event() {
     $fbp        = isset( $_POST['fbp'] ) ? sanitize_text_field( wp_unslash( $_POST['fbp'] ) ) : '';
     $fbc        = isset( $_POST['fbc'] ) ? sanitize_text_field( wp_unslash( $_POST['fbc'] ) ) : '';
 
-    if ( empty( $event_name ) ) {
-        wp_send_json_error( 'Missing event name' );
+    if ( empty( $event_name ) || ! in_array( $event_name, $allowed_events, true ) ) {
+        wp_send_json_error( 'Invalid event name' );
     }
 
     $custom_data = json_decode( $event_json, true );
@@ -363,16 +407,18 @@ function capigw_track_purchase( $order_id ) {
         $url = rtrim( $settings['gateway_url'], '/' ) . '/events?hold=true';
 
         $response = wp_remote_post( $url, array(
-            'timeout'  => 10,
-            'headers'  => array(
+            'timeout'   => 10,
+            'sslverify' => false,
+            'headers'   => array(
                 'Content-Type' => 'application/json',
                 'X-API-Key'    => $settings['api_key'],
             ),
-            'body'     => wp_json_encode( array( 'data' => array( $event_payload ) ) ),
+            'body'      => wp_json_encode( array( 'data' => array( $event_payload ) ) ),
         ) );
 
-        if ( $settings['debug_mode'] && is_wp_error( $response ) ) {
-            error_log( '[CAPI Gateway] Deferred purchase send failed: ' . $response->get_error_message() );
+        if ( is_wp_error( $response ) ) {
+            // Critical failure — always log regardless of debug_mode
+            error_log( '[CAPI Gateway] Deferred purchase send failed for order #' . $order_id . ': ' . $response->get_error_message() );
         }
 
         if ( ! is_wp_error( $response ) ) {

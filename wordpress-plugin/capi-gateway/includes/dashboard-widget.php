@@ -70,6 +70,17 @@ function capigw_dashboard_widget_render() {
 
     <script>
     (function() {
+        function cgwEscape(value) {
+            var div = document.createElement('div');
+            div.textContent = value == null ? '' : String(value);
+            return div.innerHTML;
+        }
+
+        function cgwNumber(value) {
+            var number = Number(value);
+            return Number.isFinite(number) ? number : 0;
+        }
+
         var formData = new FormData();
         formData.append('action', 'capigw_widget_data');
         formData.append('nonce', '<?php echo $nonce; ?>');
@@ -92,17 +103,17 @@ function capigw_dashboard_widget_render() {
 
             // Stats grid
             html += '<div class="cgw-stats">';
-            html += '<div class="cgw-stat info"><div class="num">' + (d.total_today || 0) + '</div><div class="label">Today\'s Events</div></div>';
-            html += '<div class="cgw-stat success"><div class="num">' + (d.success_rate || '0') + '%</div><div class="label">Success Rate</div></div>';
-            html += '<div class="cgw-stat warning"><div class="num">' + (d.pending_orders || 0) + '</div><div class="label">Pending Orders</div></div>';
-            html += '<div class="cgw-stat"><div class="num">' + (d.total_month || 0) + '</div><div class="label">This Month</div></div>';
+            html += '<div class="cgw-stat info"><div class="num">' + cgwNumber(d.total_today) + '</div><div class="label">Today\'s Events</div></div>';
+            html += '<div class="cgw-stat success"><div class="num">' + cgwNumber(d.success_rate) + '%</div><div class="label">Success Rate</div></div>';
+            html += '<div class="cgw-stat warning"><div class="num">' + cgwNumber(d.pending_orders) + '</div><div class="label">Pending Orders</div></div>';
+            html += '<div class="cgw-stat"><div class="num">' + cgwNumber(d.total_month) + '</div><div class="label">This Month</div></div>';
             html += '</div>';
 
             // Top events
             if (d.top_events && d.top_events.length > 0) {
                 html += '<div class="cgw-events"><strong style="font-size:12px;color:#888;text-transform:uppercase;">Top Events (Today)</strong>';
                 d.top_events.forEach(function(ev) {
-                    html += '<div class="cgw-event-row"><span class="cgw-event-name">' + ev.name + '</span><span class="cgw-event-count">' + ev.count + '</span></div>';
+                    html += '<div class="cgw-event-row"><span class="cgw-event-name">' + cgwEscape(ev.name) + '</span><span class="cgw-event-count">' + cgwNumber(ev.count) + '</span></div>';
                 });
                 html += '</div>';
             }
@@ -147,8 +158,9 @@ function capigw_widget_data() {
 
     // 1. Check server health
     $health = wp_remote_get( $base_url . '/health', array(
-        'timeout' => 5,
-        'headers' => array( 'X-API-Key' => $settings['api_key'] ),
+        'timeout'   => 5,
+        'sslverify' => false,
+        'headers'   => array( 'X-API-Key' => $settings['api_key'] ),
     ) );
 
     if ( ! is_wp_error( $health ) && wp_remote_retrieve_response_code( $health ) === 200 ) {
@@ -157,8 +169,9 @@ function capigw_widget_data() {
 
     // 2. Get analytics overview (today)
     $overview = wp_remote_get( $base_url . '/analytics/overview?days=1', array(
-        'timeout' => 8,
-        'headers' => array( 'X-API-Key' => $settings['api_key'] ),
+        'timeout'   => 8,
+        'sslverify' => false,
+        'headers'   => array( 'X-API-Key' => $settings['api_key'] ),
     ) );
 
     if ( ! is_wp_error( $overview ) && wp_remote_retrieve_response_code( $overview ) === 200 ) {
@@ -183,8 +196,9 @@ function capigw_widget_data() {
 
     // 3. Get monthly total (30 days)
     $monthly = wp_remote_get( $base_url . '/analytics/overview?days=30', array(
-        'timeout' => 8,
-        'headers' => array( 'X-API-Key' => $settings['api_key'] ),
+        'timeout'   => 8,
+        'sslverify' => false,
+        'headers'   => array( 'X-API-Key' => $settings['api_key'] ),
     ) );
 
     if ( ! is_wp_error( $monthly ) && wp_remote_retrieve_response_code( $monthly ) === 200 ) {
@@ -196,8 +210,9 @@ function capigw_widget_data() {
 
     // 4. Get pending orders count
     $pending = wp_remote_get( $base_url . '/events/pending?limit=1', array(
-        'timeout' => 5,
-        'headers' => array( 'X-API-Key' => $settings['api_key'] ),
+        'timeout'   => 5,
+        'sslverify' => false,
+        'headers'   => array( 'X-API-Key' => $settings['api_key'] ),
     ) );
 
     if ( ! is_wp_error( $pending ) && wp_remote_retrieve_response_code( $pending ) === 200 ) {

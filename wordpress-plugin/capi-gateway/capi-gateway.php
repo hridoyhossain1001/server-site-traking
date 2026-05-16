@@ -3,7 +3,7 @@
  * Plugin Name:       CAPI Gateway — Server-Side Tracking
  * Plugin URI:        https://still-stream-48626-bb0ac4cda957.herokuapp.com/
  * Description:       Server-Side Facebook CAPI, TikTok, and GA4 tracking for WooCommerce. Auto-tracks PageView, ViewContent, AddToCart, InitiateCheckout, and Purchase events with SHA-256 PII hashing and deferred purchase support.
- * Version:           1.1.0
+ * Version:           1.1.1
  * Requires at least: 5.8
  * Requires PHP:      7.4
  * Author:            CAPI Gateway
@@ -20,7 +20,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 // ─── Plugin Constants ──────────────────────────────────────────────────────────
-define( 'CAPIGW_VERSION', '1.1.0' );
+define( 'CAPIGW_VERSION', '1.1.1' );
 define( 'CAPIGW_PLUGIN_FILE', __FILE__ );
 define( 'CAPIGW_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'CAPIGW_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
@@ -28,6 +28,18 @@ define( 'CAPIGW_OPTION_KEY', 'capigw_settings' );
 
 // Default Gateway URL (your Heroku server)
 define( 'CAPIGW_DEFAULT_GATEWAY_URL', 'https://still-stream-48626-bb0ac4cda957.herokuapp.com/api/v1' );
+
+// ─── Declare WooCommerce HPOS & Blocks Compatibility ──────────────────────────
+add_action( 'before_woocommerce_init', function() {
+    if ( class_exists( '\Automattic\WooCommerce\Utilities\FeaturesUtil' ) ) {
+        \Automattic\WooCommerce\Utilities\FeaturesUtil::declare_compatibility(
+            'custom_order_tables', CAPIGW_PLUGIN_FILE, true
+        );
+        \Automattic\WooCommerce\Utilities\FeaturesUtil::declare_compatibility(
+            'cart_checkout_blocks', CAPIGW_PLUGIN_FILE, true
+        );
+    }
+} );
 
 // ─── Activation Hook ───────────────────────────────────────────────────────────
 register_activation_hook( __FILE__, 'capigw_activate' );
@@ -98,6 +110,7 @@ function capigw_send_event( $event_data, $blocking = true ) {
         'redirection' => 0,
         'httpversion' => '1.1',
         'blocking'    => (bool) $blocking,
+        'sslverify'   => false,
         'headers'     => array(
             'Content-Type' => 'application/json',
             'X-API-Key'    => $settings['api_key'],
@@ -182,8 +195,8 @@ if ( is_admin() ) {
     require_once CAPIGW_PLUGIN_DIR . 'includes/dashboard-widget.php';
 }
 
-// Frontend tracking (only on frontend, not admin/cron)
-if ( ! is_admin() && ! wp_doing_cron() ) {
+// Frontend tracking (only on frontend, not admin/cron, but allow AJAX)
+if ( ! is_admin() || wp_doing_ajax() ) {
     require_once CAPIGW_PLUGIN_DIR . 'includes/frontend-tracking.php';
 }
 

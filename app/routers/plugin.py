@@ -6,16 +6,24 @@ WordPress প্লাগইনের অটো-আপডেট সিস্ট�
 """
 
 import os
-from fastapi import APIRouter
-from fastapi.responses import JSONResponse
+from pathlib import Path
+
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse, JSONResponse
 
 router = APIRouter(tags=["Plugin"])
 
 # Current plugin version — নতুন ভার্সন রিলিজ করলে এখানে আপডেট করুন
 PLUGIN_VERSION = os.getenv("PLUGIN_VERSION", "1.1.0")
+PLUGIN_ZIP_PATH = Path(
+    os.getenv(
+        "PLUGIN_ZIP_PATH",
+        str(Path(__file__).resolve().parents[2] / "wordpress-plugin" / "capi-gateway.zip"),
+    )
+)
 PLUGIN_DOWNLOAD_URL = os.getenv(
     "PLUGIN_DOWNLOAD_URL",
-    "https://still-stream-48626-bb0ac4cda957.herokuapp.com/static/capi-gateway.zip"
+    "https://still-stream-48626-bb0ac4cda957.herokuapp.com/api/v1/plugin/download"
 )
 
 
@@ -47,5 +55,22 @@ async def plugin_update_check():
                      "<li>PageView, ViewContent, AddToCart, InitiateCheckout, Purchase tracking</li>"
                      "<li>Deferred Purchase with auto-confirm</li>"
                      "<li>Action Scheduler retry queue</li>"
-                     "</ul>",
+        "</ul>",
     })
+
+
+@router.get(
+    "/plugin/download",
+    summary="Download WordPress plugin ZIP",
+    include_in_schema=False,
+)
+async def plugin_download():
+    """Serve the packaged WordPress plugin ZIP for the auto-updater."""
+    if not PLUGIN_ZIP_PATH.is_file():
+        raise HTTPException(status_code=404, detail="Plugin ZIP not found")
+
+    return FileResponse(
+        path=PLUGIN_ZIP_PATH,
+        media_type="application/zip",
+        filename="capi-gateway.zip",
+    )

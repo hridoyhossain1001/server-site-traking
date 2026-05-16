@@ -96,11 +96,11 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # ব্রাউজার ট্র্যাকার (t.js) যেকোনো ক্লায়েন্ট ওয়েবসাইট থেকে cross-origin request পাঠায়।
 # Deploy-time-এ সব ক্লায়েন্ট ডোমেইন জানা সম্ভব নয়, তাই CORS open রাখা হয়েছে।
 # প্রকৃত নিরাপত্তা → per-client domain whitelisting (events.py ও tracker.py-তে enforce হয়)।
-# allow_credentials=False রাখা হয়েছে যাতে cookie-based CSRF সম্ভব না হয়।
+# allow_credentials=True কারণ Client Portal cookie-based session (client_session) ব্যবহার করে।
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=False,
+    allow_credentials=True,
     allow_methods=["GET", "POST"],
     allow_headers=["X-API-Key", "Content-Type"],
 )

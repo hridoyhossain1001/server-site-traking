@@ -88,20 +88,20 @@ function capigw_confirm_order( $order_id ) {
     $url      = rtrim( $settings['gateway_url'], '/' ) . '/events/confirm';
 
     $response = wp_remote_post( $url, array(
-        'timeout'  => 15,
-        'headers'  => array(
+        'timeout'   => 15,
+        'sslverify' => false,
+        'headers'   => array(
             'Content-Type' => 'application/json',
             'X-API-Key'    => $settings['api_key'],
         ),
-        'body'     => wp_json_encode( array(
+        'body'      => wp_json_encode( array(
             'order_id' => 'wc_purchase_' . $order_id,
         ) ),
     ) );
 
     if ( is_wp_error( $response ) ) {
-        if ( $settings['debug_mode'] ) {
-            error_log( '[CAPI Gateway] Confirm failed: ' . $response->get_error_message() );
-        }
+        // Critical failure — always log regardless of debug_mode
+        error_log( '[CAPI Gateway] Confirm failed for order #' . $order_id . ': ' . $response->get_error_message() );
         return false;
     }
 
@@ -120,9 +120,8 @@ function capigw_confirm_order( $order_id ) {
         return false;
     }
 
-    if ( $settings['debug_mode'] ) {
-        error_log( "[CAPI Gateway] Confirm HTTP $code: " . wp_json_encode( $body ) );
-    }
+    // Non-200 or unexpected response — always log
+    error_log( "[CAPI Gateway] Confirm HTTP $code for order #$order_id: " . wp_json_encode( $body ) );
 
     return false;
 }

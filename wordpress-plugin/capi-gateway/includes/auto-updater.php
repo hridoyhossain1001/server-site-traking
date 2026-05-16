@@ -140,8 +140,9 @@ class CAPIGW_Auto_Updater {
         $settings = capigw_get_settings();
 
         $response = wp_remote_get( $this->update_url, array(
-            'timeout' => 10,
-            'headers' => array(
+            'timeout'   => 10,
+            'sslverify' => false,
+            'headers'   => array(
                 'X-API-Key'       => $settings['api_key'] ?? '',
                 'X-Plugin-Version' => $this->current_version,
             ),

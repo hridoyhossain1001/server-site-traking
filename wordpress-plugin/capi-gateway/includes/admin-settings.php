@@ -68,8 +68,9 @@ function capigw_test_connection() {
     $url = rtrim( $gateway_url, '/' ) . '/health';
 
     $response = wp_remote_get( $url, array(
-        'timeout' => 10,
-        'headers' => array(
+        'timeout'   => 30,
+        'sslverify' => false,
+        'headers'   => array(
             'X-API-Key' => $api_key,
         ),
     ) );
@@ -249,44 +250,65 @@ function capigw_settings_page() {
 
     <script>
     function capigwTestConnection() {
-        var btn = document.getElementById('capigw-test-btn');
-        var status = document.getElementById('capigw-test-status');
-        var apiKey = document.getElementById('capigw_api_key').value;
-        var gatewayUrl = document.getElementById('capigw_gateway_url').value;
+        try {
+            var btn = document.getElementById('capigw-test-btn');
+            var status = document.getElementById('capigw-test-status');
+            var apiKey = document.getElementById('capigw_api_key').value.trim();
+            var gatewayUrl = document.getElementById('capigw_gateway_url').value.trim();
 
-        btn.disabled = true;
-        btn.textContent = '⏳ Testing...';
-        status.style.display = 'none';
-        status.className = 'capigw-status';
+            btn.disabled = true;
+            btn.textContent = '⏳ Testing...';
+            status.style.display = 'none';
+            status.className = 'capigw-status';
 
-        var formData = new FormData();
-        formData.append('action', 'capigw_test_connection');
-        formData.append('nonce', '<?php echo $nonce; ?>');
-        formData.append('api_key', apiKey);
-        formData.append('gateway_url', gatewayUrl);
-
-        fetch(ajaxurl, {
-            method: 'POST',
-            body: formData,
-        })
-        .then(function(res) { return res.json(); })
-        .then(function(data) {
-            if (data.success) {
-                status.className = 'capigw-status success';
-                status.textContent = '✅ ' + data.data;
-            } else {
+            if (!apiKey || !gatewayUrl) {
+                status.style.display = 'block';
                 status.className = 'capigw-status error';
-                status.textContent = '❌ ' + data.data;
+                status.textContent = '❌ দয়া করে API Key এবং Gateway URL দিন।';
+                btn.disabled = false;
+                btn.textContent = '🔍 Test Connection';
+                return;
             }
-            btn.disabled = false;
-            btn.textContent = '🔍 Test Connection';
-        })
-        .catch(function(err) {
-            status.className = 'capigw-status error';
-            status.textContent = '❌ Network error: ' + err.message;
-            btn.disabled = false;
-            btn.textContent = '🔍 Test Connection';
-        });
+
+            var formData = new FormData();
+            formData.append('action', 'capigw_test_connection');
+            formData.append('nonce', '<?php echo $nonce; ?>');
+            formData.append('api_key', apiKey);
+            formData.append('gateway_url', gatewayUrl);
+
+            var ajax_url = (typeof ajaxurl !== 'undefined') ? ajaxurl : '/wp-admin/admin-ajax.php';
+
+            fetch(ajax_url, {
+                method: 'POST',
+                body: formData,
+            })
+            .then(function(res) { 
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                return res.json(); 
+            })
+            .then(function(data) {
+                status.style.display = 'block';
+                if (data.success) {
+                    status.className = 'capigw-status success';
+                    status.innerHTML = '✅ ' + data.data;
+                } else {
+                    status.className = 'capigw-status error';
+                    status.innerHTML = '❌ ' + (data.data || 'Unknown error');
+                }
+                btn.disabled = false;
+                btn.textContent = '🔍 Test Connection';
+            })
+            .catch(function(err) {
+                status.style.display = 'block';
+                status.className = 'capigw-status error';
+                status.textContent = '❌ Network error: ' + err.message;
+                btn.disabled = false;
+                btn.textContent = '🔍 Test Connection';
+            });
+        } catch (e) {
+            console.error(e);
+            alert("Error: " + e.message);
+        }
     }
     </script>
     <?php
