@@ -60,6 +60,8 @@ CLIENT_STYLE = """
   }
   .nav-item:hover { background: rgba(148, 163, 184, 0.08); color: #fff; }
   .nav-item.active { background: rgba(79, 70, 229, 0.16); color: #dbe4ff; border-color: rgba(129, 140, 248, 0.26); }
+  .nav-upgrade { background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%) !important; color: #fff !important; border-color: rgba(124,58,237,0.5) !important; font-weight: 700; }
+  .nav-upgrade:hover { background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%) !important; opacity: 0.92; }
   .nav-icon { font-size: 16px; width: 20px; display: inline-flex; justify-content: center; }
   
   /* Main Content */
@@ -198,9 +200,9 @@ def client_html(title: str, body: str) -> str:
       <a class="nav-item" onclick="switchTab('tab-event-log', this)"><span class="nav-icon">📋</span> Event Log</a>
       <a class="nav-item" onclick="switchTab('tab-delay-purchase', this)"><span class="nav-icon">⏳</span> Delay Purchase Event (Legacy)</a>
       <a class="nav-item" onclick="switchTab('tab-settings', this)"><span class="nav-icon">⚙️</span> Settings & Setup</a>
-      <a class="nav-item" onclick="alert('Coming soon. Please contact the admin for updates.')"><span class="nav-icon">🔄</span> Update Plan</a>
     </nav>
     <div style="margin-top: auto; padding: 0 12px;">
+      <a class="nav-item nav-upgrade" onclick="alert('Coming soon. Please contact the admin for updates.')" style="margin-bottom:8px;"><span class="nav-icon">⚡</span> Update Plan</a>
       <a href="/client/logout" class="nav-item" style="color: var(--danger);"><span class="nav-icon">🚪</span> Logout</a>
     </div>
   </aside>
@@ -259,6 +261,20 @@ def client_html(title: str, body: str) -> str:
       document.getElementById(tabId).className += " active";
       evt.currentTarget.className += " active";
     }}
+
+    // Convert UTC timestamps to browser local time
+    function convertUTCToLocal() {{
+      document.querySelectorAll('.local-time[data-utc]').forEach(function(el) {{
+        var utc = el.getAttribute('data-utc');
+        if (!utc) return;
+        try {{
+          var d = new Date(utc);
+          var opts = {{ month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }};
+          el.textContent = d.toLocaleString('en-GB', opts).replace(',', '');
+        }} catch(e) {{}}
+      }});
+    }}
+    document.addEventListener('DOMContentLoaded', convertUTCToLocal);
   </script>
 </body>
 </html>"""
@@ -449,6 +465,7 @@ async def client_dashboard(request: Request, db: AsyncSession = Depends(get_db))
     dashboard_logs_html = ""
     for log in recent_logs[:15]:
         time_str = log.created_at.strftime("%b %d, %H:%M:%S") if log.created_at else "—"
+        utc_iso = log.created_at.replace(tzinfo=datetime.timezone.utc).isoformat() if log.created_at else ""
         safe_event_name = html.escape(log.event_name or "unknown")
         safe_event_id = html.escape(log.event_id or "—")
         status_badge = (
@@ -458,7 +475,7 @@ async def client_dashboard(request: Request, db: AsyncSession = Depends(get_db))
         )
         dashboard_logs_html += f"""
         <tr>
-          <td style="color:var(--text-muted);font-size:12px">{time_str}</td>
+          <td class="local-time" data-utc="{utc_iso}" style="color:var(--text-muted);font-size:12px">{time_str}</td>
           <td><strong>{safe_event_name}</strong></td>
           <td style="font-family:monospace;font-size:11px;color:var(--text-muted)">{safe_event_id}</td>
           <td>{status_badge}</td>
@@ -473,6 +490,7 @@ async def client_dashboard(request: Request, db: AsyncSession = Depends(get_db))
         if (log.event_name or "").lower() not in ["purchase", "order_completed"]:
             continue
         time_str = log.created_at.strftime("%b %d, %H:%M:%S") if log.created_at else "—"
+        utc_iso = log.created_at.replace(tzinfo=datetime.timezone.utc).isoformat() if log.created_at else ""
         safe_event_name = html.escape(log.event_name or "unknown")
         safe_event_id = html.escape(log.event_id or "—")
         status_badge = (
@@ -482,7 +500,7 @@ async def client_dashboard(request: Request, db: AsyncSession = Depends(get_db))
         )
         purchase_logs_html += f"""
         <tr>
-          <td style="color:var(--text-muted);font-size:12px">{time_str}</td>
+          <td class="local-time" data-utc="{utc_iso}" style="color:var(--text-muted);font-size:12px">{time_str}</td>
           <td><strong>{safe_event_name}</strong></td>
           <td style="font-family:monospace;font-size:11px;color:var(--text-muted)">{safe_event_id}</td>
           <td>{status_badge}</td>
@@ -495,6 +513,7 @@ async def client_dashboard(request: Request, db: AsyncSession = Depends(get_db))
     all_logs_html = ""
     for log in recent_logs:
         time_str = log.created_at.strftime("%b %d, %H:%M:%S") if log.created_at else "—"
+        utc_iso = log.created_at.replace(tzinfo=datetime.timezone.utc).isoformat() if log.created_at else ""
         safe_event_name = html.escape(log.event_name or "unknown")
         safe_event_id = html.escape(log.event_id or "—")
         status_badge = (
@@ -504,7 +523,7 @@ async def client_dashboard(request: Request, db: AsyncSession = Depends(get_db))
         )
         all_logs_html += f"""
         <tr>
-          <td style="color:var(--text-muted);font-size:12px">{time_str}</td>
+          <td class="local-time" data-utc="{utc_iso}" style="color:var(--text-muted);font-size:12px">{time_str}</td>
           <td><strong>{safe_event_name}</strong></td>
           <td style="font-family:monospace;font-size:11px;color:var(--text-muted)">{safe_event_id}</td>
           <td>{status_badge}</td>
