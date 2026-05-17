@@ -16,6 +16,175 @@ from app.routers.admin import STYLE, base_html
 from app.security import encrypt_token, decrypt_token
 from app.limiter import limiter
 
+
+CLIENT_STYLE = """
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+  :root {
+    --bg-main: #0b0f19;
+    --bg-sidebar: #111827;
+    --bg-card: #1f2937;
+    --border: rgba(255, 255, 255, 0.05);
+    --primary: #6366f1;
+    --primary-hover: #818cf8;
+    --text-main: #f9fafb;
+    --text-muted: #9ca3af;
+    --accent: #10b981;
+    --danger: #ef4444;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', sans-serif; }
+  body {
+    background: var(--bg-main); color: var(--text-main); min-height: 100vh;
+    display: flex; overflow: hidden;
+  }
+  
+  /* Sidebar */
+  .sidebar {
+    width: 260px; background: var(--bg-sidebar); border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; padding: 24px 0; height: 100vh;
+    z-index: 10;
+  }
+  .sidebar-logo {
+    font-size: 20px; font-weight: 700; color: #fff; padding: 0 24px 32px 24px;
+    letter-spacing: -0.5px;
+  }
+  .sidebar-logo span { color: var(--primary); }
+  .sidebar-menu { display: flex; flex-direction: column; gap: 4px; flex: 1; padding: 0 12px; }
+  .nav-item {
+    display: flex; align-items: center; gap: 12px; padding: 12px 16px;
+    color: var(--text-muted); font-size: 14px; font-weight: 500;
+    border-radius: 8px; cursor: pointer; transition: all 0.2s ease;
+    text-decoration: none;
+  }
+  .nav-item:hover { background: rgba(255, 255, 255, 0.05); color: #fff; }
+  .nav-item.active { background: rgba(99, 102, 241, 0.1); color: var(--primary-hover); }
+  .nav-icon { font-size: 18px; }
+  
+  /* Main Content */
+  .main-content {
+    flex: 1; height: 100vh; overflow-y: auto; padding: 32px;
+    background-image: radial-gradient(circle at top right, rgba(99,102,241,0.05), transparent 40%);
+  }
+  .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 32px; }
+  .page-title { font-size: 28px; font-weight: 700; color: #fff; letter-spacing: -0.5px; }
+  .page-sub { color: var(--text-muted); font-size: 14px; margin-top: 4px; }
+  
+  /* Tabs */
+  .tab-pane { display: none; animation: fadeIn 0.3s ease; }
+  .tab-pane.active { display: block; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+  
+  /* Shared components */
+  .card {
+    background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px;
+    padding: 24px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    margin-bottom: 24px;
+  }
+  .card-title {
+    font-size: 16px; font-weight: 600; color: #fff; margin-bottom: 20px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
+  .stat-box { background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+  .stat-box .num { font-size: 28px; font-weight: 700; color: #fff; line-height: 1.2; }
+  .stat-box .lbl { font-size: 12px; color: var(--text-muted); font-weight: 500; text-transform: uppercase; margin-top: 4px; }
+  
+  .client-table { width: 100%; border-collapse: separate; border-spacing: 0; text-align: left; }
+  .client-table th { padding: 12px 16px; font-size: 12px; color: var(--text-muted); font-weight: 500; border-bottom: 1px solid var(--border); }
+  .client-table td { padding: 16px; font-size: 13px; border-bottom: 1px solid rgba(255,255,255,0.02); }
+  .client-table tr:hover td { background: rgba(255,255,255,0.02); }
+  
+  .badge { padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 600; display: inline-block; }
+  .badge-success { background: rgba(16, 185, 129, 0.1); color: var(--accent); border: 1px solid rgba(16, 185, 129, 0.2); }
+  .badge-error { background: rgba(239, 68, 68, 0.1); color: var(--danger); border: 1px solid rgba(239, 68, 68, 0.2); }
+  
+  .btn-sm { padding: 8px 12px; font-size: 12px; border-radius: 6px; border: none; cursor: pointer; font-weight: 500; transition: all 0.2s; display: inline-flex; align-items: center; justify-content: center; gap: 4px;}
+  .btn-primary { background: var(--primary); color: #fff; }
+  .btn-primary:hover { background: var(--primary-hover); }
+  .btn-danger { background: rgba(239,68,68,0.1); color: var(--danger); border: 1px solid rgba(239,68,68,0.2); }
+  .btn-danger:hover { background: var(--danger); color: #fff; }
+  .btn-info { background: rgba(255,255,255,0.05); color: #fff; border: 1px solid var(--border); }
+  .btn-info:hover { background: rgba(255,255,255,0.1); }
+  
+  .copy-btn { background: rgba(255,255,255,0.1); color: #fff; border: none; border-radius: 4px; padding: 4px 8px; font-size: 11px; cursor: pointer; float: right; margin-top: -4px;}
+  .copy-btn:hover { background: var(--primary); }
+  .instr-box { background: rgba(0,0,0,0.3); border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-family: monospace; font-size: 12px; color: #cbd5e1; white-space: pre-wrap; word-break: break-all; margin-top: 8px; }
+  
+  .tabs { display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 10px; overflow-x: auto; }
+  .tab-btn { background: none; border: none; color: var(--text-muted); font-size: 14px; font-weight: 600; cursor: pointer; padding: 8px 16px; border-radius: 8px; transition: all 0.3s; white-space: nowrap; }
+  .tab-btn:hover { color: #fff; background: rgba(255,255,255,0.05); }
+  .tab-btn.active { color: #fff; background: rgba(99, 102, 241, 0.2); border: 1px solid rgba(99, 102, 241, 0.4); }
+  .inner-tab-content { display: none; animation: fadeIn 0.3s ease; }
+  .inner-tab-content.active { display: block; }
+</style>
+"""
+
+def client_html(title: str, body: str) -> str:
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{title} — Client Portal</title>
+  {CLIENT_STYLE}
+</head>
+<body>
+  <!-- Sidebar Navigation -->
+  <aside class="sidebar">
+    <div class="sidebar-logo">CAPI<span>Gateway</span></div>
+    <nav class="sidebar-menu">
+      <a class="nav-item active" onclick="switchTab('tab-dashboard', this)"><span class="nav-icon">📊</span> Dashboard</a>
+      <a class="nav-item" onclick="switchTab('tab-analytics', this)"><span class="nav-icon">📈</span> Analytics</a>
+      <a class="nav-item" onclick="switchTab('tab-event-log', this)"><span class="nav-icon">📋</span> Event Log</a>
+      <a class="nav-item" onclick="switchTab('tab-delay-purchase', this)"><span class="nav-icon">⏳</span> Delay Purchase Event (Legacy)</a>
+      <a class="nav-item" onclick="switchTab('tab-settings', this)"><span class="nav-icon">⚙️</span> Settings & Setup</a>
+      <a class="nav-item" onclick="alert('Coming soon. Please contact the admin for updates.')"><span class="nav-icon">🔄</span> Update Plan</a>
+    </nav>
+    <div style="margin-top: auto; padding: 0 12px;">
+      <a href="/client/logout" class="nav-item" style="color: var(--danger);"><span class="nav-icon">🚪</span> Logout</a>
+    </div>
+  </aside>
+
+  <!-- Main Content Area -->
+  <main class="main-content">
+    {body}
+  </main>
+  
+  <script>
+    function switchTab(tabId, el) {{
+      var tabs = document.getElementsByClassName('tab-pane');
+      for (var i = 0; i < tabs.length; i++) {{ tabs[i].classList.remove('active'); }}
+      var navs = document.getElementsByClassName('nav-item');
+      for (var i = 0; i < navs.length; i++) {{ navs[i].classList.remove('active'); }}
+      
+      document.getElementById(tabId).classList.add('active');
+      if (el) el.classList.add('active');
+    }}
+    
+    function copyText(id) {{
+      var t = document.getElementById(id);
+      var textToCopy = t.innerText || t.value;
+      navigator.clipboard.writeText(textToCopy);
+      var eventTarget = event.target;
+      var origText = eventTarget.innerText;
+      eventTarget.innerText = 'Copied!';
+      setTimeout(() => eventTarget.innerText = origText, 1500);
+    }}
+    
+    function openInnerTab(evt, tabId) {{
+      var i, tc, tl;
+      tc = document.getElementsByClassName("inner-tab-content");
+      for (i = 0; i < tc.length; i++) {{ tc[i].className = tc[i].className.replace(" active", ""); }}
+      tl = document.getElementsByClassName("tab-btn");
+      for (i = 0; i < tl.length; i++) {{ tl[i].className = tl[i].className.replace(" active", ""); }}
+      document.getElementById(tabId).className += " active";
+      evt.currentTarget.className += " active";
+    }}
+  </script>
+</body>
+</html>"""
+
+
 router = APIRouter(tags=["Client Portal"])
 
 def get_client_from_cookie(request: Request) -> Optional[str]:
@@ -267,20 +436,19 @@ async def client_dashboard(request: Request, db: AsyncSession = Depends(get_db))
             safe_oid = html.escape(pe.order_id)
             pending_rows += f"""
             <tr id="row-{safe_oid}">
-              <td><input type="checkbox" class="pending-cb" value="{safe_oid}" style="accent-color:#7e57c2;width:16px;height:16px;"></td>
-              <td style="font-family:monospace;font-size:12px;color:#ccc">{safe_oid}</td>
-              <td style="color:#00e676;font-weight:600">{value_str}</td>
-              <td style="color:#888;font-size:12px">{html.escape(phone)}</td>
-              <td style="color:#888;font-size:12px">{age_str}</td>
+              <td><input type="checkbox" class="pending-cb" value="{safe_oid}" style="accent-color:var(--primary);width:16px;height:16px;"></td>
+              <td style="font-family:monospace;font-size:12px;color:var(--text-muted)">{safe_oid}</td>
+              <td style="color:var(--accent);font-weight:600">{value_str}</td>
+              <td style="color:var(--text-muted);font-size:12px">{html.escape(phone)}</td>
+              <td style="color:var(--text-muted);font-size:12px">{age_str}</td>
               <td>
-                <button class="btn-sm btn-info" onclick="confirmOrder('{safe_oid}')" style="font-size:11px;padding:5px 10px;">✅ Confirm</button>
-                &nbsp;
-                <button class="btn-sm btn-danger" onclick="cancelOrder('{safe_oid}')" style="font-size:11px;padding:5px 10px;">❌ Cancel</button>
+                <button class="btn-sm btn-info" onclick="confirmOrder('{safe_oid}')">✅ Confirm</button>
+                <button class="btn-sm btn-danger" onclick="cancelOrder('{safe_oid}')">❌ Cancel</button>
               </td>
             </tr>"""
 
         if not pending_events:
-            pending_rows = '<tr><td colspan="6" style="text-align:center;color:#555;padding:30px">কোনো pending অর্ডার নেই 🎉</td></tr>'
+            pending_rows = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:30px">কোনো pending অর্ডার নেই 🎉</td></tr>'
 
         pending_html = f"""
     <!-- PENDING ORDERS SECTION -->
@@ -360,16 +528,16 @@ async def client_dashboard(request: Request, db: AsyncSession = Depends(get_db))
     </div>
 
     <div class="tabs">
-      <button class="tab-btn active" onclick="openTab(event, 'tab-easy')">🚀 Easy Setup</button>
-      <button class="tab-btn" onclick="openTab(event, 'tab-generator')">🛠️ Event Generator</button>
-      <button class="tab-btn" onclick="openTab(event, 'tab-gtm')">⚙️ GTM Server</button>
-      <button class="tab-btn" onclick="openTab(event, 'tab-wp')">📝 WordPress</button>
-      <button class="tab-btn" onclick="openTab(event, 'tab-custom')">💻 Custom</button>
-      <button class="tab-btn" onclick="openTab(event, 'tab-test')">🧪 Testing</button>
+      <button class="tab-btn active" onclick="openInnerTab(event, 'tab-easy')">🚀 Easy Setup</button>
+      <button class="tab-btn" onclick="openInnerTab(event, 'tab-generator')">🛠️ Event Generator</button>
+      <button class="tab-btn" onclick="openInnerTab(event, 'tab-gtm')">⚙️ GTM Server</button>
+      <button class="tab-btn" onclick="openInnerTab(event, 'tab-wp')">📝 WordPress</button>
+      <button class="tab-btn" onclick="openInnerTab(event, 'tab-custom')">💻 Custom</button>
+      <button class="tab-btn" onclick="openInnerTab(event, 'tab-test')">🧪 Testing</button>
     </div>
 
     <!-- GENERATOR TAB -->
-    <div id="tab-generator" class="tab-content card" style="margin-bottom:20px">
+    <div id="tab-generator" class="inner-tab-content card" style="margin-bottom:20px">
       <div class="card-title"><span class="icon">🛠️</span> Event Code Generator</div>
       
       <div style="margin-bottom:20px;padding:14px;background:rgba(255,82,82,0.1);border:1px solid rgba(255,82,82,0.3);border-radius:8px;font-size:13px;color:#ff5252;line-height:1.6">
@@ -411,7 +579,7 @@ async def client_dashboard(request: Request, db: AsyncSession = Depends(get_db))
     </div>
 
     <!-- EASY SETUP TAB (1-LINE TRACKER) -->
-    <div id="tab-easy" class="tab-content active card" style="margin-bottom:20px">
+    <div id="tab-easy" class="inner-tab-content active card" style="margin-bottom:20px">
       <div class="card-title"><span class="icon">🚀</span> Easy Setup — মাত্র ১ লাইন কোড! <span style="font-size:12px;color:#00e676;margin-left:8px;">✅ সবচেয়ে সহজ</span></div>
       <div style="color:#aaa;font-size:14px;line-height:1.8">
         <p style="color:#ccc;margin-bottom:12px;">আপনার ওয়েবসাইটের <code>&lt;head&gt;</code> বা <code>&lt;body&gt;</code>-র শেষে নিচের ১ লাইন কোড বসান। ব্যস, PageView অটো ট্র্যাক হবে!</p>
@@ -473,7 +641,7 @@ capi('setUser', {{
     </div>
 
     <!-- WORDPRESS TAB (AS EASY AS 5 YEARS OLD) -->
-    <div id="tab-wp" class="tab-content card" style="margin-bottom:20px">
+    <div id="tab-wp" class="inner-tab-content card" style="margin-bottom:20px">
       <div class="card-title"><span class="icon">📝</span> WordPress Setup (সবচেয়ে সহজ নিয়ম)</div>
       <div style="color:#aaa;font-size:14px;line-height:1.8">
         <p><strong style="color:#fff">ধাপ ১:</strong> আপনার WordPress ওয়েবসাইটে লগিন করুন।</p>
@@ -557,504 +725,167 @@ function send_capi_event($event_name, $url, $value, $event_id, $product_id) {{
     """
 
     body = f"""
-    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+    <div class="header">
         <div>
             <h1 class="page-title">👋 Welcome, {safe_client_name}</h1>
-            <p class="page-sub">আপনার CAPI Dashboard এবং Setup Instructions</p>
+            <p class="page-sub">আপনার CAPI Dashboard</p>
         </div>
-        <a href="/client/logout" class="btn-sm btn-danger" style="text-decoration:none;">Logout</a>
     </div>
 
-    <!-- STATS -->
-    <h3 style="color:#fff; margin-bottom:12px; font-weight:600;">📊 Today's Statistics</h3>
-    <div class="stat-row">
-      <div class="stat-box">
-        <div class="num">{success_count}</div>
-        <div class="lbl">Successful Events</div>
-      </div>
-      <div class="stat-box">
-        <div class="num" style="color: {'var(--accent)' if success_rate > 90 else 'var(--primary-hover)'};">{success_rate}%</div>
-        <div class="lbl">Success Rate</div>
-      </div>
+    <!-- TAB: DASHBOARD -->
+    <div id="tab-dashboard" class="tab-pane active">
+        <h3 style="color:#fff; margin-bottom:12px; font-weight:600;">📊 Today's Statistics</h3>
+        <div class="stat-row">
+          <div class="stat-box">
+            <div class="num">{success_count}</div>
+            <div class="lbl">Successful Events</div>
+          </div>
+          <div class="stat-box">
+            <div class="num" style="color: {'var(--accent)' if success_rate > 90 else 'var(--primary-hover)'};">{success_rate}%</div>
+            <div class="lbl">Success Rate</div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-bottom:24px;">
+          <div class="card-title">📈 গত ৭ দিনের ইভেন্ট</div>
+          <canvas id="eventsChart" height="120"></canvas>
+        </div>
+
+        <div class="card" style="margin-bottom:24px;">
+          <div class="card-title">📋 Dashboard Recent Logs</div>
+          <div style="overflow-x:auto;">
+            <table class="client-table">
+              <thead>
+                <tr>
+                  <th>সময়</th>
+                  <th>ইভেন্ট</th>
+                  <th>Event ID</th>
+                  <th>স্ট্যাটাস</th>
+                </tr>
+              </thead>
+              <tbody>
+                {dashboard_logs_html}
+              </tbody>
+            </table>
+          </div>
+        </div>
     </div>
 
-    <!-- 7-DAY CHART -->
-    <div class="card" style="margin-bottom:24px;">
-      <div class="card-title"><span class="icon">📈</span> গত ৭ দিনের ইভেন্ট</div>
-      <canvas id="eventsChart" height="120"></canvas>
+    <!-- TAB: ANALYTICS -->
+    <div id="tab-analytics" class="tab-pane">
+        <div class="card" style="margin-bottom:24px;border:1px solid rgba(99,102,241,0.2);">
+          <div class="card-title">📊 Advanced Analytics
+            <a href="/api/v1/analytics/export?days=7" style="float:right;font-size:12px;color:var(--primary);text-decoration:none;" target="_blank">📥 CSV Export (7 Days)</a>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px;">
+            <div style="background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:12px;padding:20px;">
+              <h4 style="color:#fff;margin:0 0 16px 0;font-size:14px;">🔄 Conversion Funnel</h4>
+              <div id="funnel-container" style="color:var(--text-muted);font-size:13px;">Loading...</div>
+            </div>
+
+            <div style="background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:12px;padding:20px;">
+              <h4 style="color:#fff;margin:0 0 16px 0;font-size:14px;">📊 Event Breakdown</h4>
+              <canvas id="breakdownChart" height="200"></canvas>
+            </div>
+          </div>
+
+          <div style="background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:12px;padding:20px;">
+            <h4 style="color:#fff;margin:0 0 16px 0;font-size:14px;">🕐 Hourly Distribution (Last 7 Days)</h4>
+            <canvas id="hourlyChart" height="80"></canvas>
+          </div>
+        </div>
     </div>
 
-    <!-- ADVANCED ANALYTICS -->
-    <div class="card" style="margin-bottom:24px;border:1px solid rgba(126,87,194,0.2);">
-      <div class="card-title"><span class="icon" style="background:rgba(126,87,194,0.15)">📊</span> Advanced Analytics
-        <a href="/api/v1/analytics/export?days=7" style="float:right;font-size:12px;color:#7e57c2;text-decoration:none;" target="_blank">📥 CSV Export (7 Days)</a>
-      </div>
-
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px;">
-        <!-- Conversion Funnel -->
-        <div style="background:var(--card-bg);border:1px solid var(--border);border-radius:12px;padding:20px;">
-          <h4 style="color:#fff;margin:0 0 16px 0;font-size:14px;">🔄 Conversion Funnel</h4>
-          <div id="funnel-container" style="color:#888;font-size:13px;">Loading...</div>
+    <!-- TAB: EVENT LOG -->
+    <div id="tab-event-log" class="tab-pane">
+        <div class="card" style="margin-bottom:24px;">
+          <div class="card-title">📋 Purchase Event Log (All Purchase Attempts)</div>
+          <div style="overflow-x:auto;">
+            <table class="client-table">
+              <thead>
+                <tr>
+                  <th>সময়</th>
+                  <th>ইভেন্ট (Purchase Only)</th>
+                  <th>Event ID</th>
+                  <th>স্ট্যাটাস</th>
+                </tr>
+              </thead>
+              <tbody>
+                {purchase_logs_html}
+              </tbody>
+            </table>
+          </div>
         </div>
-
-        <!-- Event Breakdown -->
-        <div style="background:var(--card-bg);border:1px solid var(--border);border-radius:12px;padding:20px;">
-          <h4 style="color:#fff;margin:0 0 16px 0;font-size:14px;">📊 Event Breakdown</h4>
-          <canvas id="breakdownChart" height="200"></canvas>
+        
+        <div class="card" style="margin-bottom:24px;">
+          <div class="card-title">📋 All Other Events</div>
+          <div style="overflow-x:auto;">
+            <table class="client-table">
+              <thead>
+                <tr>
+                  <th>সময়</th>
+                  <th>ইভেন্ট</th>
+                  <th>Event ID</th>
+                  <th>স্ট্যাটাস</th>
+                </tr>
+              </thead>
+              <tbody>
+                {all_logs_html}
+              </tbody>
+            </table>
+          </div>
         </div>
-      </div>
-
-      <!-- Hourly Heatmap -->
-      <div style="background:var(--card-bg);border:1px solid var(--border);border-radius:12px;padding:20px;">
-        <h4 style="color:#fff;margin:0 0 16px 0;font-size:14px;">🕐 Hourly Distribution (Last 7 Days)</h4>
-        <canvas id="hourlyChart" height="80"></canvas>
-      </div>
     </div>
 
-    {pending_html}
-
-    <!-- RECENT EVENT LOGS -->
-    <div class="card" style="margin-bottom:24px;">
-      <div class="card-title"><span class="icon">📋</span> সর্বশেষ ইভেন্ট লগ (সর্বোচ্চ ৫০টি)</div>
-      <div style="overflow-x:auto;">
-        <table class="client-table">
-          <thead>
-            <tr>
-              <th>সময়</th>
-              <th>ইভেন্ট</th>
-              <th>Event ID</th>
-              <th>স্ট্যাটাস</th>
-            </tr>
-          </thead>
-          <tbody>
-            {log_rows_html}
-          </tbody>
-        </table>
-      </div>
-    </div>
-    
-    <!-- DEBUG & TESTING -->
-    <div class="card" style="margin-bottom:24px;border:1px solid rgba(0,230,118,0.2);">
-      <div class="card-title"><span class="icon" style="background:rgba(0,230,118,0.15)">🧪</span> Event Testing & Debug</div>
-      
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
-        <!-- Send Test Event -->
-        <div style="background:var(--card-bg);border:1px solid var(--border);border-radius:12px;padding:20px;">
-          <h4 style="color:#fff;margin:0 0 12px 0;font-size:14px;">🚀 Send Test Event</h4>
-          <select id="test-event-name" style="width:100%;padding:10px;background:#1e1e32;color:#fff;border:1px solid rgba(255,255,255,0.1);border-radius:8px;margin-bottom:10px;font-size:13px;">
-            <option value="PageView">PageView</option>
-            <option value="ViewContent">ViewContent</option>
-            <option value="AddToCart">AddToCart</option>
-            <option value="InitiateCheckout">InitiateCheckout</option>
-            <option value="Purchase">Purchase</option>
-            <option value="Lead">Lead</option>
-            <option value="CompleteRegistration">CompleteRegistration</option>
-            <option value="Search">Search</option>
-          </select>
-          <button class="btn-sm btn-info" onclick="sendTestEvent()" style="width:100%;padding:10px;font-size:13px;">🧪 Send Test Event</button>
-          <div id="test-result" style="margin-top:10px;font-size:12px;color:#888;"></div>
-        </div>
-
-        <!-- Validate Payload -->
-        <div style="background:var(--card-bg);border:1px solid var(--border);border-radius:12px;padding:20px;">
-          <h4 style="color:#fff;margin:0 0 12px 0;font-size:14px;">🔍 Validate Event Payload</h4>
-          <textarea id="validate-payload" style="width:100%;height:120px;padding:10px;background:#1e1e32;color:#0f0;border:1px solid rgba(255,255,255,0.1);border-radius:8px;font-family:monospace;font-size:11px;resize:vertical;" placeholder='{{"event_name":"Purchase","event_time":1234567890,"user_data":{{"em":["test@example.com"]}},"custom_data":{{"value":1500,"currency":"BDT"}}}}'></textarea>
-          <button class="btn-sm btn-info" onclick="validatePayload()" style="width:100%;padding:10px;font-size:13px;margin-top:8px;">🔍 Validate</button>
-          <div id="validate-result" style="margin-top:10px;font-size:12px;"></div>
-        </div>
-      </div>
-
-      <!-- Recent Events Live -->
-      <div style="margin-top:20px;background:var(--card-bg);border:1px solid var(--border);border-radius:12px;padding:20px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-          <h4 style="color:#fff;margin:0;font-size:14px;">📡 Live Event Stream (Last Hour)</h4>
-          <button class="btn-sm btn-info" onclick="refreshLiveEvents()" style="font-size:11px;">🔄 Refresh</button>
-        </div>
-        <div id="live-events" style="max-height:300px;overflow-y:auto;font-family:monospace;font-size:11px;color:#888;">
-          Loading...
-        </div>
-      </div>
+    <!-- TAB: DELAY PURCHASE -->
+    <div id="tab-delay-purchase" class="tab-pane">
+        {pending_html}
     </div>
 
-    <div style="margin-top:40px;">
-        <h3 style="color:#fff; margin-bottom:16px; font-weight:600;">📋 Setup Instructions</h3>
+    <!-- TAB: SETTINGS & SETUP -->
+    <div id="tab-settings" class="tab-pane">
         {instructions_html}
+        
+        <div class="card" style="margin-bottom:24px;border:1px solid rgba(16,185,129,0.2);margin-top:24px;">
+          <div class="card-title">🧪 Event Testing & Debug</div>
+          
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
+            <div style="background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:12px;padding:20px;">
+              <h4 style="color:#fff;margin:0 0 12px 0;font-size:14px;">🚀 Send Test Event</h4>
+              <select id="test-event-name" style="width:100%;padding:10px;background:#111827;color:#fff;border:1px solid var(--border);border-radius:8px;margin-bottom:10px;font-size:13px;outline:none;">
+                <option value="PageView">PageView</option>
+                <option value="ViewContent">ViewContent</option>
+                <option value="AddToCart">AddToCart</option>
+                <option value="InitiateCheckout">InitiateCheckout</option>
+                <option value="Purchase">Purchase</option>
+                <option value="Lead">Lead</option>
+                <option value="CompleteRegistration">CompleteRegistration</option>
+                <option value="Search">Search</option>
+              </select>
+              <button class="btn-sm btn-info" onclick="sendTestEvent()" style="width:100%;padding:10px;font-size:13px;">🧪 Send Test Event</button>
+              <div id="test-result" style="margin-top:10px;font-size:12px;color:var(--text-muted);"></div>
+            </div>
+
+            <div style="background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:12px;padding:20px;">
+              <h4 style="color:#fff;margin:0 0 12px 0;font-size:14px;">🔍 Validate Event Payload</h4>
+              <textarea id="validate-payload" style="width:100%;height:120px;padding:10px;background:#111827;color:var(--accent);border:1px solid var(--border);border-radius:8px;font-family:monospace;font-size:11px;resize:vertical;" placeholder='{{"event_name":"Purchase","event_time":1234567890,"user_data":{{"em":["test@example.com"]}},"custom_data":{{"value":1500,"currency":"BDT"}}}}'></textarea>
+              <button class="btn-sm btn-info" onclick="validatePayload()" style="width:100%;padding:10px;font-size:13px;margin-top:8px;">🔍 Validate</button>
+              <div id="validate-result" style="margin-top:10px;font-size:12px;"></div>
+            </div>
+          </div>
+
+          <div style="margin-top:20px;background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:12px;padding:20px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+              <h4 style="color:#fff;margin:0;font-size:14px;">📡 Live Event Stream (Last Hour)</h4>
+              <button class="btn-sm btn-info" onclick="refreshLiveEvents()">🔄 Refresh</button>
+            </div>
+            <div id="live-events" style="max-height:300px;overflow-y:auto;font-family:monospace;font-size:11px;color:var(--text-muted);">
+              Loading...
+            </div>
+          </div>
+        </div>
     </div>
-
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
-    <script>
-    var ctx = document.getElementById('eventsChart').getContext('2d');
-    new Chart(ctx, {{
-      type: 'line',
-      data: {{
-        labels: {labels_json},
-        datasets: [
-          {{
-            label: 'Success',
-            data: {success_json},
-            borderColor: '#00e676',
-            backgroundColor: 'rgba(0, 230, 118, 0.1)',
-            fill: true,
-            tension: 0.4,
-            borderWidth: 2,
-            pointRadius: 4,
-            pointBackgroundColor: '#00e676',
-          }},
-          {{
-            label: 'Failed',
-            data: {failed_json},
-            borderColor: '#ff5252',
-            backgroundColor: 'rgba(255, 82, 82, 0.1)',
-            fill: true,
-            tension: 0.4,
-            borderWidth: 2,
-            pointRadius: 4,
-            pointBackgroundColor: '#ff5252',
-          }}
-        ]
-      }},
-      options: {{
-        responsive: true,
-        plugins: {{
-          legend: {{
-            labels: {{ color: '#94a3b8', font: {{ family: 'Outfit' }} }}
-          }}
-        }},
-        scales: {{
-          x: {{
-            ticks: {{ color: '#64748b', font: {{ size: 11 }} }},
-            grid: {{ color: 'rgba(255,255,255,0.05)' }}
-          }},
-          y: {{
-            beginAtZero: true,
-            ticks: {{ color: '#64748b', font: {{ size: 11 }} }},
-            grid: {{ color: 'rgba(255,255,255,0.05)' }}
-          }}
-        }}
-      }}
-    }});
-    </script>
-
-    <script>
-    function openTab(evt, tabId) {{
-      var i, tc, tl;
-      tc = document.getElementsByClassName("tab-content");
-      for (i = 0; i < tc.length; i++) {{ tc[i].className = tc[i].className.replace(" active", ""); }}
-      tl = document.getElementsByClassName("tab-btn");
-      for (i = 0; i < tl.length; i++) {{ tl[i].className = tl[i].className.replace(" active", ""); }}
-      document.getElementById(tabId).className += " active";
-      evt.currentTarget.className += " active";
-    }}
-    
-    function generateEventCode() {{
-        var ev = document.getElementById('event_selector').value;
-        var code = "";
-        var fbEvent = "";
-        var params = "";
-        
-        switch(ev) {{
-            case 'page_view': fbEvent = 'PageView'; break;
-            case 'session_start': fbEvent = 'PageView'; params = ", {{custom_event: 'session_start'}}"; break;
-            case 'user_signup': fbEvent = 'CompleteRegistration'; break;
-            case 'user_login': fbEvent = 'Login'; break;
-            case 'user_logout': fbEvent = 'Logout'; params = ", {{custom_event: 'user_logout'}}"; break;
-            case 'view_item': fbEvent = 'ViewContent'; params = ", {{value: 100, currency: 'BDT', content_ids: ['ID-123'], content_type: 'product'}}"; break;
-            case 'add_to_cart': fbEvent = 'AddToCart'; params = ", {{value: 100, currency: 'BDT', content_ids: ['ID-123']}}"; break;
-            case 'remove_from_cart': fbEvent = 'RemoveFromCart'; params = ", {{value: 100, currency: 'BDT', content_ids: ['ID-123']}}"; break;
-            case 'view_cart': fbEvent = 'ViewCart'; params = ", {{value: 500, currency: 'BDT'}}"; break;
-            case 'begin_checkout': fbEvent = 'InitiateCheckout'; params = ", {{value: 500, currency: 'BDT'}}"; break;
-            case 'purchase': fbEvent = 'Purchase'; params = ", {{value: 1500, currency: 'BDT', content_ids: ['ID-123'], order_id: 'ORD-001'}}"; break;
-            case 'search': fbEvent = 'Search'; params = ", {{search_string: 'T-shirt'}}"; break;
-            case 'form_submit': fbEvent = 'Contact'; break;
-            case 'lead': fbEvent = 'Lead'; break;
-            case 'subscription': fbEvent = 'Subscribe'; params = ", {{value: 500, currency: 'BDT'}}"; break;
-            case 'refund': fbEvent = 'Refund'; params = ", {{value: 1500, currency: 'BDT', order_id: 'ORD-001'}}"; break;
-            case 'error': fbEvent = 'Error'; params = ", {{error_msg: 'Payment failed'}}"; break;
-            case 'api_call': fbEvent = 'API_Call'; params = ", {{endpoint: '/pay'}}"; break;
-        }}
-        
-        code = "<script>\\n  // Event: " + ev + "\\n  capi('track', '" + fbEvent + "'" + params + ");\\n</scr" + "ipt>";
-        
-        document.getElementById('generated_code_box').innerText = code;
-        document.getElementById('code_result_area').style.display = 'block';
-    }}
-    </script>
-
-    <script>
-    // ─── Pending Orders AJAX Functions ─────────────────────────────────
-    var BASE_API = '{gateway_origin}/api/v1';
-
-    function showStatus(msg, type) {{
-      var el = document.getElementById('pending-status');
-      if (!el) return;
-      el.style.display = 'block';
-      el.style.background = type === 'success' ? 'rgba(0,230,118,0.1)' : 'rgba(255,82,82,0.1)';
-      el.style.border = type === 'success' ? '1px solid rgba(0,230,118,0.2)' : '1px solid rgba(255,82,82,0.2)';
-      el.style.color = type === 'success' ? '#00e676' : '#ff5252';
-      el.innerText = msg;
-      setTimeout(function() {{ el.style.display = 'none'; }}, 5000);
-    }}
-
-    async function confirmOrder(orderId) {{
-      if (!confirm('অর্ডার ' + orderId + ' কনফার্ম করবেন? Purchase event Facebook-এ পাঠানো হবে।')) return;
-      try {{
-        var res = await fetch(BASE_API + '/events/confirm', {{
-          method: 'POST',
-          headers: {{ 'Content-Type': 'application/json' }},
-          credentials: 'include',
-          body: JSON.stringify({{ order_id: orderId }})
-        }});
-        var data = await res.json();
-        if (res.ok) {{
-          showStatus('✅ ' + orderId + ' কনফার্ম হয়েছে! Facebook-এ পাঠানো হয়েছে।', 'success');
-          var row = document.getElementById('row-' + orderId);
-          if (row) row.style.opacity = '0.3';
-          setTimeout(function() {{ if (row) row.remove(); }}, 2000);
-        }} else {{
-          showStatus('❌ Error: ' + (data.detail || 'Unknown error'), 'error');
-        }}
-      }} catch(e) {{
-        showStatus('❌ Network error: ' + e.message, 'error');
-      }}
-    }}
-
-    async function cancelOrder(orderId) {{
-      if (!confirm('অর্ডার ' + orderId + ' ক্যান্সেল করবেন? Facebook-এ কিছু পাঠানো হবে না।')) return;
-      try {{
-        var res = await fetch(BASE_API + '/events/cancel', {{
-          method: 'POST',
-          headers: {{ 'Content-Type': 'application/json' }},
-          credentials: 'include',
-          body: JSON.stringify({{ order_id: orderId }})
-        }});
-        var data = await res.json();
-        if (res.ok) {{
-          showStatus('❌ ' + orderId + ' ক্যান্সেল হয়েছে।', 'success');
-          var row = document.getElementById('row-' + orderId);
-          if (row) row.style.opacity = '0.3';
-          setTimeout(function() {{ if (row) row.remove(); }}, 2000);
-        }} else {{
-          showStatus('❌ Error: ' + (data.detail || 'Unknown error'), 'error');
-        }}
-      }} catch(e) {{
-        showStatus('❌ Network error: ' + e.message, 'error');
-      }}
-    }}
-
-    function selectAllPending() {{
-      var cbs = document.querySelectorAll('.pending-cb');
-      var allChecked = Array.from(cbs).every(function(cb) {{ return cb.checked; }});
-      cbs.forEach(function(cb) {{ cb.checked = !allChecked; }});
-    }}
-
-    async function confirmSelected() {{
-      var cbs = document.querySelectorAll('.pending-cb:checked');
-      if (cbs.length === 0) {{ showStatus('⚠️ কোনো অর্ডার সিলেক্ট করা হয়নি!', 'error'); return; }}
-      if (!confirm(cbs.length + 'টি অর্ডার কনফার্ম করবেন?')) return;
-
-      var orderIds = Array.from(cbs).map(function(cb) {{ return cb.value; }});
-      try {{
-        var res = await fetch(BASE_API + '/events/confirm/bulk', {{
-          method: 'POST',
-          headers: {{ 'Content-Type': 'application/json' }},
-          credentials: 'include',
-          body: JSON.stringify({{ order_ids: orderIds }})
-        }});
-        var data = await res.json();
-        if (res.ok) {{
-          showStatus('✅ ' + data.confirmed + 'টি কনফার্ম হয়েছে, ' + data.failed + 'টি ব্যর্থ।', 'success');
-          orderIds.forEach(function(oid) {{
-            var row = document.getElementById('row-' + oid);
-            if (row) {{ row.style.opacity = '0.3'; setTimeout(function() {{ row.remove(); }}, 2000); }}
-          }});
-        }} else {{
-          showStatus('❌ Error: ' + (data.detail || 'Unknown error'), 'error');
-        }}
-      }} catch(e) {{
-        showStatus('❌ Network error: ' + e.message, 'error');
-      }}
-    }}
-    </script>
-
-    <script>
-    // ─── Analytics Charts ─────────────────────────────────────────────────
-    (async function loadAnalytics() {{
-      try {{
-        // Fetch overview data
-        var res = await fetch(BASE_API + '/analytics/overview?days=7', {{
-          credentials: 'include'
-        }});
-        if (!res.ok) return;
-        var data = await res.json();
-
-        // Conversion Funnel
-        var fc = document.getElementById('funnel-container');
-        if (fc && data.funnel) {{
-          var funnelColors = ['#7e57c2','#42a5f5','#66bb6a','#ffab00','#00e676'];
-          var maxCount = Math.max(...data.funnel.map(function(f) {{ return f.count; }}), 1);
-          var fhtml = '';
-          data.funnel.forEach(function(step, i) {{
-            var width = Math.max((step.count / maxCount) * 100, 5);
-            var dropText = i > 0 && step.drop_off > 0 ? '<span style="color:#ff5252;font-size:11px;margin-left:8px;">↓' + step.drop_off.toFixed(1) + '%</span>' : '';
-            fhtml += '<div style="margin-bottom:10px;">' +
-              '<div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;">' +
-                '<span style="color:#ccc">' + step.step + dropText + '</span>' +
-                '<span style="color:#fff;font-weight:600">' + step.count.toLocaleString() + '</span>' +
-              '</div>' +
-              '<div style="background:rgba(255,255,255,0.05);border-radius:6px;height:8px;overflow:hidden;">' +
-                '<div style="width:' + width + '%;height:100%;background:' + funnelColors[i % 5] + ';border-radius:6px;transition:width 0.8s ease;"></div>' +
-              '</div></div>';
-          }});
-          fc.innerHTML = fhtml;
-        }}
-
-        // Event Breakdown — Doughnut Chart
-        if (data.event_breakdown && data.event_breakdown.length > 0) {{
-          var bdLabels = data.event_breakdown.map(function(e) {{ return e.event_name; }});
-          var bdData = data.event_breakdown.map(function(e) {{ return e.count; }});
-          var bdColors = ['#7e57c2','#42a5f5','#66bb6a','#ffab00','#ff5252','#00e676','#ff7043','#ab47bc','#26c6da','#8d6e63'];
-          new Chart(document.getElementById('breakdownChart'), {{
-            type: 'doughnut',
-            data: {{
-              labels: bdLabels,
-              datasets: [{{
-                data: bdData,
-                backgroundColor: bdColors.slice(0, bdLabels.length),
-                borderWidth: 0,
-              }}]
-            }},
-            options: {{
-              responsive: true,
-              plugins: {{
-                legend: {{ position: 'right', labels: {{ color: '#ccc', font: {{ size: 11 }} }} }}
-              }}
-            }}
-          }});
-        }}
-
-        // Hourly Heatmap
-        var hRes = await fetch(BASE_API + '/analytics/hourly?days=7', {{
-          credentials: 'include'
-        }});
-        if (hRes.ok) {{
-          var hData = await hRes.json();
-          var hLabels = hData.data.map(function(h) {{ return h.hour + ':00'; }});
-          var hCounts = hData.data.map(function(h) {{ return h.count; }});
-          var maxH = Math.max(...hCounts, 1);
-          var hColors = hCounts.map(function(c) {{
-            var intensity = Math.min(c / maxH, 1);
-            return 'rgba(126,87,194,' + (0.2 + intensity * 0.8) + ')';
-          }});
-          new Chart(document.getElementById('hourlyChart'), {{
-            type: 'bar',
-            data: {{
-              labels: hLabels,
-              datasets: [{{
-                label: 'Events',
-                data: hCounts,
-                backgroundColor: hColors,
-                borderRadius: 4,
-              }}]
-            }},
-            options: {{
-              responsive: true,
-              plugins: {{ legend: {{ display: false }} }},
-              scales: {{
-                x: {{ grid: {{ display: false }}, ticks: {{ color: '#666', font: {{ size: 10 }} }} }},
-                y: {{ grid: {{ color: 'rgba(255,255,255,0.05)' }}, ticks: {{ color: '#666' }} }}
-              }}
-            }}
-          }});
-        }}
-      }} catch(e) {{
-        console.log('Analytics load error:', e);
-      }}
-    }})();
-    </script>
-
-    <script>
-    // ─── Debug & Testing Functions ────────────────────────────────────────
-    async function sendTestEvent() {{
-      var evName = document.getElementById('test-event-name').value;
-      var el = document.getElementById('test-result');
-      el.innerHTML = '<span style="color:#ffab00">⏳ পাঠাচ্ছে...</span>';
-      try {{
-        var res = await fetch(BASE_API + '/debug/test-event', {{
-          method: 'POST',
-          headers: {{ 'Content-Type': 'application/json' }},
-          credentials: 'include',
-          body: JSON.stringify({{ event_name: evName }})
-        }});
-        var data = await res.json();
-        if (res.ok) {{
-          el.innerHTML = '<span style="color:#00e676">✅ ' + evName + ' event পাঠানো হয়েছে!</span><br><span style="color:#666">ID: ' + data.event_id + '</span>';
-        }} else {{
-          el.innerHTML = '<span style="color:#ff5252">❌ ' + (data.detail || 'Error') + '</span>';
-        }}
-      }} catch(e) {{
-        el.innerHTML = '<span style="color:#ff5252">❌ Network error</span>';
-      }}
-    }}
-
-    async function validatePayload() {{
-      var el = document.getElementById('validate-result');
-      var raw = document.getElementById('validate-payload').value;
-      if (!raw.trim()) {{ el.innerHTML = '<span style="color:#ff5252">Payload দিন!</span>'; return; }}
-      try {{
-        var payload = JSON.parse(raw);
-        var res = await fetch(BASE_API + '/debug/validate', {{
-          method: 'POST',
-          headers: {{ 'Content-Type': 'application/json' }},
-          credentials: 'include',
-          body: raw
-        }});
-        var data = await res.json();
-        var emqColor = data.emq_estimate >= 7 ? '#00e676' : data.emq_estimate >= 4 ? '#ffab00' : '#ff5252';
-        var html = '<div style="margin-bottom:8px;"><span style="font-size:16px;color:' + emqColor + ';font-weight:bold">EMQ: ' + data.emq_estimate + '/10</span> ';
-        html += data.is_valid ? '<span style="color:#00e676">✅ Valid</span>' : '<span style="color:#ff5252">❌ Invalid</span>';
-        html += '</div>';
-        data.issues.forEach(function(i) {{
-          var c = i.status === 'ok' ? '#00e676' : i.status === 'warning' ? '#ffab00' : '#ff5252';
-          html += '<div style="color:' + c + ';margin:2px 0;">' + i.message + '</div>';
-        }});
-        el.innerHTML = html;
-      }} catch(e) {{
-        el.innerHTML = '<span style="color:#ff5252">❌ Invalid JSON: ' + e.message + '</span>';
-      }}
-    }}
-
-    async function refreshLiveEvents() {{
-      var el = document.getElementById('live-events');
-      el.innerHTML = '<span style="color:#ffab00">Loading...</span>';
-      try {{
-        var res = await fetch(BASE_API + '/debug/recent?limit=20&minutes=60', {{
-          credentials: 'include'
-        }});
-        if (!res.ok) {{ el.innerHTML = '<span style="color:#ff5252">Error loading events</span>'; return; }}
-        var data = await res.json();
-        if (data.events.length === 0) {{
-          el.innerHTML = '<span style="color:#555">No events in the last hour</span>';
-          return;
-        }}
-        var html = '';
-        data.events.forEach(function(ev) {{
-          var statusColor = ev.status === 'success' ? '#00e676' : '#ff5252';
-          var ageStr = ev.age_seconds < 60 ? Math.round(ev.age_seconds) + 's ago' : Math.round(ev.age_seconds / 60) + 'm ago';
-          html += '<div style="padding:6px 8px;border-bottom:1px solid rgba(255,255,255,0.03);display:flex;gap:12px;align-items:center;">';
-          html += '<span style="color:#555;min-width:55px;">' + ageStr + '</span>';
-          html += '<span style="color:' + statusColor + ';min-width:12px;">' + (ev.status === 'success' ? '●' : '○') + '</span>';
-          html += '<span style="color:#ccc;min-width:120px;font-weight:600;">' + ev.event_name + '</span>';
-          html += '<span style="color:#555;font-size:10px;">' + (ev.event_id || '') + '</span>';
-          html += '</div>';
-        }});
-        el.innerHTML = html;
-      }} catch(e) {{
-        el.innerHTML = '<span style="color:#ff5252">Error: ' + e.message + '</span>';
-      }}
-    }}
-    // Auto-load live events
-    refreshLiveEvents();
-    </script>
     """
-    
-    return HTMLResponse(base_html(f"Dashboard — {client.name}", body))
+
+    return HTMLResponse(client_html(f"Dashboard — {client.name}", body))
