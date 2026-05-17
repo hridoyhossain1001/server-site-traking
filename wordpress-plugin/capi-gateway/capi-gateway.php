@@ -90,6 +90,39 @@ function capigw_get_settings() {
     ) );
 }
 
+function capigw_site_origin() {
+    $parts = wp_parse_url( home_url() );
+    if ( empty( $parts['host'] ) ) {
+        return '';
+    }
+    $scheme = ! empty( $parts['scheme'] ) ? $parts['scheme'] : 'https';
+    return $scheme . '://' . strtolower( $parts['host'] );
+}
+
+function capigw_normalize_host( $host ) {
+    $host = strtolower( trim( (string) $host ) );
+    if ( strpos( $host, 'www.' ) === 0 ) {
+        $host = substr( $host, 4 );
+    }
+    return $host;
+}
+
+function capigw_host_allowed( $request_host, $allowed_host ) {
+    $request_host = capigw_normalize_host( $request_host );
+    $allowed_host = capigw_normalize_host( $allowed_host );
+
+    if ( empty( $request_host ) || empty( $allowed_host ) ) {
+        return false;
+    }
+
+    if ( $request_host === $allowed_host ) {
+        return true;
+    }
+
+    $suffix = '.' . $allowed_host;
+    return substr( $request_host, -strlen( $suffix ) ) === $suffix;
+}
+
 // ─── Helper: Send Event to Gateway (Server-Side via wp_remote_post) ────────────
 function capigw_send_event( $event_data, $blocking = true ) {
     $settings = capigw_get_settings();
@@ -110,10 +143,11 @@ function capigw_send_event( $event_data, $blocking = true ) {
         'redirection' => 0,
         'httpversion' => '1.1',
         'blocking'    => (bool) $blocking,
-        'sslverify'   => false,
+        'sslverify'   => true,
         'headers'     => array(
             'Content-Type' => 'application/json',
             'X-API-Key'    => $settings['api_key'],
+            'X-CAPI-Origin'=> capigw_site_origin(),
         ),
         'body'        => $body,
     ) );

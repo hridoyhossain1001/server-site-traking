@@ -38,6 +38,7 @@ class CAPIGW_Auto_Updater {
         // Hook into WordPress update system
         add_filter( 'pre_set_site_transient_update_plugins', array( $this, 'check_for_update' ) );
         add_filter( 'plugins_api', array( $this, 'plugin_info' ), 20, 3 );
+        add_filter( 'upgrader_pre_download', array( $this, 'verify_downloaded_package' ), 10, 3 );
         add_filter( 'upgrader_post_install', array( $this, 'after_install' ), 10, 3 );
     }
 
@@ -130,18 +131,17 @@ class CAPIGW_Auto_Updater {
      * Fetch remote plugin info from our server — ক্যাশ সহ
      */
     private function get_remote_info() {
-        $cache_key = 'capigw_update_info';
+        $settings = capigw_get_settings();
+        $cache_key = 'capigw_update_info_' . md5( $settings['api_key'] ?? '' );
         $cached    = get_transient( $cache_key );
 
         if ( $cached !== false ) {
             return $cached;
         }
 
-        $settings = capigw_get_settings();
-
         $response = wp_remote_get( $this->update_url, array(
             'timeout'   => 10,
-            'sslverify' => false,
+            'sslverify' => true,
             'headers'   => array(
                 'X-API-Key'       => $settings['api_key'] ?? '',
                 'X-Plugin-Version' => $this->current_version,
@@ -158,10 +158,60 @@ class CAPIGW_Auto_Updater {
             return false;
         }
 
+        if ( ! $this->verify_remote_info( $body, $settings['api_key'] ?? '' ) ) {
+            return false;
+        }
+
         // Cache for 12 hours
         set_transient( $cache_key, $body, 12 * HOUR_IN_SECONDS );
 
         return $body;
+    }
+
+    private function verify_remote_info( $remote, $api_key ) {
+        if ( empty( $remote->download_url ) || empty( $remote->package_sha256 ) || empty( $remote->signature ) || empty( $api_key ) ) {
+            return false;
+        }
+
+        if ( ! $this->package_url_allowed( $remote->download_url ) ) {
+            return false;
+        }
+
+        if ( ! preg_match( '/^[a-f0-9]{64}$/', $remote->package_sha256 ) ) {
+            return false;
+        }
+
+        $payload  = $remote->version . '|' . $remote->download_url . '|' . $remote->package_sha256;
+        $expected = hash_hmac( 'sha256', $payload, $api_key );
+        return hash_equals( $expected, $remote->signature );
+    }
+
+    private function package_url_allowed( $download_url ) {
+        $update_host  = wp_parse_url( $this->update_url, PHP_URL_HOST );
+        $package_host = wp_parse_url( $download_url, PHP_URL_HOST );
+        $scheme       = wp_parse_url( $download_url, PHP_URL_SCHEME );
+
+        return $scheme === 'https' && $update_host && $package_host && strtolower( $update_host ) === strtolower( $package_host );
+    }
+
+    public function verify_downloaded_package( $reply, $package, $upgrader ) {
+        $remote = $this->get_remote_info();
+        if ( ! $remote || empty( $remote->download_url ) || $package !== $remote->download_url ) {
+            return $reply;
+        }
+
+        $downloaded = download_url( $package );
+        if ( is_wp_error( $downloaded ) ) {
+            return $downloaded;
+        }
+
+        $actual_hash = hash_file( 'sha256', $downloaded );
+        if ( ! hash_equals( $remote->package_sha256, $actual_hash ) ) {
+            @unlink( $downloaded );
+            return new WP_Error( 'capigw_update_hash_mismatch', 'CAPI Gateway update package verification failed.' );
+        }
+
+        return $downloaded;
     }
 }
 

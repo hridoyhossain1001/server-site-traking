@@ -2,9 +2,10 @@ from fastapi import APIRouter, Depends, Request, Form, Response, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import func
+from sqlalchemy import func, or_
 import html
 import datetime
+import secrets
 from typing import Optional
 from sqlalchemy import and_
 
@@ -12,7 +13,7 @@ from app.database import get_db
 from app.models.client import Client
 from app.models.event_log import EventLog
 from app.models.pending_event import PendingEvent
-from app.routers.admin import STYLE, base_html
+from app.routers.admin import STYLE, base_html, mask_secret
 from app.security import encrypt_token, decrypt_token
 from app.limiter import limiter
 
@@ -233,12 +234,20 @@ def client_html(title: str, body: str) -> str:
     
     function copyText(id) {{
       var t = document.getElementById(id);
-      var textToCopy = t.innerText || t.value;
+      var textToCopy = t.dataset.secret || t.innerText || t.value;
       navigator.clipboard.writeText(textToCopy);
       var eventTarget = event.target;
       var origText = eventTarget.innerText;
       eventTarget.innerText = 'Copied!';
       setTimeout(() => eventTarget.innerText = origText, 1500);
+    }}
+
+    function revealSecret(id) {{
+      var t = document.getElementById(id);
+      if (!t || !t.dataset.secret) return;
+      var hidden = t.dataset.hidden !== '0';
+      t.innerText = hidden ? t.dataset.secret : t.dataset.masked;
+      t.dataset.hidden = hidden ? '0' : '1';
     }}
     
     function openInnerTab(evt, tabId) {{
@@ -267,6 +276,28 @@ def get_client_from_cookie(request: Request) -> Optional[str]:
     except Exception:
         return None
 
+
+async def get_client_from_portal_session(request: Request, db: AsyncSession) -> Optional[Client]:
+    session_value = get_client_from_cookie(request)
+    if not session_value:
+        return None
+
+    if session_value.startswith("client:"):
+        try:
+            _, client_id, session_secret = session_value.split(":", 2)
+            result = await db.execute(select(Client).where(Client.id == int(client_id)))
+            client = result.scalar_one_or_none()
+            expected_secret = getattr(client, "portal_key", None) if client else None
+            if client and expected_secret and secrets.compare_digest(session_secret, expected_secret):
+                return client
+            return None
+        except (TypeError, ValueError):
+            return None
+
+    # Backward compatibility for old cookies that stored the API key directly.
+    result = await db.execute(select(Client).where(Client.api_key == session_value))
+    return result.scalar_one_or_none()
+
 @router.get("/client", response_class=HTMLResponse, include_in_schema=False)
 async def client_login_page(request: Request):
     api_key = get_client_from_cookie(request)
@@ -281,8 +312,8 @@ async def client_login_page(request: Request):
         <div class="card">
             <form action="/client/login" method="post">
                 <div class="form-group">
-                    <label>API Key</label>
-                    <input type="password" name="api_key" required placeholder="Paste your API Key here..." autocomplete="off">
+                    <label>Portal Login Key</label>
+                    <input type="password" name="api_key" required placeholder="Paste your Portal Login Key here..." autocomplete="off">
                 </div>
                 <button type="submit" class="btn">Login to Dashboard</button>
             </form>
@@ -294,10 +325,15 @@ async def client_login_page(request: Request):
 @router.post("/client/login", include_in_schema=False)
 @limiter.limit("5/minute")
 async def client_login(request: Request, response: Response, api_key: str = Form(...), db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Client).where(Client.api_key == api_key))
+    result = await db.execute(
+        select(Client).where(or_(Client.portal_key == api_key, Client.api_key == api_key))
+    )
     client = result.scalar_one_or_none()
+    portal_key = getattr(client, "portal_key", None) if client else None
+    portal_key_ok = bool(portal_key) and secrets.compare_digest(portal_key, api_key)
+    legacy_api_key_ok = bool(client and not portal_key) and secrets.compare_digest(client.api_key, api_key)
     
-    if not client or not client.is_active:
+    if not client or not client.is_active or not (portal_key_ok or legacy_api_key_ok):
         body = """
         <div class="container" style="max-width: 400px; margin-top: 100px;">
             <div class="alert alert-error" style="justify-content:center;">Invalid or Inactive API Key</div>
@@ -309,7 +345,7 @@ async def client_login(request: Request, response: Response, api_key: str = Form
     redirect = RedirectResponse(url="/client/dashboard", status_code=303)
     redirect.set_cookie(
         key="client_session",
-        value=encrypt_token(api_key),
+        value=encrypt_token(f"client:{client.id}:{getattr(client, 'portal_key', None) or client.api_key}"),
         httponly=True,
         secure=True,
         samesite="lax",
@@ -325,12 +361,10 @@ async def client_logout():
 
 @router.get("/client/dashboard", response_class=HTMLResponse, include_in_schema=False)
 async def client_dashboard(request: Request, db: AsyncSession = Depends(get_db)):
-    api_key = get_client_from_cookie(request)
-    if not api_key:
+    client = await get_client_from_portal_session(request, db)
+    if not client:
         return RedirectResponse(url="/client", status_code=303)
-        
-    result = await db.execute(select(Client).where(Client.api_key == api_key))
-    client = result.scalar_one_or_none()
+
     if not client or not client.is_active:
         redirect = RedirectResponse(url="/client", status_code=303)
         redirect.delete_cookie("client_session")
@@ -620,8 +654,13 @@ async def client_dashboard(request: Request, db: AsyncSession = Depends(get_db))
     tracker_url = f"{gateway_origin}/t.js?key={tracker_key}"
     safe_client_name = html.escape(client.name, quote=True)
     safe_api_key = html.escape(client.api_key, quote=True)
+    masked_api_key = html.escape(mask_secret(client.api_key))
     safe_endpoint = html.escape(endpoint, quote=True)
     safe_tracker_url = html.escape(tracker_url, quote=True)
+    safe_capi_origin = html.escape(
+        f"https://{client.domain}" if client.domain else "https://your-domain.com",
+        quote=True,
+    )
 
     # Instructions body (Reused from admin.py)
     instructions_html = f"""
@@ -629,7 +668,8 @@ async def client_dashboard(request: Request, db: AsyncSession = Depends(get_db))
       <div class="card-title"><span class="icon">🔑</span> আপনার API Key</div>
       <p style="color:#888;font-size:13px;margin-bottom:10px">এই Key-টি গোপন রাখুন। কখনো Browser/JS-এ পাবলিকলি রাখবেন না। শুধু সার্ভার বা GTM থেকে ব্যবহার করুন।</p>
       <button class="copy-btn" onclick="copyText('api_key')">Copy</button>
-      <div class="instr-box" id="api_key">{safe_api_key}</div>
+      <button class="copy-btn" onclick="revealSecret('api_key')" style="margin-right:6px">Show</button>
+      <div class="instr-box" id="api_key" data-secret="{safe_api_key}" data-masked="{masked_api_key}" data-hidden="1">{masked_api_key}</div>
     </div>
 
     <div class="card" style="margin-bottom:20px">
@@ -830,7 +870,8 @@ function send_capi_event($event_name, $url, $value, $event_id, $product_id) {{
         'body' => json_encode($data),
         'headers' => [
             'Content-Type' => 'application/json',
-            'X-API-Key' => '{safe_api_key}'
+            'X-API-Key' => '{safe_api_key}',
+            'X-CAPI-Origin' => '{safe_capi_origin}'
         ],
         'blocking' => false
     ]);
@@ -1045,7 +1086,8 @@ function send_capi_event($event_name, $url, $value, $event_id, $product_id) {{
         'body' => json_encode($data),
         'headers' => [
             'Content-Type' => 'application/json',
-            'X-API-Key' => '{safe_api_key}'
+            'X-API-Key' => '{safe_api_key}',
+            'X-CAPI-Origin' => '{safe_capi_origin}'
         ],
         'blocking' => false
     ]);

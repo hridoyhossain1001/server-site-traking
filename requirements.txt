@@ -11,6 +11,7 @@ cryptography==44.0.0
 orjson==3.10.12
 python-dotenv==1.0.1
 packaging==24.2
+pytest==8.3.4
 
 maxminddb==3.1.1
 user-agents==2.2.0

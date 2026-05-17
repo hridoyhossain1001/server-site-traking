@@ -159,7 +159,7 @@ function capigw_widget_data() {
     // 1. Check server health
     $health = wp_remote_get( $base_url . '/health', array(
         'timeout'   => 5,
-        'sslverify' => false,
+        'sslverify' => true,
         'headers'   => array( 'X-API-Key' => $settings['api_key'] ),
     ) );
 
@@ -170,7 +170,7 @@ function capigw_widget_data() {
     // 2. Get analytics overview (today)
     $overview = wp_remote_get( $base_url . '/analytics/overview?days=1', array(
         'timeout'   => 8,
-        'sslverify' => false,
+        'sslverify' => true,
         'headers'   => array( 'X-API-Key' => $settings['api_key'] ),
     ) );
 
@@ -197,7 +197,7 @@ function capigw_widget_data() {
     // 3. Get monthly total (30 days)
     $monthly = wp_remote_get( $base_url . '/analytics/overview?days=30', array(
         'timeout'   => 8,
-        'sslverify' => false,
+        'sslverify' => true,
         'headers'   => array( 'X-API-Key' => $settings['api_key'] ),
     ) );
 
@@ -211,7 +211,7 @@ function capigw_widget_data() {
     // 4. Get pending orders count
     $pending = wp_remote_get( $base_url . '/events/pending?limit=1', array(
         'timeout'   => 5,
-        'sslverify' => false,
+        'sslverify' => true,
         'headers'   => array( 'X-API-Key' => $settings['api_key'] ),
     ) );
 

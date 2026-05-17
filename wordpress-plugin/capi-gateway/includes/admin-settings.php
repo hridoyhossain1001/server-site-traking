@@ -69,7 +69,7 @@ function capigw_test_connection() {
 
     $response = wp_remote_get( $url, array(
         'timeout'   => 30,
-        'sslverify' => false,
+        'sslverify' => true,
         'headers'   => array(
             'X-API-Key' => $api_key,
         ),

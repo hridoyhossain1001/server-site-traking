@@ -2,6 +2,9 @@ import os
 import html
 import secrets
 import logging
+import hashlib
+import hmac
+import time
 from urllib.parse import urlencode
 from urllib.parse import urlparse
 from fastapi import APIRouter, Depends, HTTPException, Form, Request
@@ -11,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
 from app.database import get_db
 from app.models.client import Client
+from app.models.audit_log import AuditLog
 from app.security import encrypt_token
 from app.services.webhook_service import _webhook_url_allowed
 from app.limiter import limiter
@@ -24,6 +28,8 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
 if not ADMIN_PASSWORD:
     raise RuntimeError("⛔ ADMIN_PASSWORD environment variable is required!")
 
+CSRF_MAX_AGE_SECONDS = 60 * 60
+
 
 def verify_admin(credentials: HTTPBasicCredentials = Depends(security)):
     is_user_ok = secrets.compare_digest(credentials.username, ADMIN_USERNAME)
@@ -35,6 +41,38 @@ def verify_admin(credentials: HTTPBasicCredentials = Depends(security)):
             headers={"WWW-Authenticate": "Basic"},
         )
     return credentials.username
+
+
+def create_admin_csrf_token(username: str) -> str:
+    nonce = secrets.token_urlsafe(24)
+    issued_at = str(int(time.time()))
+    payload = f"{username}:{issued_at}:{nonce}"
+    signature = hmac.new(
+        ADMIN_PASSWORD.encode("utf-8"),
+        payload.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"{issued_at}:{nonce}:{signature}"
+
+
+def verify_admin_csrf_token(token: str, username: str) -> None:
+    try:
+        issued_at, nonce, signature = token.split(":", 2)
+        issued_ts = int(issued_at)
+    except (AttributeError, TypeError, ValueError):
+        raise HTTPException(status_code=403, detail="Invalid CSRF token")
+
+    if time.time() - issued_ts > CSRF_MAX_AGE_SECONDS:
+        raise HTTPException(status_code=403, detail="Expired CSRF token")
+
+    payload = f"{username}:{issued_at}:{nonce}"
+    expected = hmac.new(
+        ADMIN_PASSWORD.encode("utf-8"),
+        payload.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(signature, expected):
+        raise HTTPException(status_code=403, detail="Invalid CSRF token")
 
 
 # ─── HTML TEMPLATES ─────────────────────────────────────────────────────────
@@ -274,9 +312,20 @@ def base_html(title: str, body: str, msg: str = "", msg_type: str = "success") -
 <script>
 function copyText(id){{
   var t = document.getElementById(id);
-  navigator.clipboard.writeText(t.innerText || t.value);
-  event.target.innerText = 'Copied!';
-  setTimeout(()=>event.target.innerText='Copy',1500);
+  var value = t.dataset.secret || t.innerText || t.value;
+  navigator.clipboard.writeText(value);
+  if (event && event.target) {{
+    var old = event.target.innerText;
+    event.target.innerText = 'Copied!';
+    setTimeout(()=>event.target.innerText=old || 'Copy',1500);
+  }}
+}}
+function revealSecret(id){{
+  var t = document.getElementById(id);
+  if (!t || !t.dataset.secret) return;
+  var hidden = t.dataset.hidden !== '0';
+  t.innerText = hidden ? t.dataset.secret : t.dataset.masked;
+  t.dataset.hidden = hidden ? '0' : '1';
 }}
 </script>
 <script>
@@ -297,6 +346,40 @@ def admin_redirect(msg: str, msg_type: str = "success") -> RedirectResponse:
     return RedirectResponse(url=f"/api/v1/admin?{query}", status_code=303)
 
 
+def mask_secret(value: str | None, prefix: int = 6, suffix: int = 4) -> str:
+    if not value:
+        return ""
+    if len(value) <= prefix + suffix:
+        return "•" * len(value)
+    return f"{value[:prefix]}{'•' * 12}{value[-suffix:]}"
+
+
+def request_ip(request: Request) -> str | None:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else None
+
+
+async def log_admin_action(
+    db: AsyncSession,
+    request: Request,
+    actor: str,
+    action: str,
+    client_id: int | None = None,
+    details: str | None = None,
+) -> None:
+    db.add(
+        AuditLog(
+            actor=actor,
+            action=action,
+            client_id=client_id,
+            ip_address=request_ip(request),
+            details=details,
+        )
+    )
+
+
 # ─── ROUTES ──────────────────────────────────────────────────────────────────
 
 @router.get("/admin", response_class=HTMLResponse, include_in_schema=False)
@@ -308,9 +391,13 @@ async def admin_dashboard(
     msg: str = "",
     msg_type: str = "success",
 ):
+    csrf_token = create_admin_csrf_token(username)
     result = await db.execute(select(Client).order_by(Client.created_at.desc()))
     clients = result.scalars().all()
     active_count = sum(1 for c in clients if c.is_active)
+
+    audit_r = await db.execute(select(AuditLog).order_by(AuditLog.created_at.desc()).limit(12))
+    audit_logs = audit_r.scalars().all()
 
     # ─── Event Analytics Query ────────────────────────────────────────────
     from datetime import datetime, timezone
@@ -380,11 +467,12 @@ async def admin_dashboard(
     """
 
     # ─── Add Client Form ───────────────────────────────────────────────────
-    add_form = """
+    add_form = f"""
     <div class="right-col">
       <div class="card" style="height: 100%;">
         <div class="card-title"><span class="icon">➕</span> নতুন ক্লায়েন্ট যোগ করুন</div>
         <form method="post" action="/api/v1/admin/add-client">
+          <input type="hidden" name="csrf_token" value="{csrf_token}">
           <div class="form-group">
             <label>ক্লায়েন্টের নাম</label>
             <input type="text" name="name" placeholder="যেমন: ABC Ecommerce" required>
@@ -472,7 +560,8 @@ async def admin_dashboard(
             toggle_label = "❌ Deactivate" if c.is_active else "✅ Activate"
             safe_name = html.escape(c.name)
             safe_pixel = html.escape(c.pixel_id)
-            safe_key = html.escape(c.api_key)
+            safe_key = html.escape(c.api_key, quote=True)
+            safe_key_masked = html.escape(mask_secret(c.api_key))
             c_events = client_events_map.get(c.id, 0)
             deferred_badge = (
                 '<span style="background:rgba(255,171,0,0.15);color:#ffab00;border:1px solid rgba(255,171,0,0.3);padding:2px 8px;border-radius:12px;font-size:10px;font-weight:600;margin-left:6px">📦 Deferred</span>'
@@ -485,9 +574,9 @@ async def admin_dashboard(
               <td>{status_badge}</td>
               <td style="color:#00c853;font-weight:600;">{c_events:,}</td>
               <td>
-                <div class="api-key-cell" title="{safe_key}">
-                  <span class="api-key-text">{safe_key[:20]}...</span>
-                  <button class="copy-icon" onclick="navigator.clipboard.writeText('{safe_key}'); this.innerText='✅'; setTimeout(()=>this.innerText='📋', 2000);" title="Copy Full API Key">📋</button>
+                <div class="api-key-cell">
+                  <span class="api-key-text" id="client_key_{c.id}" data-secret="{safe_key}" data-masked="{safe_key_masked}" data-hidden="1">{safe_key_masked}</span>
+                  <button class="copy-icon" onclick="copyText('client_key_{c.id}')" title="Copy API Key">Copy</button>
                 </div>
               </td>
               <td>
@@ -496,7 +585,12 @@ async def admin_dashboard(
                 </a>
                 &nbsp;
                 <form method="post" action="/api/v1/admin/client/{c.id}/{toggle_action}" style="display:inline">
+                  <input type="hidden" name="csrf_token" value="{csrf_token}">
                   <button type="submit" class="btn-sm btn-danger">{toggle_label}</button>
+                </form>
+                <form method="post" action="/api/v1/admin/client/{c.id}/rotate-portal-key" style="display:inline" onsubmit="return confirm('Rotate portal login key?')">
+                  <input type="hidden" name="csrf_token" value="{csrf_token}">
+                  <button type="submit" class="btn-sm btn-info">Rotate Portal</button>
                 </form>
               </td>
             </tr>"""
@@ -520,6 +614,34 @@ async def admin_dashboard(
           </div>
         </div>"""
 
+    if audit_logs:
+        audit_rows = ""
+        for log in audit_logs:
+            safe_actor = html.escape(log.actor or "")
+            safe_action = html.escape(log.action or "")
+            safe_details = html.escape(log.details or "")
+            safe_ip = html.escape(log.ip_address or "-")
+            created = log.created_at.strftime("%Y-%m-%d %H:%M") if log.created_at else "-"
+            audit_rows += f"""
+            <tr>
+              <td>{created}</td>
+              <td>{safe_actor}</td>
+              <td>{safe_action}</td>
+              <td>{log.client_id or '-'}</td>
+              <td>{safe_ip}</td>
+              <td>{safe_details}</td>
+            </tr>"""
+        audit_table = f"""
+        <div class="card" style="margin-top:20px">
+          <div class="card-title"><span class="icon">Audit</span> Recent Admin Activity</div>
+          <table class="client-table">
+            <thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Client</th><th>IP</th><th>Details</th></tr></thead>
+            <tbody>{audit_rows}</tbody>
+          </table>
+        </div>"""
+    else:
+        audit_table = ""
+
     body = f"""
     <div class="top-grid">
       {stats}
@@ -527,6 +649,7 @@ async def admin_dashboard(
     </div>
     <div class="bottom-section">
       {client_table}
+      {audit_table}
     </div>
     """
     return HTMLResponse(base_html("Dashboard", body, msg, msg_type))
@@ -537,6 +660,7 @@ async def admin_dashboard(
 async def add_client(
     request: Request,
     username: str = Depends(verify_admin),
+    csrf_token: str = Form(...),
     name: str = Form(...),
     pixel_id: str = Form(...),
     access_token: str = Form(...),
@@ -550,6 +674,8 @@ async def add_client(
     webhook_url: str = Form(None),
     db: AsyncSession = Depends(get_db),
 ):
+    verify_admin_csrf_token(csrf_token, username)
+
     # ─── Input Validation ──────────────────────────────────────────────────
     name = name.strip()
     pixel_id = pixel_id.strip()
@@ -591,6 +717,7 @@ async def add_client(
         domain=clean_domain,
         api_key=secrets.token_urlsafe(32),
         public_key=secrets.token_urlsafe(24),
+        portal_key=secrets.token_urlsafe(24),
         tiktok_pixel_id=tiktok_pixel_id.strip() if tiktok_pixel_id and tiktok_pixel_id.strip() else None,
         tiktok_access_token=encrypt_token(tiktok_access_token.strip()) if tiktok_access_token and tiktok_access_token.strip() else None,
         ga4_measurement_id=ga4_measurement_id.strip() if ga4_measurement_id and ga4_measurement_id.strip() else None,
@@ -601,6 +728,8 @@ async def add_client(
     db.add(new_client)
     await db.commit()
     await db.refresh(new_client)
+    await log_admin_action(db, request, username, "client.added", new_client.id, f"Client {name} added")
+    await db.commit()
     logger.info(f"New client added: {name}")
 
     return admin_redirect(f"✅ {name} সফলভাবে যোগ হয়েছে!")
@@ -626,8 +755,17 @@ async def client_instructions(
     tracker_url = f"{base_url}/t.js?key={tracker_key}"
     safe_client_name = html.escape(client.name, quote=True)
     safe_api_key = html.escape(client.api_key, quote=True)
+    safe_portal_key = html.escape(getattr(client, "portal_key", None) or client.api_key, quote=True)
+    safe_public_key = html.escape(getattr(client, "public_key", None) or "", quote=True)
+    masked_api_key = html.escape(mask_secret(client.api_key))
+    masked_portal_key = html.escape(mask_secret(getattr(client, "portal_key", None) or client.api_key))
+    masked_public_key = html.escape(mask_secret(getattr(client, "public_key", None) or ""))
     safe_endpoint = html.escape(endpoint, quote=True)
     safe_tracker_url = html.escape(tracker_url, quote=True)
+    safe_capi_origin = html.escape(
+        f"https://{client.domain}" if client.domain else "https://your-domain.com",
+        quote=True,
+    )
 
     body = f"""
     <h1 class="page-title">📋 Client Instructions</h1>
@@ -637,7 +775,36 @@ async def client_instructions(
       <div class="card-title"><span class="icon">🔑</span> আপনার API Key</div>
       <p style="color:#888;font-size:13px;margin-bottom:10px">এই Key-টি গোপন রাখুন। কখনো Browser/JS-এ পাবলিকলি রাখবেন না। শুধু সার্ভার বা GTM থেকে ব্যবহার করুন।</p>
       <button class="copy-btn" onclick="copyText('api_key')">Copy</button>
-      <div class="instr-box" id="api_key">{safe_api_key}</div>
+      <button class="copy-btn" onclick="revealSecret('api_key')" style="margin-right:6px">Show</button>
+      <div class="instr-box" id="api_key" data-secret="{safe_api_key}" data-masked="{masked_api_key}" data-hidden="1">{masked_api_key}</div>
+    </div>
+
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-title"><span class="icon">🔐</span> Client Portal Login Key</div>
+      <p style="color:#888;font-size:13px;margin-bottom:10px">Client Portal login-এর জন্য এই আলাদা key ব্যবহার করুন। API Key শুধু server/plugin request-এর জন্য রাখুন।</p>
+      <button class="copy-btn" onclick="copyText('portal_key')">Copy</button>
+      <button class="copy-btn" onclick="revealSecret('portal_key')" style="margin-right:6px">Show</button>
+      <div class="instr-box" id="portal_key" data-secret="{safe_portal_key}" data-masked="{masked_portal_key}" data-hidden="1">{masked_portal_key}</div>
+    </div>
+
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-title"><span class="icon">Keys</span> Key Management</div>
+      <p style="color:#888;font-size:13px;margin-bottom:12px">Key rotate করলে পুরনো key সঙ্গে সঙ্গে invalid হবে। আগে staging/client setup update করে নিন।</p>
+      <div class="instr-box" id="public_key" data-secret="{safe_public_key}" data-masked="{masked_public_key}" data-hidden="1">{masked_public_key}</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+        <form method="post" action="/api/v1/admin/client/{client.id}/rotate-api-key" onsubmit="return confirm('Rotate server API key? Plugin/server integrations must be updated.')">
+          <input type="hidden" name="csrf_token" value="{create_admin_csrf_token(username)}">
+          <button type="submit" class="btn-sm btn-danger">Rotate API Key</button>
+        </form>
+        <form method="post" action="/api/v1/admin/client/{client.id}/rotate-public-key" onsubmit="return confirm('Rotate browser tracker public key? t.js URLs must be updated.')">
+          <input type="hidden" name="csrf_token" value="{create_admin_csrf_token(username)}">
+          <button type="submit" class="btn-sm btn-info">Rotate Public Key</button>
+        </form>
+        <form method="post" action="/api/v1/admin/client/{client.id}/rotate-portal-key" onsubmit="return confirm('Rotate client portal login key?')">
+          <input type="hidden" name="csrf_token" value="{create_admin_csrf_token(username)}">
+          <button type="submit" class="btn-sm btn-info">Rotate Portal Key</button>
+        </form>
+      </div>
     </div>
 
     <div class="card" style="margin-bottom:20px">
@@ -672,6 +839,7 @@ Content-Type: application/json
 
 Headers:
   X-API-Key: {safe_api_key}
+  X-CAPI-Origin: {safe_capi_origin}
 
 Body (JSON):
 {{
@@ -820,7 +988,8 @@ function send_capi_event($event_name, $url, $value, $event_id, $product_id) {{
         'body' => json_encode($data),
         'headers' => [
             'Content-Type' => 'application/json',
-            'X-API-Key' => '{safe_api_key}'
+            'X-API-Key' => '{safe_api_key}',
+            'X-CAPI-Origin' => '{safe_capi_origin}'
         ],
         'blocking' => false
     ]);
@@ -838,6 +1007,7 @@ function send_capi_event($event_name, $url, $value, $event_id, $product_id) {{
         <div class="instr-box" id="curl_ex">curl -X POST "{safe_endpoint}" \\
   -H "Content-Type: application/json" \\
   -H "X-API-Key: $CAPI_API_KEY" \\
+  -H "X-CAPI-Origin: {safe_capi_origin}" \\
   -d '{{
     "data": [{{
       "event_name": "Purchase",
@@ -948,14 +1118,92 @@ function send_capi_event($event_name, $url, $value, $event_id, $product_id) {{
     return HTMLResponse(base_html(f"Instructions — {client.name}", body))
 
 
+async def rotate_client_key(
+    db: AsyncSession,
+    request: Request,
+    username: str,
+    client_id: int,
+    key_type: str,
+) -> RedirectResponse:
+    result = await db.execute(select(Client).where(Client.id == client_id))
+    client = result.scalar_one_or_none()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    old_api_key = client.api_key
+    if key_type == "api":
+        client.api_key = secrets.token_urlsafe(32)
+        message = "API key rotated. Update WordPress plugin/server integrations."
+        action = "client.api_key_rotated"
+    elif key_type == "public":
+        client.public_key = secrets.token_urlsafe(24)
+        message = "Public tracker key rotated. Update t.js script URLs."
+        action = "client.public_key_rotated"
+    elif key_type == "portal":
+        client.portal_key = secrets.token_urlsafe(24)
+        message = "Portal login key rotated."
+        action = "client.portal_key_rotated"
+    else:
+        raise HTTPException(status_code=400, detail="Invalid key type")
+
+    await log_admin_action(db, request, username, action, client_id)
+    await db.commit()
+
+    from app.dependencies import clear_client_cache
+    clear_client_cache(old_api_key)
+
+    return admin_redirect(message)
+
+
+@router.post("/admin/client/{client_id}/rotate-api-key", include_in_schema=False)
+async def rotate_api_key(
+    client_id: int,
+    request: Request,
+    username: str = Depends(verify_admin),
+    csrf_token: str = Form(...),
+    db: AsyncSession = Depends(get_db),
+):
+    verify_admin_csrf_token(csrf_token, username)
+    return await rotate_client_key(db, request, username, client_id, "api")
+
+
+@router.post("/admin/client/{client_id}/rotate-public-key", include_in_schema=False)
+async def rotate_public_key(
+    client_id: int,
+    request: Request,
+    username: str = Depends(verify_admin),
+    csrf_token: str = Form(...),
+    db: AsyncSession = Depends(get_db),
+):
+    verify_admin_csrf_token(csrf_token, username)
+    return await rotate_client_key(db, request, username, client_id, "public")
+
+
+@router.post("/admin/client/{client_id}/rotate-portal-key", include_in_schema=False)
+async def rotate_portal_key(
+    client_id: int,
+    request: Request,
+    username: str = Depends(verify_admin),
+    csrf_token: str = Form(...),
+    db: AsyncSession = Depends(get_db),
+):
+    verify_admin_csrf_token(csrf_token, username)
+    return await rotate_client_key(db, request, username, client_id, "portal")
+
+
 @router.post("/admin/client/{client_id}/deactivate", include_in_schema=False)
 async def deactivate_client(
     client_id: int,
+    request: Request,
     username: str = Depends(verify_admin),
+    csrf_token: str = Form(...),
     db: AsyncSession = Depends(get_db),
 ):
+    verify_admin_csrf_token(csrf_token, username)
+
     result = await db.execute(update(Client).where(Client.id == client_id).values(is_active=False).returning(Client.api_key))
     api_key = result.scalar()
+    await log_admin_action(db, request, username, "client.deactivated", client_id)
     await db.commit()
     
     if api_key:
@@ -968,11 +1216,16 @@ async def deactivate_client(
 @router.post("/admin/client/{client_id}/activate", include_in_schema=False)
 async def activate_client(
     client_id: int,
+    request: Request,
     username: str = Depends(verify_admin),
+    csrf_token: str = Form(...),
     db: AsyncSession = Depends(get_db),
 ):
+    verify_admin_csrf_token(csrf_token, username)
+
     result = await db.execute(update(Client).where(Client.id == client_id).values(is_active=True).returning(Client.api_key))
     api_key = result.scalar()
+    await log_admin_action(db, request, username, "client.activated", client_id)
     await db.commit()
     
     if api_key:

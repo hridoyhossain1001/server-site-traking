@@ -23,6 +23,7 @@ class CachedClient:
     name: str
     api_key: str
     public_key: str | None
+    portal_key: str | None
     pixel_id: str
     access_token: str
     test_event_code: str | None
@@ -55,6 +56,7 @@ def _snapshot(client: Client) -> CachedClient:
         name=client.name,
         api_key=client.api_key,
         public_key=getattr(client, 'public_key', None),
+        portal_key=getattr(client, 'portal_key', None),
         pixel_id=client.pixel_id,
         access_token=client.access_token,
         test_event_code=client.test_event_code,
@@ -86,7 +88,24 @@ async def get_current_client(
     if not x_api_key:
         encrypted_session = request.cookies.get("client_session")
         if encrypted_session:
-            x_api_key = decrypt_token(encrypted_session)
+            decrypted = decrypt_token(encrypted_session)
+            if decrypted and decrypted.startswith("client:"):
+                import secrets
+                try:
+                    _, client_id_str, session_secret = decrypted.split(":", 2)
+                    result = await db.execute(select(Client).where(Client.id == int(client_id_str)))
+                    portal_client = result.scalar_one_or_none()
+                    
+                    if portal_client:
+                        expected_secret = getattr(portal_client, "portal_key", None)
+                        if expected_secret and secrets.compare_digest(session_secret, expected_secret):
+                            x_api_key = portal_client.api_key
+                        elif not expected_secret and secrets.compare_digest(session_secret, portal_client.api_key):
+                            x_api_key = portal_client.api_key
+                except (TypeError, ValueError):
+                    pass
+            else:
+                x_api_key = decrypted
 
     if not x_api_key:
         raise HTTPException(

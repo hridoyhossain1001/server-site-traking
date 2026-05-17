@@ -11,9 +11,11 @@ Endpoints:
 """
 
 import logging
+import hmac
+import os
 from datetime import datetime, timezone, timedelta
 
-from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi import APIRouter, Depends, Query, HTTPException, Header
 from pydantic import BaseModel
 from typing import Optional, List
 from sqlalchemy import select, and_, func as sql_func
@@ -261,12 +263,13 @@ async def client_usage(
 )
 async def admin_clients_health(
     db: AsyncSession = Depends(get_db),
-    api_key: str = Query(..., description="Admin API Key"),
+    x_admin_api_key: str = Header(None, alias="X-Admin-API-Key"),
 ):
     """অ্যাডমিন — সব ক্লায়েন্টের health status এক পেজে দেখুন"""
-    import os
     admin_key = os.getenv("ADMIN_API_KEY", "")
-    if api_key != admin_key:
+    if not admin_key:
+        raise HTTPException(status_code=503, detail="Admin API key is not configured")
+    if not x_admin_api_key or not hmac.compare_digest(x_admin_api_key, admin_key):
         raise HTTPException(status_code=403, detail="Admin access required")
 
     now = datetime.now(timezone.utc)

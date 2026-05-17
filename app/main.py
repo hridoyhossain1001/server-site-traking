@@ -18,6 +18,12 @@ from app.routers.debug import router as debug_router
 from app.limiter import limiter
 import os
 
+ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "")
+if not ADMIN_API_KEY:
+    raise RuntimeError("ADMIN_API_KEY environment variable is required.")
+
+ENABLE_DOCS = os.getenv("ENABLE_DOCS", "").lower() in ("true", "1", "yes")
+
 # ─── Logging Setup ───────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
@@ -84,8 +90,9 @@ app = FastAPI(
     description="Multi-tenant Facebook Conversion API Gateway — Server-Side Tracking as a Service",
     version="1.1.0",
     lifespan=lifespan,
-    docs_url="/docs",         # Swagger UI
-    redoc_url="/redoc",
+    docs_url="/docs" if ENABLE_DOCS else None,
+    redoc_url="/redoc" if ENABLE_DOCS else None,
+    openapi_url="/openapi.json" if ENABLE_DOCS else None,
     default_response_class=ORJSONResponse,  # 🚀 orjson = C-based, 2-3x faster!
 )
 
@@ -96,13 +103,13 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # ব্রাউজার ট্র্যাকার (t.js) যেকোনো ক্লায়েন্ট ওয়েবসাইট থেকে cross-origin request পাঠায়।
 # Deploy-time-এ সব ক্লায়েন্ট ডোমেইন জানা সম্ভব নয়, তাই CORS open রাখা হয়েছে।
 # প্রকৃত নিরাপত্তা → per-client domain whitelisting (events.py ও tracker.py-তে enforce হয়)।
-# allow_credentials=True কারণ Client Portal cookie-based session (client_session) ব্যবহার করে।
+# Client Portal same-origin cookie ব্যবহার করে; public tracker CORS-এ credentials লাগে না।
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["GET", "POST"],
-    allow_headers=["X-API-Key", "Content-Type"],
+    allow_headers=["X-API-Key", "X-CAPI-Origin", "Content-Type"],
 )
 
 # ─── Routers ─────────────────────────────────────────────────────────────────

@@ -89,10 +89,11 @@ function capigw_confirm_order( $order_id ) {
 
     $response = wp_remote_post( $url, array(
         'timeout'   => 15,
-        'sslverify' => false,
+        'sslverify' => true,
         'headers'   => array(
             'Content-Type' => 'application/json',
             'X-API-Key'    => $settings['api_key'],
+            'X-CAPI-Origin'=> capigw_site_origin(),
         ),
         'body'      => wp_json_encode( array(
             'order_id' => (string) $order_id,

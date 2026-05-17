@@ -6,15 +6,17 @@ WordPress প্লাগইনের অটো-আপডেট সিস্ট�
 """
 
 import os
+import hashlib
+import hmac
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 
 router = APIRouter(tags=["Plugin"])
 
 # Current plugin version — নতুন ভার্সন রিলিজ করলে এখানে আপডেট করুন
-PLUGIN_VERSION = os.getenv("PLUGIN_VERSION", "1.1.0")
+PLUGIN_VERSION = os.getenv("PLUGIN_VERSION", "1.1.1")
 PLUGIN_ZIP_PATH = Path(
     os.getenv(
         "PLUGIN_ZIP_PATH",
@@ -32,11 +34,29 @@ PLUGIN_DOWNLOAD_URL = os.getenv(
     summary="Check for plugin updates",
     description="WordPress প্লাগইন এই endpoint-এ রিকোয়েস্ট পাঠিয়ে নতুন ভার্সন চেক করে।",
 )
-async def plugin_update_check():
+async def plugin_update_check(x_api_key: str = Header("", alias="X-API-Key")):
     """Return current plugin version info for WordPress auto-updater."""
+    package_sha256 = ""
+    if PLUGIN_ZIP_PATH.is_file():
+        package_sha256 = hashlib.sha256(PLUGIN_ZIP_PATH.read_bytes()).hexdigest()
+
+    signature = ""
+    if x_api_key and package_sha256:
+        payload = f"{PLUGIN_VERSION}|{PLUGIN_DOWNLOAD_URL}|{package_sha256}"
+        signature = hmac.new(
+            x_api_key.encode("utf-8"),
+            payload.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+    return _plugin_update_response(package_sha256, signature)
+
+
+def _plugin_update_response(package_sha256: str, signature: str) -> JSONResponse:
     return JSONResponse(content={
         "version": PLUGIN_VERSION,
         "download_url": PLUGIN_DOWNLOAD_URL,
+        "package_sha256": package_sha256,
+        "signature": signature,
         "homepage": "https://still-stream-48626-bb0ac4cda957.herokuapp.com/",
         "requires": "5.8",
         "tested": "6.7",

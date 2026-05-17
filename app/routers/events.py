@@ -183,16 +183,25 @@ async def receive_events(
     if client.domain:
         origin = request.headers.get("origin", "") or ""
         referer = request.headers.get("referer", "") or ""
+        declared_origin = request.headers.get("x-capi-origin", "") or ""
         allowed_domain = client.domain.lower().strip()
         origin_host = (urlparse(origin).hostname or "").lower()
         referer_host = (urlparse(referer).hostname or "").lower()
-        if (origin_host or referer_host) and not (
+        declared_host = (urlparse(declared_origin).hostname or declared_origin).lower().strip()
+        if not (origin_host or referer_host or declared_host):
+            logger.warning(f"[{client.name}] Domain header missing for locked domain: {allowed_domain}")
+            raise HTTPException(
+                status_code=403,
+                detail="Missing domain proof. Send Origin, Referer, or X-CAPI-Origin for this API Key.",
+            )
+        if not (
             _is_domain_allowed(origin_host, allowed_domain)
             or _is_domain_allowed(referer_host, allowed_domain)
+            or _is_domain_allowed(declared_host, allowed_domain)
         ):
             logger.warning(
                 f"[{client.name}] Domain mismatch! "
-                f"Allowed: {allowed_domain}, Origin: {origin_host}, Referer: {referer_host}"
+                f"Allowed: {allowed_domain}, Origin: {origin_host}, Referer: {referer_host}, Declared: {declared_host}"
             )
             raise HTTPException(
                 status_code=403,

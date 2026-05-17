@@ -13,6 +13,7 @@ class Client(Base):
                      default=lambda: secrets.token_urlsafe(32))
     public_key = Column(String, unique=True, nullable=False,       # Browser-safe tracker key
                         default=lambda: secrets.token_urlsafe(24))
+    portal_key = Column(String, unique=True, nullable=True)        # Client portal login secret
     pixel_id = Column(String, nullable=False)                      # Facebook Pixel ID
     access_token = Column(String, nullable=False)                  # CAPI Access Token (encrypted)
     test_event_code = Column(String, nullable=True)               # FB Test Event Code (optional)

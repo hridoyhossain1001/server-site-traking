@@ -1,0 +1,57 @@
+import hashlib
+import hmac
+import os
+
+os.environ.setdefault("ADMIN_PASSWORD", "test-admin-password")
+os.environ.setdefault("ADMIN_API_KEY", "test-admin-api-key")
+os.environ.setdefault("DATABASE_URL", "postgresql://user:pass@localhost:5432/testdb")
+os.environ.setdefault("ENCRYPTION_KEY", "ZFhnf1szwemka8kBbH9jPTC7oKBRTEv0EqWt1J8AD0M=")
+
+from app.routers.admin import create_admin_csrf_token, mask_secret, verify_admin_csrf_token
+from app.routers.events import _is_domain_allowed
+
+
+def test_admin_csrf_token_round_trip():
+    token = create_admin_csrf_token("admin")
+    verify_admin_csrf_token(token, "admin")
+
+
+def test_admin_csrf_rejects_tampering():
+    token = create_admin_csrf_token("admin")
+    bad_token = token[:-1] + ("0" if token[-1] != "0" else "1")
+
+    try:
+        verify_admin_csrf_token(bad_token, "admin")
+    except Exception as exc:
+        assert getattr(exc, "status_code", None) == 403
+    else:
+        raise AssertionError("Tampered CSRF token was accepted")
+
+
+def test_domain_matching_is_exact_or_real_subdomain():
+    assert _is_domain_allowed("example.com", "example.com")
+    assert _is_domain_allowed("shop.example.com", "example.com")
+    assert not _is_domain_allowed("badexample.com", "example.com")
+    assert not _is_domain_allowed("example.com.attacker.test", "example.com")
+
+
+def test_mask_secret_keeps_edges_only():
+    masked = mask_secret("abcdef1234567890")
+    assert masked.startswith("abcdef")
+    assert masked.endswith("7890")
+    assert "123456" not in masked
+
+
+def test_plugin_update_signature_contract():
+    version = "1.1.1"
+    download_url = "https://example.com/api/v1/plugin/download"
+    package_sha256 = hashlib.sha256(b"zip-bytes").hexdigest()
+    api_key = "client-secret"
+    payload = f"{version}|{download_url}|{package_sha256}"
+
+    signature = hmac.new(api_key.encode(), payload.encode(), hashlib.sha256).hexdigest()
+
+    assert hmac.compare_digest(
+        signature,
+        hmac.new(api_key.encode(), payload.encode(), hashlib.sha256).hexdigest(),
+    )

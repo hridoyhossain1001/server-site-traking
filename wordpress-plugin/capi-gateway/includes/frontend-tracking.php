@@ -193,9 +193,7 @@ function capigw_ajax_track_event() {
 
     // ─── Origin Validation (replaces nonce for cache-safe security) ─────
     $allowed_host = parse_url( home_url(), PHP_URL_HOST );
-    if ( $allowed_host ) {
-        $allowed_host = str_replace( 'www.', '', $allowed_host );
-    } else {
+    if ( ! $allowed_host ) {
         $allowed_host = $_SERVER['HTTP_HOST'] ?? '';
     }
 
@@ -207,7 +205,7 @@ function capigw_ajax_track_event() {
     // Check Origin
     if ( ! empty( $request_origin ) ) {
         $origin_host = parse_url( $request_origin, PHP_URL_HOST );
-        if ( $origin_host && strpos( str_replace( 'www.', '', $origin_host ), $allowed_host ) !== false ) {
+        if ( capigw_host_allowed( $origin_host, $allowed_host ) ) {
             $origin_valid = true;
         }
     }
@@ -215,7 +213,7 @@ function capigw_ajax_track_event() {
     // Check Referer if Origin is missing or invalid
     if ( ! $origin_valid && ! empty( $request_referer ) ) {
         $referer_host = parse_url( $request_referer, PHP_URL_HOST );
-        if ( $referer_host && strpos( str_replace( 'www.', '', $referer_host ), $allowed_host ) !== false ) {
+        if ( capigw_host_allowed( $referer_host, $allowed_host ) ) {
             $origin_valid = true;
         }
     }
@@ -408,10 +406,11 @@ function capigw_track_purchase( $order_id ) {
 
         $response = wp_remote_post( $url, array(
             'timeout'   => 10,
-            'sslverify' => false,
+            'sslverify' => true,
             'headers'   => array(
                 'Content-Type' => 'application/json',
                 'X-API-Key'    => $settings['api_key'],
+                'X-CAPI-Origin'=> capigw_site_origin(),
             ),
             'body'      => wp_json_encode( array( 'data' => array( $event_payload ) ) ),
         ) );

@@ -96,6 +96,7 @@ DATABASE_URL অটো সেট হয়ে যাবে।
 ```powershell
 # Admin credentials
 heroku config:set ADMIN_USERNAME=admin ADMIN_PASSWORD=your-strong-password -a capi-gateway-yourname
+heroku config:set ADMIN_API_KEY=your-long-random-admin-api-key -a capi-gateway-yourname
 
 # Encryption key (Token encryption-এর জন্য আবশ্যক)
 # প্রথমে key জেনারেট করুন:
@@ -105,7 +106,7 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 heroku config:set ENCRYPTION_KEY=your-generated-key-here -a capi-gateway-yourname
 ```
 
-> ⚠️ **Important:** `ENCRYPTION_KEY` না থাকলে app start হবে না। Production-এ এটি অবশ্যই সেট করতে হবে।
+> ⚠️ **Important:** `ENCRYPTION_KEY` এবং `ADMIN_API_KEY` না থাকলে app start হবে না। Production-এ API docs default বন্ধ থাকে; staging ছাড়া `ENABLE_DOCS=true` দেবেন না।
 
 ---
 
