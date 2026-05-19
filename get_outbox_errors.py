@@ -3,10 +3,9 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.future import select
 from app.models.event_outbox import EventOutbox
+from app.database import SQLALCHEMY_DATABASE_URL
 
-# Convert postgres:// to postgresql+asyncpg://
-db_url = "postgres://udkpb48hprqfvc:p7b7b481e4c1c4bc1395f6e41dc6937ddd8481674b737cda9557e97fa790d1ac8@c1k8s6ugvmiskq.cluster-czrs8kj4isg7.us-east-1.rds.amazonaws.com:5432/dej8gv9nr07p42"
-db_url = db_url.replace("postgres://", "postgresql+asyncpg://")
+db_url = SQLALCHEMY_DATABASE_URL
 
 engine = create_async_engine(db_url)
 async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
