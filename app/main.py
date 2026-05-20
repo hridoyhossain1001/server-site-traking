@@ -134,6 +134,8 @@ app.add_middleware(
 class HerokuRedirectMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         host = request.url.hostname or ""
+        if host in {"buykori.app", "www.buykori.app"} and request.url.path.startswith("/client"):
+            return RedirectResponse(url="https://client.buykori.app", status_code=308)
         if host.endswith(".herokuapp.com"):
             target_domain = os.getenv("PRIMARY_DOMAIN", "api.buykori.app")
             url = request.url.replace(hostname=target_domain)
