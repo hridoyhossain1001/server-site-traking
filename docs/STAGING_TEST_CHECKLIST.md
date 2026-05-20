@@ -5,7 +5,7 @@ Run this on a staging WordPress site before a production plugin release.
 ## Plugin Update Flow
 
 - Install the current working plugin.
-- Configure Gateway URL and API Key.
+- Configure AdSync API URL and API Key.
 - Trigger update check from WordPress Dashboard.
 - Confirm the update appears with the expected version.
 - Click update.
@@ -14,7 +14,7 @@ Run this on a staging WordPress site before a production plugin release.
 
 ## Tracking Flow
 
-- Test connection from CAPI Gateway settings.
+- Test connection from Buykori AdSync settings.
 - Visit the storefront homepage and confirm PageView reaches the gateway.
 - Open a product page and confirm ViewContent.
 - Add a product to cart and confirm AddToCart.

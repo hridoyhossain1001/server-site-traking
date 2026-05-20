@@ -1,10 +1,10 @@
-# CAPI Gateway সেটআপ গাইড
+# Buykori AdSync সেটআপ গাইড
 
 ## WordPress Plugin
 
-1. `wordpress-plugin/capi-gateway.zip` ইনস্টল করুন।
-2. WordPress Admin থেকে CAPI Gateway settings খুলুন।
-3. Gateway URL দিন।
+1. `wordpress-plugin/buykori-adsync.zip` ইনস্টল করুন।
+2. WordPress Admin থেকে Buykori AdSync settings খুলুন।
+3. AdSync API URL দিন।
 4. Server API Key দিন।
 5. Test Connection চালান।
 6. প্রয়োজনীয় event toggle চালু রাখুন।

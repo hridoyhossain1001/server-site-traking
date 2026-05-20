@@ -1,4 +1,4 @@
-# CAPI Gateway — Deployment Guide (Heroku CLI)
+# Buykori AdSync — Deployment Guide (Heroku CLI)
 
 ## প্রজেক্ট স্ট্রাকচার
 ```
@@ -67,7 +67,7 @@ heroku login
 ```powershell
 git init
 git add .
-git commit -m "Initial commit: CAPI Gateway"
+git commit -m "Initial commit: Buykori AdSync"
 ```
 
 ---
@@ -75,16 +75,16 @@ git commit -m "Initial commit: CAPI Gateway"
 ## ধাপ ৪ — Heroku App তৈরি করুন
 
 ```powershell
-heroku create capi-gateway-yourname
+heroku create buykori-adsync-yourname
 ```
-(yourname পরিবর্তন করুন, যেমন: capi-gateway-hridoy)
+(yourname পরিবর্তন করুন, যেমন: buykori-adsync-hridoy)
 
 ---
 
 ## ধাপ ৫ — Postgres Database যোগ করুন ($5/মাস)
 
 ```powershell
-heroku addons:create heroku-postgresql:essential-0 -a capi-gateway-yourname
+heroku addons:create heroku-postgresql:essential-0 -a buykori-adsync-yourname
 ```
 
 DATABASE_URL অটো সেট হয়ে যাবে।
@@ -95,15 +95,15 @@ DATABASE_URL অটো সেট হয়ে যাবে।
 
 ```powershell
 # Admin credentials
-heroku config:set ADMIN_USERNAME=admin ADMIN_PASSWORD=your-strong-password -a capi-gateway-yourname
-heroku config:set ADMIN_API_KEY=your-long-random-admin-api-key -a capi-gateway-yourname
+heroku config:set ADMIN_USERNAME=admin ADMIN_PASSWORD=your-strong-password -a buykori-adsync-yourname
+heroku config:set ADMIN_API_KEY=your-long-random-admin-api-key -a buykori-adsync-yourname
 
 # Encryption key (Token encryption-এর জন্য আবশ্যক)
 # প্রথমে key জেনারেট করুন:
 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 
 # তারপর সেট করুন:
-heroku config:set ENCRYPTION_KEY=your-generated-key-here -a capi-gateway-yourname
+heroku config:set ENCRYPTION_KEY=your-generated-key-here -a buykori-adsync-yourname
 ```
 
 > ⚠️ **Important:** `ENCRYPTION_KEY` এবং `ADMIN_API_KEY` না থাকলে app start হবে না। Production-এ API docs default বন্ধ থাকে; staging ছাড়া `ENABLE_DOCS=true` দেবেন না।
@@ -114,8 +114,8 @@ heroku config:set ENCRYPTION_KEY=your-generated-key-here -a capi-gateway-yournam
 
 ```powershell
 git push heroku main
-heroku run alembic upgrade head -a capi-gateway-yourname
-heroku ps:scale web=1 worker=1 -a capi-gateway-yourname
+heroku run alembic upgrade head -a buykori-adsync-yourname
+heroku ps:scale web=1 worker=1 -a buykori-adsync-yourname
 ```
 
 ---
@@ -123,24 +123,24 @@ heroku ps:scale web=1 worker=1 -a capi-gateway-yourname
 ## ধাপ ৮ — অ্যাপ চেক করুন
 
 ```powershell
-heroku open -a capi-gateway-yourname
+heroku open -a buykori-adsync-yourname
 ```
 
 অথবা ব্রাউজারে যান:
-- **Health Check:** `https://capi-gateway-yourname.herokuapp.com/`
-- **Admin Panel:** `https://capi-gateway-yourname.herokuapp.com/api/v1/admin`
-- **API Docs:** `https://capi-gateway-yourname.herokuapp.com/docs`
-- **System Status:** `https://capi-gateway-yourname.herokuapp.com/api/v1/health/detailed` (admin login লাগবে)
-- **FB Connectivity:** `https://capi-gateway-yourname.herokuapp.com/api/v1/health/facebook` (admin login লাগবে)
-- **Client Stats:** `https://capi-gateway-yourname.herokuapp.com/api/v1/stats/clients` (admin login লাগবে)
+- **Health Check:** `https://buykori-adsync-yourname.herokuapp.com/`
+- **Admin Panel:** `https://buykori-adsync-yourname.herokuapp.com/api/v1/admin`
+- **API Docs:** `https://buykori-adsync-yourname.herokuapp.com/docs`
+- **System Status:** `https://buykori-adsync-yourname.herokuapp.com/api/v1/health/detailed` (admin login লাগবে)
+- **FB Connectivity:** `https://buykori-adsync-yourname.herokuapp.com/api/v1/health/facebook` (admin login লাগবে)
+- **Client Stats:** `https://buykori-adsync-yourname.herokuapp.com/api/v1/stats/clients` (admin login লাগবে)
 
 ---
 
 ## ধাপ ৯ — Custom Domain যোগ করুন (Optional, Heroku লুকানোর জন্য)
 
 ```powershell
-heroku domains:add tracking.yourname.com -a capi-gateway-yourname
-heroku domains -a capi-gateway-yourname
+heroku domains:add tracking.yourname.com -a buykori-adsync-yourname
+heroku domains -a buykori-adsync-yourname
 ```
 
 DNS Target নোট করুন (যেমন: abc123.herokudns.com)।
@@ -171,22 +171,22 @@ SSL অটো সেটআপ হবে।
 
 ```powershell
 # লাইভ লগ দেখুন
-heroku logs --tail -a capi-gateway-yourname
+heroku logs --tail -a buykori-adsync-yourname
 
 # অ্যাপ রিস্টার্ট করুন
-heroku restart -a capi-gateway-yourname
+heroku restart -a buykori-adsync-yourname
 
 # Retry worker চালু আছে কিনা দেখুন
-heroku ps -a capi-gateway-yourname
+heroku ps -a buykori-adsync-yourname
 
 # ডাটাবেস চেক করুন
-heroku pg:info -a capi-gateway-yourname
+heroku pg:info -a buykori-adsync-yourname
 
 # Config vars দেখুন
-heroku config -a capi-gateway-yourname
+heroku config -a buykori-adsync-yourname
 
 # Alembic migration চালাতে (schema change-এর পর)
-heroku run alembic upgrade head -a capi-gateway-yourname
+heroku run alembic upgrade head -a buykori-adsync-yourname
 ```
 
 ---

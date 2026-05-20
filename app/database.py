@@ -22,15 +22,20 @@ DB_MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "2"))
 DB_POOL_RECYCLE = int(os.getenv("DB_POOL_RECYCLE", "300"))
 DB_POOL_TIMEOUT = int(os.getenv("DB_POOL_TIMEOUT", "10"))
 
-engine = create_async_engine(
-    DATABASE_URL,
-    echo=False,
-    pool_size=DB_POOL_SIZE,
-    max_overflow=DB_MAX_OVERFLOW,
-    pool_recycle=DB_POOL_RECYCLE,
-    pool_pre_ping=True,   # Dead connection auto-detect — avoids "connection reset" errors
-    pool_timeout=DB_POOL_TIMEOUT,
-)
+engine_options = {
+    "echo": False,
+    "pool_pre_ping": True,   # Dead connection auto-detect — avoids "connection reset" errors
+}
+
+if not DATABASE_URL.startswith("sqlite"):
+    engine_options.update(
+        pool_size=DB_POOL_SIZE,
+        max_overflow=DB_MAX_OVERFLOW,
+        pool_recycle=DB_POOL_RECYCLE,
+        pool_timeout=DB_POOL_TIMEOUT,
+    )
+
+engine = create_async_engine(DATABASE_URL, **engine_options)
 
 AsyncSessionLocal = async_sessionmaker(
     bind=engine,

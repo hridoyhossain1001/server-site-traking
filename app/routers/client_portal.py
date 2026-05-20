@@ -20,161 +20,286 @@ from app.limiter import limiter
 
 CLIENT_STYLE = """
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Outfit:wght@400;600;700;800&display=swap');
+
   :root {
-    --bg-main: #0f172a;
-    --bg-sidebar: #0b1220;
-    --bg-card: #111c33;
-    --bg-soft: #18243a;
-    --border: rgba(148, 163, 184, 0.18);
-    --primary: #4f46e5;
-    --primary-hover: #6366f1;
-    --text-main: #e5edf8;
-    --text-muted: #a8b3c7;
-    --accent: #22c55e;
+    --bg-main: #060b18;
+    --bg-sidebar: rgba(8, 14, 28, 0.98);
+    --bg-card: rgba(13, 20, 40, 0.85);
+    --bg-soft: rgba(22, 33, 62, 0.7);
+    --border: rgba(148, 163, 184, 0.1);
+    --border-glow: rgba(99, 102, 241, 0.3);
+    --primary: #3b82f6;
+    --primary-hover: #60a5fa;
+    --primary-glow: rgba(59, 130, 246, 0.25);
+    --violet: #8b5cf6;
+    --violet-glow: rgba(139, 92, 246, 0.25);
+    --cyan: #06b6d4;
+    --text-main: #e2eaf8;
+    --text-muted: #94a3b8;
+    --text-dim: #64748b;
+    --accent: #10b981;
+    --accent-glow: rgba(16, 185, 129, 0.25);
     --danger: #f87171;
+    --danger-glow: rgba(248, 113, 113, 0.2);
+    --warning: #f59e0b;
+    --sidebar-w: 272px;
   }
-  * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
   body {
-    background: var(--bg-main); color: var(--text-main); min-height: 100vh;
-    display: flex; overflow: hidden; line-height: 1.5;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    background: var(--bg-main);
+    background-image:
+      radial-gradient(ellipse at 0% 0%, rgba(59,130,246,0.12) 0%, transparent 50%),
+      radial-gradient(ellipse at 100% 100%, rgba(139,92,246,0.1) 0%, transparent 50%),
+      radial-gradient(ellipse at 50% 50%, rgba(6,182,212,0.04) 0%, transparent 60%);
+    color: var(--text-main);
+    min-height: 100vh; display: flex; overflow: hidden; line-height: 1.6; font-size: 14px;
   }
-  
-  /* Sidebar */
+
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(99,102,241,0.3); border-radius: 99px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(99,102,241,0.5); }
+
   .sidebar {
-    width: 260px; background: var(--bg-sidebar); border-right: 1px solid var(--border);
-    display: flex; flex-direction: column; padding: 22px 0; height: 100vh;
-    z-index: 10;
+    width: var(--sidebar-w); background: var(--bg-sidebar); border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; height: 100vh; z-index: 10;
+    backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); flex-shrink: 0;
   }
   .sidebar-logo {
-    font-size: 19px; font-weight: 700; color: #fff; padding: 0 22px 28px 22px;
-    letter-spacing: 0;
+    display: flex; align-items: center; gap: 12px; padding: 24px 20px 20px;
+    border-bottom: 1px solid var(--border); margin-bottom: 8px;
   }
-  .sidebar-logo span { color: #93c5fd; }
-  .sidebar-menu { display: flex; flex-direction: column; gap: 4px; flex: 1; padding: 0 12px; }
-  .nav-item {
-    display: flex; align-items: center; gap: 11px; width: 100%; padding: 11px 14px;
-    color: var(--text-muted); font-size: 14px; font-weight: 500;
-    border-radius: 8px; cursor: pointer; transition: all 0.2s ease;
-    text-decoration: none; border: 1px solid transparent; background: transparent; text-align: left;
+  .sidebar-logo-mark {
+    width: 38px; height: 38px; border-radius: 11px;
+    background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-weight: 900; font-size: 18px; font-family: 'Outfit', sans-serif;
+    box-shadow: 0 0 0 1px rgba(139,92,246,0.4), 0 8px 24px rgba(59,130,246,0.3);
+    flex-shrink: 0; position: relative; overflow: hidden;
   }
-  .nav-item:hover { background: rgba(148, 163, 184, 0.08); color: #fff; }
-  .nav-item.active { background: rgba(79, 70, 229, 0.16); color: #dbe4ff; border-color: rgba(129, 140, 248, 0.26); }
-  .nav-upgrade { background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%) !important; color: #fff !important; border-color: rgba(124,58,237,0.5) !important; font-weight: 700; }
-  .nav-upgrade:hover { background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%) !important; opacity: 0.92; }
-  .nav-icon { font-size: 16px; width: 20px; display: inline-flex; justify-content: center; }
-  
-  /* Main Content */
-  .main-content {
-    flex: 1; height: 100vh; overflow-y: auto; padding: 32px 24px 56px;
+  .sidebar-logo-mark::after {
+    content: ''; position: absolute; inset: 0;
+    background: linear-gradient(135deg, rgba(255,255,255,0.2) 0%, transparent 60%);
   }
-  .content-wrapper {
-    max-width: 1180px;
-    margin: 0 auto;
-    width: 100%;
-  }
-  .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 32px; }
-  .page-title { font-size: 28px; font-weight: 700; color: #fff; letter-spacing: 0; }
-  .page-sub { color: var(--text-muted); font-size: 14px; margin-top: 4px; }
+  .sidebar-logo-text { display: flex; flex-direction: column; line-height: 1.2; }
+  .sidebar-logo-text strong { font-size: 15px; font-weight: 800; color: #fff; font-family: 'Outfit', sans-serif; letter-spacing: -0.3px; }
+  .sidebar-logo-text small { font-size: 11px; color: #7c8fb5; font-weight: 500; margin-top: 1px; }
 
-  /* Hamburger for mobile */
-  .hamburger {
-    display: none; flex-direction: column; justify-content: center; gap: 5px;
-    background: #111c33; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; padding: 8px;
-    position: fixed; top: 16px; left: 16px; z-index: 200;
+  .sidebar-menu { display: flex; flex-direction: column; gap: 2px; flex: 1; padding: 8px 10px; overflow-y: auto; }
+
+  .nav-section-label {
+    font-size: 10px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.08em; color: var(--text-dim); padding: 12px 10px 6px;
   }
-  .hamburger span {
-    display: block; width: 22px; height: 2px;
-    background: #fff; border-radius: 2px; transition: all 0.3s;
+  .nav-item {
+    display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 12px;
+    color: var(--text-muted); font-size: 13.5px; font-weight: 500; border-radius: 9px;
+    cursor: pointer; transition: all 0.18s ease; text-decoration: none;
+    border: 1px solid transparent; background: transparent; text-align: left;
+    position: relative; overflow: hidden;
   }
-  .sidebar-overlay {
-    display: none; position: fixed; inset: 0;
-    background: rgba(0,0,0,0.6); z-index: 99;
+  .nav-item::before {
+    content: ''; position: absolute; left: 0; top: 0; bottom: 0;
+    width: 3px; border-radius: 0 3px 3px 0; background: transparent; transition: background 0.18s;
   }
+  .nav-item:hover { background: rgba(148,163,184,0.07); color: #cbd5e1; }
+  .nav-item.active {
+    background: linear-gradient(90deg, rgba(99,102,241,0.18) 0%, rgba(99,102,241,0.06) 100%);
+    color: #c7d2fe; border-color: rgba(129,140,248,0.2);
+  }
+  .nav-item.active::before { background: linear-gradient(180deg, #6366f1, #8b5cf6); }
+  .nav-icon { width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 15px; opacity: 0.8; }
+  .nav-item.active .nav-icon { opacity: 1; }
+  .nav-upgrade {
+    background: linear-gradient(135deg, rgba(79,70,229,0.3) 0%, rgba(124,58,237,0.2) 100%) !important;
+    color: #c4b5fd !important; border-color: rgba(124,58,237,0.35) !important; font-weight: 600;
+  }
+  .nav-upgrade:hover {
+    background: linear-gradient(135deg, rgba(99,102,241,0.4) 0%, rgba(139,92,246,0.3) 100%) !important;
+    color: #ddd6fe !important;
+  }
+
+  .sidebar-footer { padding: 12px 10px 16px; border-top: 1px solid var(--border); margin-top: 4px; }
+  .user-card {
+    display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px;
+    background: rgba(255,255,255,0.03); border: 1px solid var(--border); margin-bottom: 8px;
+  }
+  .user-avatar {
+    width: 34px; height: 34px; border-radius: 50%;
+    background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px; font-weight: 700; color: #fff; flex-shrink: 0;
+    box-shadow: 0 0 0 2px rgba(99,102,241,0.3);
+  }
+  .user-info { flex: 1; min-width: 0; }
+  .user-name { font-size: 13px; font-weight: 600; color: #e2eaf8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .user-role { font-size: 11px; color: var(--text-dim); }
+  .user-status {
+    width: 8px; height: 8px; border-radius: 50%; background: #10b981; flex-shrink: 0;
+    box-shadow: 0 0 0 2px rgba(16,185,129,0.25); animation: pulse-dot 2.5s ease infinite;
+  }
+  @keyframes pulse-dot {
+    0%, 100% { box-shadow: 0 0 0 2px rgba(16,185,129,0.25); }
+    50% { box-shadow: 0 0 0 4px rgba(16,185,129,0.12); }
+  }
+
+  .main-content { flex: 1; height: 100vh; overflow-y: auto; padding: 0 28px 60px; min-width: 0; }
+  .content-wrapper { max-width: 1180px; margin: 0 auto; width: 100%; }
+
+  .client-topbar {
+    position: sticky; top: 0; z-index: 8; min-height: 68px;
+    margin: 0 -28px 32px; padding: 0 28px; border-bottom: 1px solid var(--border);
+    background: rgba(6,11,24,0.88); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  }
+  .client-topbar-title { font-size: 12px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; }
+  .client-topbar-actions { display: flex; align-items: center; gap: 8px; }
+  .status-pill {
+    display: flex; align-items: center; gap: 6px;
+    border: 1px solid rgba(16,185,129,0.25); background: rgba(16,185,129,0.08); color: #6ee7b7;
+    border-radius: 999px; padding: 5px 12px; font-size: 11px; font-weight: 700;
+  }
+  .status-pill::before {
+    content: ''; width: 6px; height: 6px; border-radius: 50%; background: #10b981;
+    display: inline-block; animation: pulse-dot 2s infinite;
+  }
+  .topbar-btn {
+    border: 1px solid var(--border); background: rgba(255,255,255,0.04); color: var(--text-muted);
+    border-radius: 999px; padding: 7px 14px; font-size: 12px; font-weight: 600;
+    text-decoration: none; transition: all 0.2s; display: flex; align-items: center; gap: 5px;
+  }
+  .topbar-btn:hover { background: rgba(99,102,241,0.1); border-color: rgba(99,102,241,0.3); color: #c7d2fe; }
+
+  .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 28px; }
+  .page-title { font-size: 26px; font-weight: 800; color: #fff; letter-spacing: -0.5px; font-family: 'Outfit', sans-serif; line-height: 1.2; }
+  .page-sub { color: var(--text-muted); font-size: 13.5px; margin-top: 5px; }
+
+  .card {
+    background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px; padding: 22px;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.04);
+    margin-bottom: 20px; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  }
+  .card-title {
+    font-size: 15px; font-weight: 700; color: #fff; margin-bottom: 18px;
+    display: flex; align-items: center; gap: 8px; line-height: 1.35; font-family: 'Outfit', sans-serif;
+  }
+  .card-title .icon {
+    width: 30px; height: 30px; border-radius: 8px; background: rgba(99,102,241,0.15);
+    display: inline-flex; align-items: center; justify-content: center; font-size: 15px; flex-shrink: 0;
+  }
+
+  .stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 22px; }
+  .stat-box {
+    background: rgba(255,255,255,0.025); border: 1px solid var(--border);
+    border-radius: 12px; padding: 18px 20px; position: relative; overflow: hidden;
+    transition: border-color 0.2s, transform 0.2s;
+  }
+  .stat-box:hover { border-color: rgba(99,102,241,0.25); transform: translateY(-1px); }
+  .stat-box::before {
+    content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(99,102,241,0.4), transparent);
+  }
+  .stat-box .num { font-size: 30px; font-weight: 800; color: #fff; line-height: 1.1; font-family: 'Outfit', sans-serif; }
+  .stat-box .lbl { font-size: 11px; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.07em; margin-top: 6px; }
+  .stat-box .stat-icon { position: absolute; right: 16px; top: 16px; font-size: 22px; opacity: 0.2; }
+
+  .client-table { width: 100%; border-collapse: separate; border-spacing: 0; text-align: left; min-width: 720px; }
+  .client-table th { padding: 11px 14px; font-size: 11px; color: var(--text-dim); font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; border-bottom: 1px solid var(--border); background: rgba(255,255,255,0.02); }
+  .client-table td { padding: 13px 14px; font-size: 13px; border-bottom: 1px solid rgba(148,163,184,0.06); vertical-align: middle; transition: background 0.15s; }
+  .client-table tr:hover td { background: rgba(99,102,241,0.04); }
+  .client-table tr:last-child td { border-bottom: none; }
+  .card:has(.client-table) { overflow-x: auto; }
+
+  .badge { padding: 3px 9px; border-radius: 999px; font-size: 11px; font-weight: 700; display: inline-flex; align-items: center; gap: 4px; }
+  .badge-success { background: rgba(16,185,129,0.12); color: #6ee7b7; border: 1px solid rgba(16,185,129,0.22); }
+  .badge-error { background: rgba(248,113,113,0.1); color: #fca5a5; border: 1px solid rgba(248,113,113,0.22); }
+
+  .btn-sm { padding: 7px 14px; font-size: 12px; border-radius: 8px; border: 1px solid transparent; cursor: pointer; font-weight: 600; transition: all 0.18s ease; display: inline-flex; align-items: center; justify-content: center; gap: 5px; font-family: 'Inter', sans-serif; }
+  .btn-primary { background: linear-gradient(135deg, #3b82f6, #2563eb); color: #fff; box-shadow: 0 4px 14px rgba(59,130,246,0.3); }
+  .btn-primary:hover { background: linear-gradient(135deg, #60a5fa, #3b82f6); transform: translateY(-1px); box-shadow: 0 6px 20px rgba(59,130,246,0.4); }
+  .btn-danger { background: rgba(248,113,113,0.1); color: #fca5a5; border-color: rgba(248,113,113,0.22); }
+  .btn-danger:hover { background: rgba(248,113,113,0.18); color: #fff; border-color: rgba(248,113,113,0.4); }
+  .btn-info { background: rgba(99,102,241,0.12); color: #c7d2fe; border-color: rgba(99,102,241,0.22); }
+  .btn-info:hover { background: rgba(99,102,241,0.2); border-color: rgba(99,102,241,0.4); }
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    padding: 10px 20px; border-radius: 9px; background: linear-gradient(135deg, #3b82f6, #2563eb);
+    color: #fff; font-weight: 700; font-size: 14px; border: none; cursor: pointer; text-decoration: none;
+    transition: all 0.2s; box-shadow: 0 4px 14px rgba(59,130,246,0.3); font-family: 'Inter', sans-serif;
+  }
+  .btn:hover { background: linear-gradient(135deg, #60a5fa, #3b82f6); transform: translateY(-1px); box-shadow: 0 8px 24px rgba(59,130,246,0.4); }
+
+  .copy-btn {
+    background: rgba(99,102,241,0.15); color: #c7d2fe; border: 1px solid rgba(99,102,241,0.3);
+    border-radius: 7px; padding: 5px 12px; font-size: 12px; font-weight: 600;
+    cursor: pointer; transition: all 0.18s ease; float: right; margin-top: 16px; margin-right: 6px;
+    position: relative; z-index: 10; font-family: 'Inter', sans-serif;
+  }
+  .copy-btn:hover { background: rgba(99,102,241,0.28); border-color: rgba(99,102,241,0.5); transform: translateY(-1px); }
+
+  .instr-box {
+    background: rgba(2,8,22,0.9); border: 1px solid rgba(148,163,184,0.12); border-radius: 10px; padding: 14px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.7;
+    color: #bfdbfe; white-space: pre-wrap; word-break: break-all; margin-top: 8px;
+  }
+
+  .tabs { display: flex; gap: 4px; margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 0; overflow-x: auto; }
+  .tab-btn {
+    background: transparent; border: none; border-bottom: 2px solid transparent;
+    color: var(--text-muted); font-size: 13px; font-weight: 600; cursor: pointer; padding: 10px 14px;
+    border-radius: 0; transition: all 0.18s; white-space: nowrap; margin-bottom: -1px; font-family: 'Inter', sans-serif;
+  }
+  .tab-btn:hover { color: #cbd5e1; }
+  .tab-btn.active { color: #818cf8; border-bottom-color: #6366f1; }
+
+  .inner-tab-content { display: none; animation: fadeIn 0.25s ease; }
+  .inner-tab-content.active { display: block; }
+  .tab-pane { display: none; animation: fadeIn 0.28s ease; }
+  .tab-pane.active { display: block; }
+
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+
+  .form-group { margin-bottom: 18px; }
+  .form-group label { display: block; font-size: 13px; font-weight: 600; color: var(--text-muted); margin-bottom: 7px; }
+  .form-group input { width: 100%; padding: 11px 14px; background: rgba(0,0,0,0.35); border: 1px solid var(--border); border-radius: 9px; color: #fff; font-size: 14px; outline: none; transition: border-color 0.18s, box-shadow 0.18s; font-family: 'Inter', sans-serif; }
+  .form-group input:focus { border-color: rgba(99,102,241,0.5); box-shadow: 0 0 0 3px rgba(99,102,241,0.12); }
+
+  .alert { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-radius: 10px; font-size: 13px; font-weight: 500; margin-bottom: 16px; }
+  .alert-error { background: rgba(248,113,113,0.1); border: 1px solid rgba(248,113,113,0.25); color: #fca5a5; }
+  .alert-success { background: rgba(16,185,129,0.1); border: 1px solid rgba(16,185,129,0.25); color: #6ee7b7; }
+
+  .hamburger { display: none; flex-direction: column; justify-content: center; gap: 5px; background: rgba(13,20,40,0.9); border: 1px solid var(--border); border-radius: 9px; cursor: pointer; padding: 9px; position: fixed; top: 14px; left: 14px; z-index: 200; backdrop-filter: blur(12px); }
+  .hamburger span { display: block; width: 20px; height: 2px; background: #a0aec0; border-radius: 2px; transition: all 0.3s; }
+  .sidebar-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.65); z-index: 99; backdrop-filter: blur(4px); }
   .sidebar-overlay.open { display: block; }
 
-  /* Mobile */
   @media (max-width: 768px) {
     body { overflow: auto; }
     .hamburger { display: flex; }
-    .sidebar {
-      position: fixed; left: -280px; top: 0; height: 100vh;
-      width: 260px; z-index: 100;
-      transition: left 0.3s ease; overflow-y: auto;
-    }
-    .sidebar.open { left: 0; box-shadow: 4px 0 24px rgba(0,0,0,0.5); }
-    .main-content {
-      height: auto; min-height: 100vh;
-      padding: 72px 16px 24px 16px;
-    }
+    .sidebar { position: fixed; left: -290px; top: 0; height: 100vh; width: 270px; z-index: 100; transition: left 0.28s cubic-bezier(0.4,0,0.2,1); overflow-y: auto; }
+    .sidebar.open { left: 0; box-shadow: 8px 0 40px rgba(0,0,0,0.6); }
+    .main-content { height: auto; min-height: 100vh; padding: 0 14px 24px; }
+    .client-topbar { margin: 0 -14px 22px; padding: 0 14px 0 60px; }
+    .client-topbar-actions .topbar-btn { display: none; }
     .content-wrapper { max-width: 100%; }
-    .header { margin-bottom: 20px; }
-    .page-title { font-size: 22px; }
-    .stat-row { grid-template-columns: 1fr 1fr; gap: 12px; }
-    .stat-box .num { font-size: 22px; }
-    .card { padding: 16px; border-radius: 10px; }
-    .client-table td, .client-table th { padding: 10px 8px; font-size: 12px; }
-    .tabs { gap: 6px; }
-    .tab-btn { font-size: 12px; padding: 6px 10px; }
+    .header { margin-bottom: 18px; }
+    .page-title { font-size: 20px; }
+    .stat-row { grid-template-columns: 1fr 1fr; gap: 10px; }
+    .stat-box .num { font-size: 24px; }
+    .card { padding: 14px; border-radius: 12px; }
+    .client-table td, .client-table th { padding: 9px 10px; font-size: 12px; }
+    .tabs { gap: 2px; }
+    .tab-btn { font-size: 12px; padding: 8px 10px; }
   }
   @media (max-width: 480px) {
     .stat-row { grid-template-columns: 1fr; }
-    .main-content { padding: 68px 12px 20px 12px; }
+    .main-content { padding: 60px 12px 20px; }
+    .client-topbar { margin: 0 -12px 20px; padding-left: 56px; }
   }
-  
-  /* Tabs */
-  .tab-pane { display: none; animation: fadeIn 0.3s ease; }
-  .tab-pane.active { display: block; }
-  @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
-  
-  /* Shared components */
-  .card {
-    background: linear-gradient(180deg, rgba(255,255,255,0.035), rgba(255,255,255,0.015)), var(--bg-card); border: 1px solid var(--border); border-radius: 10px;
-    padding: 24px; box-shadow: 0 14px 40px rgba(2, 6, 23, 0.16);
-    margin-bottom: 24px;
-  }
-  .card-title {
-    font-size: 16px; font-weight: 700; color: #fff; margin-bottom: 20px;
-    display: flex; align-items: center; gap: 8px; line-height: 1.35;
-  }
-  .stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
-  .stat-box { background: rgba(15,23,42,0.45); border: 1px solid var(--border); border-radius: 10px; padding: 18px; }
-  .stat-box .num { font-size: 28px; font-weight: 700; color: #fff; line-height: 1.2; }
-  .stat-box .lbl { font-size: 12px; color: var(--text-muted); font-weight: 700; text-transform: uppercase; margin-top: 5px; }
-  
-  .client-table { width: 100%; border-collapse: separate; border-spacing: 0; text-align: left; }
-  .client-table th { padding: 12px 14px; font-size: 12px; color: var(--text-muted); font-weight: 700; border-bottom: 1px solid var(--border); background: rgba(15,23,42,0.35); }
-  .client-table td { padding: 14px; font-size: 13px; border-bottom: 1px solid rgba(148,163,184,0.08); vertical-align: middle; }
-  .client-table tr:hover td { background: rgba(148,163,184,0.06); }
-  
-  .badge { padding: 4px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; display: inline-block; }
-  .badge-success { background: rgba(34, 197, 94, 0.13); color: #86efac; border: 1px solid rgba(34, 197, 94, 0.24); }
-  .badge-error { background: rgba(248, 113, 113, 0.12); color: #fecaca; border: 1px solid rgba(248, 113, 113, 0.24); }
-  
-  .btn-sm { padding: 7px 12px; font-size: 12px; border-radius: 7px; border: 1px solid transparent; cursor: pointer; font-weight: 700; transition: background 0.2s, border-color 0.2s; display: inline-flex; align-items: center; justify-content: center; gap: 4px;}
-  .btn-primary { background: var(--primary); color: #fff; }
-  .btn-primary:hover { background: var(--primary-hover); }
-  .btn-danger { background: rgba(248,113,113,0.12); color: #fecaca; border-color: rgba(248,113,113,0.24); }
-  .btn-danger:hover { background: rgba(248,113,113,0.18); color: #fff; }
-  .btn-info { background: rgba(99,102,241,0.14); color: #dbe4ff; border-color: rgba(99,102,241,0.24); }
-  .btn-info:hover { background: rgba(99,102,241,0.22); }
-  
-  .copy-btn {
-    background: #4f46e5; color: #fff; border: 1px solid #6366f1; border-radius: 6px;
-    padding: 6px 12px; font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.2s ease;
-    float: right; margin-top: 18px; margin-right: 8px; position: relative; z-index: 10;
-  }
-  .copy-btn:hover { background: #6366f1; transform: translateY(-1px); }
-  .instr-box { background: #0b1220; border: 1px solid rgba(148,163,184,0.18); border-radius: 8px; padding: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; color: #dbeafe; white-space: pre-wrap; word-break: break-all; margin-top: 8px; }
-  
-  .tabs { display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 10px; overflow-x: auto; }
-  .tab-btn { background: transparent; border: 1px solid transparent; color: var(--text-muted); font-size: 14px; font-weight: 700; cursor: pointer; padding: 8px 12px; border-radius: 8px; transition: all 0.2s; white-space: nowrap; }
-  .tab-btn:hover { color: #fff; background: rgba(255,255,255,0.05); }
-  .tab-btn.active { color: #fff; background: rgba(99, 102, 241, 0.16); border-color: rgba(99, 102, 241, 0.32); }
-  .inner-tab-content { display: none; animation: fadeIn 0.3s ease; }
-  .inner-tab-content.active { display: block; }
-  .card:has(.client-table) { overflow-x: auto; }
-  .client-table { min-width: 720px; }
 </style>
 """
 
@@ -184,40 +309,63 @@ def client_html(title: str, body: str) -> str:
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{title} — Client Portal</title>
+  <title>{title} — Buykori AdSync</title>
+  <meta name="description" content="Buykori AdSync Client Portal — Manage your server-side event delivery.">
   {CLIENT_STYLE}
 </head>
 <body>
-  <!-- Mobile Hamburger Button -->
-  <button class="hamburger" id="hamburger" onclick="toggleSidebar()" aria-label="Menu">
+  <button class="hamburger" id="hamburger" onclick="toggleSidebar()" aria-label="Open menu">
     <span></span><span></span><span></span>
   </button>
-  <!-- Overlay -->
   <div class="sidebar-overlay" id="sidebar-overlay" onclick="toggleSidebar()"></div>
-
-  <!-- Sidebar Navigation -->
   <aside class="sidebar" id="sidebar">
-    <div class="sidebar-logo">CAPI<span>Gateway</span></div>
+    <div class="sidebar-logo">
+      <div class="sidebar-logo-mark">B</div>
+      <div class="sidebar-logo-text">
+        <strong>Buykori AdSync</strong>
+        <small>Client Portal</small>
+      </div>
+    </div>
     <nav class="sidebar-menu">
+      <span class="nav-section-label">Overview</span>
       <a class="nav-item active" onclick="switchTab('tab-dashboard', this)"><span class="nav-icon">📊</span> Dashboard</a>
       <a class="nav-item" onclick="switchTab('tab-analytics', this)"><span class="nav-icon">📈</span> Analytics</a>
+      <span class="nav-section-label">Events</span>
       <a class="nav-item" onclick="switchTab('tab-event-log', this)"><span class="nav-icon">📋</span> Event Log</a>
-      <a class="nav-item" onclick="switchTab('tab-delay-purchase', this)"><span class="nav-icon">⏳</span> Delay Purchase Event (Legacy)</a>
-      <a class="nav-item" onclick="switchTab('tab-settings', this)"><span class="nav-icon">⚙️</span> Settings & Setup</a>
+      <a class="nav-item" onclick="switchTab('tab-delay-purchase', this)"><span class="nav-icon">⏳</span> Pending Purchases</a>
+      <span class="nav-section-label">Tools</span>
+      <a class="nav-item" onclick="switchTab('tab-settings', this)"><span class="nav-icon">🔗</span> Campaign Builder</a>
+      <a class="nav-item" onclick="switchTab('tab-settings', this)"><span class="nav-icon">⚙️</span> Setup Guide</a>
+      <span class="nav-section-label">Account</span>
+      <a class="nav-item nav-upgrade" onclick="alert('Coming soon. Please contact the admin for updates.')"><span class="nav-icon">⚡</span> Upgrade Plan</a>
     </nav>
-    <div style="margin-top: auto; padding: 0 12px;">
-      <a class="nav-item nav-upgrade" onclick="alert('Coming soon. Please contact the admin for updates.')" style="margin-bottom:8px;"><span class="nav-icon">⚡</span> Update Plan</a>
-      <a href="/client/logout" class="nav-item" style="color: var(--danger);"><span class="nav-icon">🚪</span> Logout</a>
+    <div class="sidebar-footer">
+      <div class="user-card">
+        <div class="user-avatar">U</div>
+        <div class="user-info">
+          <div class="user-name">{title}</div>
+          <div class="user-role">Store Owner</div>
+        </div>
+        <div class="user-status"></div>
+      </div>
+      <a href="/client/logout" class="nav-item" style="color:var(--danger);"><span class="nav-icon">🚪</span> Logout</a>
     </div>
   </aside>
-
-  <!-- Main Content Area -->
   <main class="main-content">
+    <header class="client-topbar">
+      <div class="client-topbar-title">&#x26A1; Tracking Command Center</div>
+      <div class="client-topbar-actions">
+        <span class="status-pill">Production Ready</span>
+        <a class="topbar-btn" href="/api/v1/plugin/download">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Download Plugin
+        </a>
+      </div>
+    </header>
     <div class="content-wrapper">
       {body}
     </div>
   </main>
-  
   <script>
     function switchTab(tabId, el) {{
       var tabs = document.getElementsByClassName('tab-pane');
@@ -226,18 +374,15 @@ def client_html(title: str, body: str) -> str:
       for (var i = 0; i < navs.length; i++) {{ navs[i].classList.remove('active'); }}
       document.getElementById(tabId).classList.add('active');
       if (el) el.classList.add('active');
-      // Close sidebar on mobile after clicking
       var sidebar = document.getElementById('sidebar');
       if (sidebar && sidebar.classList.contains('open')) {{ toggleSidebar(); }}
     }}
-
     function toggleSidebar() {{
       var sidebar = document.getElementById('sidebar');
       var overlay = document.getElementById('sidebar-overlay');
       sidebar.classList.toggle('open');
       overlay.classList.toggle('open');
     }}
-    
     function copyText(id) {{
       var t = document.getElementById(id);
       var textToCopy = t.dataset.secret || t.innerText || t.value;
@@ -247,19 +392,11 @@ def client_html(title: str, body: str) -> str:
       eventTarget.innerText = 'Copied!';
       setTimeout(() => eventTarget.innerText = origText, 1500);
     }}
-
     function escapeHtml(value) {{
       return String(value == null ? '' : value).replace(/[&<>"']/g, function(ch) {{
-        return {{
-          '&': '&amp;',
-          '<': '&lt;',
-          '>': '&gt;',
-          '"': '&quot;',
-          "'": '&#39;'
-        }}[ch];
+        return {{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[ch];
       }});
     }}
-
     function revealSecret(id) {{
       var t = document.getElementById(id);
       if (!t || !t.dataset.secret) return;
@@ -267,18 +404,15 @@ def client_html(title: str, body: str) -> str:
       t.innerText = hidden ? t.dataset.secret : t.dataset.masked;
       t.dataset.hidden = hidden ? '0' : '1';
     }}
-    
     function openInnerTab(evt, tabId) {{
       var i, tc, tl;
-      tc = document.getElementsByClassName("inner-tab-content");
-      for (i = 0; i < tc.length; i++) {{ tc[i].className = tc[i].className.replace(" active", ""); }}
-      tl = document.getElementsByClassName("tab-btn");
-      for (i = 0; i < tl.length; i++) {{ tl[i].className = tl[i].className.replace(" active", ""); }}
-      document.getElementById(tabId).className += " active";
-      evt.currentTarget.className += " active";
+      tc = document.getElementsByClassName('inner-tab-content');
+      for (i = 0; i < tc.length; i++) {{ tc[i].className = tc[i].className.replace(' active', ''); }}
+      tl = document.getElementsByClassName('tab-btn');
+      for (i = 0; i < tl.length; i++) {{ tl[i].className = tl[i].className.replace(' active', ''); }}
+      document.getElementById(tabId).className += ' active';
+      evt.currentTarget.className += ' active';
     }}
-
-    // Convert UTC timestamps to browser local time
     function convertUTCToLocal() {{
       document.querySelectorAll('.local-time[data-utc]').forEach(function(el) {{
         var utc = el.getAttribute('data-utc');
@@ -299,7 +433,7 @@ def client_html(title: str, body: str) -> str:
 router = APIRouter(tags=["Client Portal"])
 
 def get_client_from_cookie(request: Request) -> Optional[str]:
-    """Cookie থেকে encrypted session token পড়ে decrypt করে API key রিটার্ন করে।"""
+    """Cookie থেকে encrypted session token পড়ে decrypt করে API key রিটার্ন করে।"""
     encrypted = request.cookies.get("client_session")
     if not encrypted:
         return None
@@ -335,24 +469,48 @@ async def client_login_page(request: Request):
     api_key = get_client_from_cookie(request)
     if api_key:
         return RedirectResponse(url="/client/dashboard", status_code=303)
-        
+
     body = """
-    <div class="container" style="max-width: 400px; margin-top: 100px;">
-        <h1 class="page-title" style="text-align:center;">Client Portal</h1>
-        <p class="page-sub" style="text-align:center;">লগিন করতে আপনার API Key ব্যবহার করুন</p>
-        
-        <div class="card">
-            <form action="/client/login" method="post">
-                <div class="form-group">
-                    <label>Portal Login Key</label>
-                    <input type="password" name="api_key" required placeholder="Paste your Portal Login Key here..." autocomplete="off">
-                </div>
-                <button type="submit" class="btn">Login to Dashboard</button>
-            </form>
-        </div>
+    <style>
+      body { justify-content: center; align-items: center; }
+      .login-bg { position: fixed; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; }
+      .login-blob { position: absolute; border-radius: 50%; filter: blur(80px); opacity: 0.12; animation: float-blob 10s ease-in-out infinite alternate; }
+      @keyframes float-blob { from { transform: translate(0,0) scale(1); } to { transform: translate(30px,-20px) scale(1.08); } }
+      .login-wrap { position: relative; z-index: 1; width: 100%; max-width: 420px; padding: 24px 16px; }
+      .login-logo { text-align: center; margin-bottom: 32px; }
+      .login-logo-mark { width: 56px; height: 56px; border-radius: 16px; background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%); display: inline-flex; align-items: center; justify-content: center; font-size: 26px; font-weight: 900; color: #fff; font-family: 'Outfit', sans-serif; box-shadow: 0 0 0 1px rgba(139,92,246,0.4), 0 12px 40px rgba(59,130,246,0.35); margin-bottom: 16px; }
+      .login-logo h1 { font-size: 22px; font-weight: 800; color: #fff; font-family: 'Outfit', sans-serif; letter-spacing: -0.5px; margin: 0 0 6px; }
+      .login-logo p { font-size: 13px; color: #7c8fb5; }
+      .login-card { background: rgba(13,20,40,0.88); border: 1px solid rgba(148,163,184,0.1); border-radius: 18px; padding: 32px 28px; box-shadow: 0 24px 64px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.05); backdrop-filter: blur(20px); }
+      .login-label { display: block; font-size: 12px; font-weight: 700; color: #7c8fb5; text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 8px; }
+      .login-input { width: 100%; padding: 13px 14px; background: rgba(0,0,0,0.4); border: 1px solid rgba(148,163,184,0.12); border-radius: 10px; color: #fff; font-size: 14px; outline: none; transition: border-color 0.2s, box-shadow 0.2s; font-family: 'Inter', sans-serif; margin-bottom: 20px; }
+      .login-input:focus { border-color: rgba(99,102,241,0.5); box-shadow: 0 0 0 3px rgba(99,102,241,0.15); }
+      .login-btn { width: 100%; padding: 13px; background: linear-gradient(135deg, #3b82f6 0%, #6366f1 100%); color: #fff; font-size: 15px; font-weight: 700; border: none; border-radius: 10px; cursor: pointer; font-family: 'Outfit', sans-serif; box-shadow: 0 6px 24px rgba(59,130,246,0.35); transition: all 0.2s; }
+      .login-btn:hover { background: linear-gradient(135deg, #60a5fa 0%, #818cf8 100%); transform: translateY(-1px); box-shadow: 0 10px 32px rgba(59,130,246,0.45); }
+      .login-footer { text-align: center; margin-top: 20px; font-size: 12px; color: #475569; }
+    </style>
+    <div class="login-bg">
+      <div class="login-blob" style="width:500px;height:500px;top:-200px;left:-150px;background:#3b82f6;"></div>
+      <div class="login-blob" style="width:400px;height:400px;bottom:-150px;right:-100px;background:#8b5cf6;animation-delay:-4s;"></div>
+      <div class="login-blob" style="width:300px;height:300px;top:50%;left:60%;background:#06b6d4;animation-delay:-7s;"></div>
+    </div>
+    <div class="login-wrap">
+      <div class="login-logo">
+        <div class="login-logo-mark">B</div>
+        <h1>Buykori AdSync</h1>
+        <p>Sign in to your Client Portal</p>
+      </div>
+      <div class="login-card">
+        <form action="/client/login" method="post" autocomplete="off">
+          <label class="login-label" for="api_key_input">Portal Login Key</label>
+          <input class="login-input" type="password" id="api_key_input" name="api_key" required placeholder="Paste your Portal Login Key here…" autocomplete="off">
+          <button type="submit" class="login-btn">Sign In to Dashboard &rarr;</button>
+        </form>
+      </div>
+      <div class="login-footer">&copy; Buykori AdSync &mdash; Secure Server-Side Tracking</div>
     </div>
     """
-    return HTMLResponse(base_html("Client Login", body))
+    return HTMLResponse(client_html("Client Login", body))
 
 @router.post("/client/login", include_in_schema=False)
 @limiter.limit("5/minute")
@@ -364,16 +522,30 @@ async def client_login(request: Request, response: Response, api_key: str = Form
     portal_key = getattr(client, "portal_key", None) if client else None
     portal_key_ok = bool(portal_key) and secrets.compare_digest(portal_key, api_key)
     legacy_api_key_ok = bool(client and not portal_key) and secrets.compare_digest(client.api_key, api_key)
-    
+
     if not client or not client.is_active or not (portal_key_ok or legacy_api_key_ok):
         body = """
-        <div class="container" style="max-width: 400px; margin-top: 100px;">
-            <div class="alert alert-error" style="justify-content:center;">Invalid or Inactive API Key</div>
-            <a href="/client" class="btn" style="text-align:center; display:block; text-decoration:none;">Try Again</a>
+        <style>
+          body { justify-content: center; align-items: center; }
+          .err-wrap { position: relative; z-index: 1; width: 100%; max-width: 400px; padding: 24px 16px; text-align: center; }
+          .err-card { background: rgba(13,20,40,0.88); border: 1px solid rgba(248,113,113,0.2); border-radius: 16px; padding: 32px 24px; box-shadow: 0 24px 64px rgba(0,0,0,0.45); backdrop-filter: blur(20px); margin-bottom: 16px; }
+          .err-icon { font-size: 48px; margin-bottom: 16px; }
+          .err-title { font-size: 18px; font-weight: 800; color: #fca5a5; font-family: 'Outfit', sans-serif; margin-bottom: 8px; }
+          .err-sub { font-size: 13px; color: #7c8fb5; margin-bottom: 24px; }
+          .err-btn { display: inline-flex; align-items: center; gap: 6px; padding: 11px 28px; border-radius: 10px; background: rgba(255,255,255,0.06); color: #e2eaf8; border: 1px solid rgba(255,255,255,0.1); font-size: 14px; font-weight: 600; text-decoration: none; transition: all 0.2s; }
+          .err-btn:hover { background: rgba(255,255,255,0.1); }
+        </style>
+        <div class="err-wrap">
+          <div class="err-card">
+            <div class="err-icon">🔐</div>
+            <div class="err-title">Access Denied</div>
+            <div class="err-sub">Invalid or inactive Portal Login Key. Please check your key and try again.</div>
+            <a href="/client" class="err-btn">&larr; Back to Login</a>
+          </div>
         </div>
         """
-        return HTMLResponse(base_html("Login Failed", body), status_code=401)
-        
+        return HTMLResponse(client_html("Login Failed", body), status_code=401)
+
     redirect = RedirectResponse(url="/client/dashboard", status_code=303)
     redirect.set_cookie(
         key="client_session",
@@ -390,6 +562,7 @@ async def client_logout():
     redirect = RedirectResponse(url="/client", status_code=303)
     redirect.delete_cookie("client_session")
     return redirect
+
 
 @router.get("/client/dashboard", response_class=HTMLResponse, include_in_schema=False)
 async def client_dashboard(request: Request, db: AsyncSession = Depends(get_db)):
@@ -682,9 +855,12 @@ async def client_dashboard(request: Request, db: AsyncSession = Depends(get_db))
 
     # Base URL detection
     base_url = str(request.base_url).rstrip("/")
-    scheme = request.headers.get("x-forwarded-proto", "https")
-    host = request.headers.get("host", "localhost")
-    gateway_origin = f"{scheme}://{host}"
+    if "x-forwarded-proto" in request.headers:
+        scheme = request.headers.get("x-forwarded-proto")
+        host = request.headers.get("host", "localhost")
+        gateway_origin = f"{scheme}://{host}"
+    else:
+        gateway_origin = base_url
     endpoint = f"{base_url}/api/v1/events"
     tracker_key = getattr(client, "public_key", None) or client.api_key
     tracker_url = f"{gateway_origin}/t.js?key={tracker_key}"
@@ -837,7 +1013,7 @@ capi('setUser', {{
           <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">
             <span style="font-size:28px;">🔌</span>
             <div>
-              <strong style="color:#fff;font-size:16px;">CAPI Gateway WordPress Plugin</strong><br>
+              <strong style="color:#fff;font-size:16px;">Buykori AdSync WordPress Plugin</strong><br>
               <span style="color:#aaa;font-size:13px;">সবচেয়ে সহজ পদ্ধতি — ইন্সটল করুন, API Key বসান, ব্যাস!</span>
             </div>
           </div>
@@ -849,7 +1025,7 @@ capi('setUser', {{
             <strong style="color:#fff">১.</strong> উপরের বাটনে ক্লিক করে ZIP ফাইলটি ডাউনলোড করুন।<br>
             <strong style="color:#fff">২.</strong> WordPress Admin → <code>Plugins → Add New → Upload Plugin</code> এ যান।<br>
             <strong style="color:#fff">৩.</strong> ডাউনলোড করা ZIP ফাইলটি আপলোড করুন এবং <strong style="color:#fff">Activate</strong> দিন।<br>
-            <strong style="color:#fff">৪.</strong> বাম মেনু থেকে <code>CAPI Gateway</code> এ গিয়ে আপনার <strong style="color:#4f46e5">API Key</strong> পেস্ট করে Save দিন।<br>
+            <strong style="color:#fff">৪.</strong> বাম মেনু থেকে <code>Buykori AdSync</code> এ গিয়ে আপনার <strong style="color:#4f46e5">API Key</strong> পেস্ট করে Save দিন।<br>
             <strong style="color:#00e676">🎉 ব্যাস! সব ইভেন্ট অটোমেটিক ট্র্যাক হওয়া শুরু হবে!</strong>
           </div>
           <div style="margin-top:12px;padding:10px 14px;background:rgba(0,230,118,0.06);border:1px solid rgba(0,230,118,0.15);border-radius:8px;font-size:12px;color:#aaa;line-height:1.8">
@@ -1019,7 +1195,7 @@ capi('setUser', {{
           <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">
             <span style="font-size:28px;">🔌</span>
             <div>
-              <strong style="color:#fff;font-size:16px;">CAPI Gateway WordPress Plugin</strong><br>
+              <strong style="color:#fff;font-size:16px;">Buykori AdSync WordPress Plugin</strong><br>
               <span style="color:#aaa;font-size:13px;">সবচেয়ে সহজ পদ্ধতি — ইন্সটল করুন, API Key বসান, ব্যাস!</span>
             </div>
           </div>
@@ -1031,7 +1207,7 @@ capi('setUser', {{
             <strong style="color:#fff">১.</strong> উপরের বাটনে ক্লিক করে ZIP ফাইলটি ডাউনলোড করুন।<br>
             <strong style="color:#fff">২.</strong> WordPress Admin → <code>Plugins → Add New → Upload Plugin</code> এ যান।<br>
             <strong style="color:#fff">৩.</strong> ডাউনলোড করা ZIP ফাইলটি আপলোড করুন এবং <strong style="color:#fff">Activate</strong> দিন।<br>
-            <strong style="color:#fff">৪.</strong> বাম মেনু থেকে <code>CAPI Gateway</code> এ গিয়ে আপনার <strong style="color:#4f46e5">API Key</strong> পেস্ট করে Save দিন।<br>
+            <strong style="color:#fff">৪.</strong> বাম মেনু থেকে <code>Buykori AdSync</code> এ গিয়ে আপনার <strong style="color:#4f46e5">API Key</strong> পেস্ট করে Save দিন।<br>
             <strong style="color:#00e676">🎉 ব্যাস! সব ইভেন্ট অটোমেটিক ট্র্যাক হওয়া শুরু হবে!</strong>
           </div>
           <div style="margin-top:12px;padding:10px 14px;background:rgba(0,230,118,0.06);border:1px solid rgba(0,230,118,0.15);border-radius:8px;font-size:12px;color:#aaa;line-height:1.8">
@@ -1174,36 +1350,57 @@ capi('track', 'ViewContent', {{
     <div class="header">
         <div>
             <h1 class="page-title">👋 Welcome, {safe_client_name}</h1>
-            <p class="page-sub">আপনার CAPI Dashboard</p>
+            <p class="page-sub">আপনার Buykori AdSync Dashboard — সব ঠিকঠাক চলছে</p>
         </div>
     </div>
 
     <!-- TAB: DASHBOARD -->
     <div id="tab-dashboard" class="tab-pane active">
-        <h3 style="color:#fff; margin-bottom:12px; font-weight:600;">📊 Today's Statistics</h3>
         <div class="stat-row">
-          <div class="stat-box">
-            <div class="num">{success_count}</div>
-            <div class="lbl">Successful Events</div>
+          <div class="stat-box" style="border-color:rgba(59,130,246,0.2);">
+            <div class="stat-icon">⚡</div>
+            <div class="num" style="background:linear-gradient(135deg,#60a5fa,#818cf8);-webkit-background-clip:text;-webkit-text-fill-color:transparent;">{success_count}</div>
+            <div class="lbl">Successful Events Today</div>
           </div>
-          <div class="stat-box">
-            <div class="num" style="color: {'var(--accent)' if success_rate > 90 else 'var(--primary-hover)'};">{success_rate}%</div>
-            <div class="lbl">Success Rate</div>
+          <div class="stat-box" style="border-color:{'rgba(16,185,129,0.25)' if success_rate > 90 else 'rgba(245,158,11,0.25)'}">
+            <div class="stat-icon">{'✅' if success_rate > 90 else '⚠️'}</div>
+            <div class="num" style="color:{'#10b981' if success_rate > 90 else '#f59e0b'}">{success_rate}%</div>
+            <div class="lbl">Delivery Success Rate</div>
+          </div>
+          <div class="stat-box" style="border-color:rgba(248,113,113,0.2);">
+            <div class="stat-icon">❌</div>
+            <div class="num" style="color:#f87171;">{failed_count}</div>
+            <div class="lbl">Failed Events Today</div>
+          </div>
+          <div class="stat-box" style="border-color:rgba(139,92,246,0.2);">
+            <div class="stat-icon">📦</div>
+            <div class="num" style="color:#a78bfa;">{total}</div>
+            <div class="lbl">Total Events Today</div>
           </div>
         </div>
 
-        <div class="card" style="margin-bottom:24px;border:1px solid rgba(0,230,118,0.22);">
-          <div class="card-title">Signal Health Doctor</div>
-          <div id="signal-doctor-panel" style="color:var(--text-muted);font-size:13px;">Loading signal health...</div>
+        <div class="card" style="margin-bottom:20px;border-color:rgba(16,185,129,0.2);">
+          <div class="card-title">
+            <span class="icon" style="background:rgba(16,185,129,0.12);">🩺</span>
+            Signal Health Doctor
+          </div>
+          <div id="signal-doctor-panel" style="color:var(--text-muted);font-size:13px;padding:12px 0;">Loading signal health...</div>
         </div>
 
-        <div class="card" style="margin-bottom:24px;">
-          <div class="card-title">📈 গত ৭ দিনের ইভেন্ট</div>
-          <canvas id="eventsChart" height="120"></canvas>
+        <div class="card" style="margin-bottom:20px;">
+          <div class="card-title">
+            <span class="icon" style="background:rgba(99,102,241,0.12);">📈</span>
+            গত ৭ দিনের ইভেন্ট ট্র্যাফিক
+          </div>
+          <canvas id="eventsChart" height="110"></canvas>
         </div>
 
-        <div class="card" style="margin-bottom:24px;">
-          <div class="card-title">📋 Dashboard Recent Logs</div>
+        <div class="card" style="margin-bottom:20px;">
+          <div class="card-title">
+            <span class="icon" style="background:rgba(6,182,212,0.12);">📋</span>
+            Recent Event Log
+            <span style="margin-left:auto;font-size:11px;font-weight:500;color:var(--text-dim);background:rgba(255,255,255,0.04);border:1px solid var(--border);padding:3px 10px;border-radius:999px;">Last 15 events</span>
+          </div>
           <div style="overflow-x:auto;">
             <table class="client-table">
               <thead>

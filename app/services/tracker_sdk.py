@@ -6,7 +6,7 @@ Tracker SDK Generator — ডায়নামিক JavaScript ট্র্য
 
 def generate_tracker_js(api_key: str, gateway_origin: str) -> str:
     """
-    API Key ও Gateway URL embed করে মিনিফাইড-স্টাইল JavaScript কোড রিটার্ন করে।
+    API Key ও AdSync API URL embed করে মিনিফাইড-স্টাইল JavaScript কোড রিটার্ন করে।
 
     Features:
     - Auto PageView on load
@@ -21,7 +21,7 @@ def generate_tracker_js(api_key: str, gateway_origin: str) -> str:
 "use strict";
 
 /* ═══════════════════════════════════════════════════════════════════
-   CAPI Gateway Tracker v1.0
+   Buykori AdSync Tracker v1.0
    Auto-tracks PageView, captures cookies, hashes PII.
    ═══════════════════════════════════════════════════════════════════ */
 
@@ -49,6 +49,7 @@ function gc(n){{
   return m?decodeURIComponent(m[1]):null;
 }}
 
+// Query param reader
 function qp(n){{
   try{{return new URLSearchParams(location.search).get(n)||'';}}
   catch(e){{return '';}}
@@ -62,14 +63,14 @@ function persistTtclid(){{
 function persistMarketing(){{
   ['utm_source','utm_medium','utm_campaign','utm_content','utm_term','campaign_source'].forEach(function(k){{
     var v=qp(k);
-    if(v)document.cookie='_capigw_'+k+'='+encodeURIComponent(v)+'; path=/; max-age='+(30*24*60*60)+'; SameSite=Lax';
+    if(v)document.cookie='_buykorigw_'+k+'='+encodeURIComponent(v)+'; path=/; max-age='+(30*24*60*60)+'; SameSite=Lax';
   }});
 }}
 
 function marketing(){{
   var out={{}};
   ['utm_source','utm_medium','utm_campaign','utm_content','utm_term','campaign_source'].forEach(function(k){{
-    out[k]=qp(k)||gc('_capigw_'+k)||'';
+    out[k]=qp(k)||gc('_buykorigw_'+k)||'';
   }});
   if(!out.campaign_source&&out.utm_source)out.campaign_source=out.utm_source;
   if(!out.utm_source&&(qp('ttclid')||gc('_ttclid'))){{out.utm_source='tiktok';out.campaign_source='tiktok';}}

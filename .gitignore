@@ -17,3 +17,5 @@ inst.html
 *.local.html
 load-results*.json
 *.zip
+!wordpress-plugin/buykori-adsync.zip
+!buykori-adsync-updated.zip

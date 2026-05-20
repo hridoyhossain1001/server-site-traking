@@ -3,7 +3,7 @@ import zipfile
 from pathlib import Path
 
 def create_zip(source_dir, output_filename):
-    # The root folder inside the zip should be 'capi-gateway'
+    # The root folder inside the zip should be 'buykori-adsync'
     root_folder_name = os.path.basename(os.path.normpath(source_dir))
     
     output_path = Path(output_filename)
@@ -21,10 +21,10 @@ def create_zip(source_dir, output_filename):
                 print(f"Added: {zip_path}")
 
 project_root = Path(__file__).resolve().parent
-source_directory = project_root / "wordpress-plugin" / "capi-gateway"
+source_directory = project_root / "wordpress-plugin" / "buykori-adsync"
 output_zips = [
-    project_root / "wordpress-plugin" / "capi-gateway.zip",
-    project_root / "capi-gateway-updated.zip",
+    project_root / "wordpress-plugin" / "buykori-adsync.zip",
+    project_root / "buykori-adsync-updated.zip",
 ]
 
 for output_zip in output_zips:

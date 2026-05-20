@@ -85,7 +85,7 @@ async def client_api_health(
     """Lightweight authenticated health check for plugins and client dashboards."""
     return {
         "status": "ok",
-        "service": "CAPI Gateway",
+        "service": "Buykori AdSync",
         "client_name": client.name,
         "client_id": client.id,
     }

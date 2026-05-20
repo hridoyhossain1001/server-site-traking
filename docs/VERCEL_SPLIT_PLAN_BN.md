@@ -5,8 +5,8 @@
 ```txt
 buykori.app              -> Marketing website on Vercel
 www.buykori.app          -> Marketing website on Vercel
-client.buykori.app       -> Future client portal frontend on Vercel
-admin.buykori.app        -> Future admin portal frontend on Vercel
+client.buykori.app       -> Client portal frontend on Vercel
+admin.buykori.app        -> Admin portal frontend on Vercel
 api.buykori.app          -> Current FastAPI backend/server
 track.buykori.app        -> Optional tracking endpoint alias
 ```
@@ -52,17 +52,39 @@ https://track.buykori.app/api/v1/events
 
 ## Phase 3: Client and admin portals
 
-Move these only after the marketing website and API domain are stable:
+Initial split frontends are now prepared in:
 
 ```txt
-client.buykori.app
-admin.buykori.app
+client-portal/
+admin-portal/
 ```
 
-Both frontends should call:
+Create two separate Vercel projects:
+
+```txt
+client-portal root -> client.buykori.app
+admin-portal root  -> admin.buykori.app
+```
+
+Both frontends call:
 
 ```txt
 https://api.buykori.app
+```
+
+Current auth model:
+
+```txt
+client-portal -> sends X-API-Key to client analytics APIs
+admin-portal  -> sends X-Admin-API-Key to admin JSON APIs
+```
+
+The old FastAPI-rendered HTML routes remain available during migration:
+
+```txt
+/api/v1/client
+/api/v1/client/dashboard
+/api/v1/admin
 ```
 
 ## DNS checklist

@@ -151,9 +151,10 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=False,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
     allow_headers=[
         "X-API-Key",
+        "X-Admin-API-Key",
         "X-CAPI-Origin",
         "X-CAPI-Timestamp",
         "X-CAPI-Signature",

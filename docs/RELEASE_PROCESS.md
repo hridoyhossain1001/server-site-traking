@@ -4,8 +4,8 @@ Keep the server version, plugin version, zip package, and changelog in sync.
 
 ## Version Rules
 
-- WordPress plugin header version in `wordpress-plugin/capi-gateway/capi-gateway.php`.
-- `CAPIGW_VERSION` in the same file.
+- WordPress plugin header version in `wordpress-plugin/buykori-adsync/buykori-adsync.php`.
+- `BUYKORIGW_VERSION` in the same file.
 - Server `PLUGIN_VERSION` default in `app/routers/plugin.py`.
 - Plugin `readme.txt` changelog.
 
@@ -19,7 +19,7 @@ All four should describe the same release.
 4. Run Python compile checks.
 5. Run `pytest`.
 6. Run PHP lint for every plugin PHP file.
-7. Rebuild `wordpress-plugin/capi-gateway.zip` and `capi-gateway-updated.zip` with `python zip_plugin.py`.
+7. Rebuild `wordpress-plugin/buykori-adsync.zip` and `buykori-adsync-updated.zip` with `python zip_plugin.py`.
 8. Deploy server.
 9. Run `alembic upgrade head`.
 10. Test update flow in staging.

@@ -9,9 +9,9 @@ Use this before every production release.
 - Run tests:
   `pytest`
 - Run PHP lint:
-  `php -l wordpress-plugin\capi-gateway\capi-gateway.php`
+  `php -l wordpress-plugin\buykori-adsync\buykori-adsync.php`
 - Lint all plugin PHP files:
-  `$files = rg --files wordpress-plugin\capi-gateway -g '*.php'; foreach ($file in $files) { php -l $file }`
+  `$files = rg --files wordpress-plugin\buykori-adsync -g '*.php'; foreach ($file in $files) { php -l $file }`
 
 ## 2. Environment Variables
 
@@ -36,7 +36,7 @@ Use this before every production release.
 
 - Rebuild plugin zip:
   `python zip_plugin.py`
-- Confirm zip contains `capi-gateway/` as the root folder.
+- Confirm zip contains `buykori-adsync/` as the root folder.
 - Confirm server update metadata returns:
   `version`
   `download_url`

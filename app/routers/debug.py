@@ -102,7 +102,7 @@ async def send_test_event(
         "action_source": "website",
         "user_data": {
             "client_ip_address": "127.0.0.1",
-            "client_user_agent": "CAPI-Gateway-DebugTool/1.0",
+            "client_user_agent": "Buykori-AdSync-DebugTool/1.0",
             "em": ["test@example.com"],
         },
     }

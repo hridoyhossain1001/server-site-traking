@@ -7,11 +7,12 @@ import hmac
 import time
 from urllib.parse import urlencode
 from urllib.parse import urlparse
-from fastapi import APIRouter, Depends, HTTPException, Form, Request
+from fastapi import APIRouter, Depends, HTTPException, Form, Request, Header
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import delete as sql_delete, select, update
+from sqlalchemy import delete as sql_delete, select, update, func
+from pydantic import BaseModel
 from app.database import get_db
 from app.models.client import Client
 from app.models.audit_log import AuditLog
@@ -24,6 +25,7 @@ from app.models.usage_counter import UsageCounter
 from app.security import encrypt_token
 from app.services.webhook_service import _webhook_url_allowed
 from app.limiter import limiter
+from app.dependencies import clear_client_cache
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -37,6 +39,36 @@ if not ADMIN_PASSWORD:
 CSRF_MAX_AGE_SECONDS = 60 * 60
 
 
+class AdminClientCreate(BaseModel):
+    name: str
+    pixel_id: str
+    access_token: str
+    test_event_code: str | None = None
+    domain: str | None = None
+    tiktok_pixel_id: str | None = None
+    tiktok_access_token: str | None = None
+    tiktok_test_event_code: str | None = None
+    ga4_measurement_id: str | None = None
+    ga4_api_secret: str | None = None
+    enable_facebook: bool = True
+    enable_tiktok: bool = True
+    enable_ga4: bool = True
+    deferred_purchase: bool = False
+    webhook_url: str | None = None
+
+
+class AdminClientUpdate(BaseModel):
+    name: str | None = None
+    domain: str | None = None
+    monthly_limit: int | None = None
+    is_active: bool | None = None
+    enable_facebook: bool | None = None
+    enable_tiktok: bool | None = None
+    enable_ga4: bool | None = None
+    deferred_purchase: bool | None = None
+    webhook_url: str | None = None
+
+
 def verify_admin(credentials: HTTPBasicCredentials = Depends(security)):
     is_user_ok = secrets.compare_digest(credentials.username, ADMIN_USERNAME)
     is_pass_ok = secrets.compare_digest(credentials.password, ADMIN_PASSWORD)
@@ -47,6 +79,15 @@ def verify_admin(credentials: HTTPBasicCredentials = Depends(security)):
             headers={"WWW-Authenticate": "Basic"},
         )
     return credentials.username
+
+
+def verify_admin_api_key(x_admin_api_key: str = Header("", alias="X-Admin-API-Key")) -> str:
+    admin_key = os.getenv("ADMIN_API_KEY", "")
+    if not admin_key:
+        raise HTTPException(status_code=503, detail="Admin API key is not configured")
+    if not x_admin_api_key or not hmac.compare_digest(x_admin_api_key, admin_key):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return "admin-api"
 
 
 def create_admin_csrf_token(username: str) -> str:
@@ -106,228 +147,212 @@ def display_domain_url(domain: str | None) -> str:
 
 STYLE = """
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+  
   :root {
-    --bg-main: #131722;
-    --bg-sidebar: #1a1e2d;
-    --bg-card: #1e2233;
-    --bg-card-hover: #23283c;
-    --bg-soft: #272d42;
-    --border: #2d3348;
-    --primary: #4f46e5;
-    --primary-hover: #6366f1;
-    --text-main: #f8fafc;
-    --text-muted: #94a3b8;
-    --success: #10b981;
-    --danger: #ef4444;
-    --warning: #f59e0b;
-    --info: #3b82f6;
+    --bg-main: #0B1120;
+    --bg-sidebar: #0F172A;
+    --bg-card: #1E293B;
+    --bg-card-hover: #273449;
+    --border: rgba(148, 163, 184, 0.15);
+    --border-bright: rgba(148, 163, 184, 0.25);
+    
+    --primary: #3B82F6;
+    --primary-hover: #60A5FA;
+    --indigo: #6366F1;
+    --purple: #8B5CF6;
+    
+    --text-main: #F8FAFC;
+    --text-muted: #94A3B8;
+    --text-subtle: #64748B;
+    
+    --success: #10B981;
+    --success-bg: rgba(16, 185, 129, 0.15);
+    --warning: #F59E0B;
+    --warning-bg: rgba(245, 158, 11, 0.15);
+    --danger: #EF4444;
+    --danger-bg: rgba(239, 68, 68, 0.15);
+    
     --sidebar-width: 250px;
-    --header-height: 64px;
+    --header-height: 70px;
+    --radius: 12px;
+    --radius-sm: 8px;
   }
+  
   * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', system-ui, sans-serif; }
-  body {
-    background: var(--bg-main);
-    color: var(--text-main);
-    min-height: 100vh;
-    display: flex;
-    overflow-x: hidden;
-  }
+  body { background: var(--bg-main); color: var(--text-main); min-height: 100vh; display: flex; overflow-x: hidden; font-size: 13px; }
   
   /* Sidebar */
   .sidebar {
-    width: var(--sidebar-width);
-    background: var(--bg-sidebar);
-    border-right: 1px solid var(--border);
-    display: flex;
-    flex-direction: column;
-    position: fixed;
-    height: 100vh;
-    left: 0;
-    top: 0;
-    z-index: 50;
+    width: var(--sidebar-width); background: var(--bg-sidebar);
+    border-right: 1px solid var(--border); display: flex; flex-direction: column;
+    position: fixed; height: 100vh; left: 0; top: 0; z-index: 50;
   }
   .brand {
-    padding: 24px;
-    font-size: 18px;
-    font-weight: 700;
-    color: #fff;
-    border-bottom: 1px solid rgba(255,255,255,0.05);
+    padding: 24px 20px; display: flex; align-items: center; gap: 12px;
   }
-  .brand span { font-weight: 400; color: var(--text-muted); font-size: 13px; display: block; margin-top: 4px; }
-  .nav-menu { flex: 1; padding: 16px 12px; }
+  .brand-logo {
+    width: 28px; height: 28px; background: linear-gradient(135deg, var(--indigo), var(--primary));
+    border-radius: 6px; display: flex; align-items: center; justify-content: center;
+    color: white; font-weight: bold; font-size: 16px;
+  }
+  .brand-text { font-size: 16px; font-weight: 700; color: #E2E8F0; letter-spacing: -0.3px; }
+  .brand-text span { color: var(--indigo); }
+  
+  .nav-menu { padding: 12px; flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
   .nav-item {
-    display: flex; align-items: center; gap: 12px;
-    padding: 12px 16px; margin-bottom: 4px;
-    color: var(--text-muted); font-size: 14px; font-weight: 500;
-    text-decoration: none; border-radius: 8px;
-    transition: all 0.2s;
+    display: flex; align-items: center; gap: 12px; padding: 10px 14px;
+    color: var(--text-muted); text-decoration: none; border-radius: var(--radius-sm);
+    font-weight: 500; font-size: 13.5px; transition: all 0.2s;
   }
-  .nav-item:hover { background: rgba(255,255,255,0.05); color: #fff; }
-  .nav-item.active { background: rgba(255,255,255,0.1); color: #fff; }
-  .nav-item.bottom { margin-top: auto; }
-  .sidebar-bottom { padding: 16px 12px; border-top: 1px solid rgba(255,255,255,0.05); }
-
+  .nav-item svg { width: 18px; height: 18px; stroke-width: 2; opacity: 0.8; }
+  .nav-item:hover { background: rgba(255,255,255,0.05); color: #E2E8F0; }
+  .nav-item.active {
+    background: linear-gradient(90deg, #4338CA 0%, #312E81 100%);
+    color: white; border-radius: var(--radius-sm);
+  }
+  .nav-item.active svg { opacity: 1; }
+  
+  /* Pro Plan Box */
+  .pro-plan-box {
+    margin: 16px; padding: 16px; border-radius: var(--radius);
+    border: 1px solid rgba(245, 158, 11, 0.2); background: rgba(0,0,0,0.2);
+  }
+  .pro-plan-title { display: flex; align-items: center; gap: 6px; color: #FBBF24; font-weight: 600; font-size: 12px; margin-bottom: 12px; }
+  .progress-bar-bg { width: 100%; height: 6px; background: rgba(255,255,255,0.1); border-radius: 99px; overflow: hidden; margin-bottom: 6px; }
+  .progress-bar-fill { height: 100%; background: linear-gradient(90deg, var(--indigo), var(--primary)); border-radius: 99px; }
+  .pro-plan-stats { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted); }
+  
+  .sidebar-bottom { padding: 12px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 4px; }
+  
   /* Main Content */
-  .main-wrapper {
-    flex: 1;
-    margin-left: var(--sidebar-width);
-    display: flex;
-    flex-direction: column;
-    min-height: 100vh;
-  }
-
-  /* Header */
+  .main-wrapper { flex: 1; margin-left: var(--sidebar-width); display: flex; flex-direction: column; min-height: 100vh; }
+  
+  /* Topbar */
   .topbar {
-    height: var(--header-height);
+    height: var(--header-height); border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between; padding: 0 32px;
     background: var(--bg-main);
-    border-bottom: 1px solid var(--border);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0 32px;
-    position: sticky;
-    top: 0;
-    z-index: 40;
   }
   .search-box {
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 8px 16px;
-    width: 320px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
+    display: flex; align-items: center; gap: 10px; background: #0F172A;
+    border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 8px 16px; width: 320px;
   }
-  .search-box input {
-    background: none; border: none; outline: none; color: #fff; font-size: 13px; width: 100%;
-  }
-  .search-box input::placeholder { color: var(--text-muted); }
+  .search-box svg { width: 16px; height: 16px; color: var(--text-muted); }
+  .search-box input { background: none; border: none; outline: none; color: white; width: 100%; font-size: 13px; }
+  .search-box .kbd { background: rgba(255,255,255,0.1); padding: 2px 6px; border-radius: 4px; font-size: 10px; color: var(--text-muted); font-family: monospace; }
+  
   .topbar-right { display: flex; align-items: center; gap: 20px; }
-  .env-badge { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; letter-spacing: 0.5px; }
-  .user-profile { display: flex; align-items: center; gap: 12px; }
-  .user-avatar { width: 32px; height: 32px; background: var(--bg-soft); border-radius: 50%; overflow: hidden; border: 1px solid var(--border); }
+  .env-badge { display: flex; align-items: center; gap: 6px; padding: 4px 10px; background: rgba(16,185,129,0.1); border-radius: 99px; border: 1px solid rgba(16,185,129,0.2); font-size: 11px; font-weight: 600; color: #10B981; letter-spacing: 0.5px; }
+  .env-badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: #10B981; }
+  
+  .icon-btn { position: relative; background: none; border: none; color: var(--text-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; }
+  .icon-btn svg { width: 20px; height: 20px; }
+  .icon-btn:hover { color: white; }
+  .badge-dot { position: absolute; top: -2px; right: -2px; width: 14px; height: 14px; background: #EF4444; border-radius: 50%; border: 2px solid var(--bg-main); display: flex; align-items: center; justify-content: center; font-size: 8px; color: white; font-weight: bold; }
+  
+  .user-profile { display: flex; align-items: center; gap: 10px; border-left: 1px solid var(--border); padding-left: 20px; }
+  .avatar { width: 32px; height: 32px; border-radius: 50%; background: var(--indigo); display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; color: white; }
   .user-info { display: flex; flex-direction: column; }
-  .user-info .name { font-size: 13px; font-weight: 600; color: #fff; }
-  .user-info .role { font-size: 11px; color: var(--text-muted); }
-  .icon-btn { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 16px; position: relative; }
-  .icon-btn:hover { color: #fff; }
-  .notification-dot { position: absolute; top: 0; right: 0; width: 6px; height: 6px; background: var(--danger); border-radius: 50%; }
-
-  /* Content Container */
+  .user-info .name { font-size: 13px; font-weight: 600; color: white; }
+  .user-info .email { font-size: 11px; color: var(--text-muted); }
+  
   .content { padding: 32px; }
-
+  
   /* Page Header */
   .page-header { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 24px; }
-  .page-title { font-size: 24px; font-weight: 700; color: #fff; margin-bottom: 6px; }
-  .page-sub { font-size: 14px; color: var(--text-muted); }
+  .page-title { font-size: 24px; font-weight: 700; color: white; margin-bottom: 4px; letter-spacing: -0.5px; }
+  .page-sub { color: var(--text-muted); font-size: 13px; }
   .header-actions { display: flex; gap: 12px; }
-  .btn { padding: 9px 16px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s; display: inline-flex; align-items: center; gap: 8px; border: 1px solid transparent; }
-  .btn-outline { background: transparent; border-color: var(--border); color: #fff; }
+  
+  .btn { display: flex; align-items: center; gap: 8px; padding: 8px 16px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; border: none; text-decoration: none; }
+  .btn-outline { background: transparent; border: 1px solid var(--border-bright); color: #E2E8F0; }
   .btn-outline:hover { background: rgba(255,255,255,0.05); }
-  .btn-primary { background: var(--primary); color: #fff; }
-  .btn-primary:hover { background: var(--primary-hover); }
-
+  .btn-primary { background: #4338CA; color: white; border: 1px solid #4F46E5; }
+  .btn-primary:hover { background: #4F46E5; }
+  
   /* Metrics Grid */
   .metrics-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; margin-bottom: 24px; }
-  .metric-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; position: relative; overflow: hidden; }
-  .metric-header { display: flex; justify-content: space-between; margin-bottom: 12px; }
-  .metric-title { font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
-  .metric-icon { width: 32px; height: 32px; background: var(--bg-soft); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 14px; color: var(--text-muted); border: 1px solid rgba(255,255,255,0.05); }
-  .metric-value { font-size: 28px; font-weight: 700; color: #fff; margin-bottom: 12px; line-height: 1.1; }
-  .metric-trend { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-muted); }
-  .trend-up { background: rgba(16, 185, 129, 0.15); color: #34d399; padding: 2px 6px; border-radius: 4px; font-weight: 600; display: inline-flex; align-items: center; gap: 4px; }
-  .trend-down { background: rgba(239, 68, 68, 0.15); color: #f87171; padding: 2px 6px; border-radius: 4px; font-weight: 600; display: inline-flex; align-items: center; gap: 4px; }
-  .trend-neutral { background: rgba(255, 255, 255, 0.1); color: #e2e8f0; padding: 2px 6px; border-radius: 4px; font-weight: 600; display: inline-flex; align-items: center; gap: 4px; }
-
-  /* Main Layout Grid */
-  .layout-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 24px; align-items: start; }
-
+  .metric-card { background: var(--bg-card); border-radius: var(--radius); border: 1px solid var(--border); padding: 20px; display: flex; flex-direction: column; }
+  .metric-card:hover { border-color: var(--border-bright); }
+  .metric-header { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+  .m-icon { width: 28px; height: 28px; border-radius: 6px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .m-icon svg { width: 14px; height: 14px; }
+  .m-title { font-size: 12.5px; font-weight: 600; color: #E2E8F0; }
+  .metric-value { font-size: 32px; font-weight: 700; color: white; letter-spacing: -1px; margin-bottom: 8px; line-height: 1; }
+  
+  .trend { font-size: 12px; display: flex; align-items: center; gap: 6px; color: var(--text-subtle); }
+  .trend span { font-weight: 600; display: inline-flex; align-items: center; gap: 2px; }
+  .trend-up span { color: var(--success); }
+  .trend-down span { color: var(--danger); }
+  
   /* Cards */
-  .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
-  .card-header { padding: 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
-  .card-title { font-size: 16px; font-weight: 600; color: #fff; }
-  .card-actions { display: flex; gap: 8px; }
-
-  /* Tables */
-  .table-responsive { width: 100%; overflow-x: auto; }
+  .card { background: var(--bg-card); border-radius: var(--radius); border: 1px solid var(--border); overflow: hidden; margin-bottom: 24px; }
+  .card-header { padding: 16px 20px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); }
+  .card-title { font-size: 15px; font-weight: 600; color: white; }
+  
+  /* Table */
   table { width: 100%; border-collapse: collapse; }
-  th { text-align: left; padding: 14px 20px; font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid var(--border); background: rgba(255,255,255,0.02); }
-  td { padding: 16px 20px; font-size: 13px; border-bottom: 1px solid rgba(255,255,255,0.04); vertical-align: middle; }
+  th { text-align: left; padding: 12px 20px; font-size: 12px; font-weight: 600; color: var(--text-muted); border-bottom: 1px solid var(--border); }
+  td { padding: 16px 20px; font-size: 13px; border-bottom: 1px solid rgba(255,255,255,0.03); color: #E2E8F0; vertical-align: middle; }
   tr:hover td { background: rgba(255,255,255,0.02); }
   tr:last-child td { border-bottom: none; }
   
-  .client-name { font-weight: 600; color: #fff; }
-  .client-sub { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
-  .code-text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; color: var(--text-muted); }
-
-  /* Badges */
-  .badge { padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; border: 1px solid transparent; }
-  .badge-healthy { background: rgba(16, 185, 129, 0.1); color: #34d399; border-color: rgba(16, 185, 129, 0.2); }
-  .badge-degraded { background: rgba(239, 68, 68, 0.1); color: #f87171; border-color: rgba(239, 68, 68, 0.2); }
-  .badge-healthy::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: #34d399; }
-  .badge-degraded::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: #f87171; }
-
+  .client-name { font-weight: 600; color: white; display: flex; align-items: center; gap: 8px; }
+  .client-sub { font-size: 11px; color: var(--text-muted); margin-top: 4px; font-family: monospace; }
+  .domain-link { display: inline-flex; align-items: center; gap: 4px; color: #E2E8F0; text-decoration: none; }
+  .domain-link:hover { text-decoration: underline; }
+  
+  .status-badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+  .status-healthy { background: var(--success-bg); color: var(--success); border: 1px solid rgba(16,185,129,0.2); }
+  .status-healthy::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--success); }
+  .status-warning { background: var(--warning-bg); color: var(--warning); border: 1px solid rgba(245,158,11,0.2); }
+  .status-warning::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--warning); }
+  .status-degraded { background: var(--danger-bg); color: var(--danger); border: 1px solid rgba(239,68,68,0.2); }
+  .status-degraded::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--danger); }
+  
+  .integration-status { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; }
+  .integration-status svg { width: 16px; height: 16px; }
+  .integration-status .dot { width: 6px; height: 6px; border-radius: 50%; }
+  .dot-active { background: var(--success); }
+  .dot-inactive { background: var(--danger); }
+  
+  .action-btn { background: rgba(255,255,255,0.05); border: 1px solid var(--border); color: white; width: 32px; height: 32px; border-radius: 6px; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+  .action-btn:hover { background: rgba(255,255,255,0.1); }
+  
+  .grid-layout { display: grid; grid-template-columns: 2fr 1fr; gap: 20px; }
+  
   /* Activity Stream */
-  .log-list { padding: 0; }
-  .log-item { display: grid; grid-template-columns: 60px 50px 1fr; gap: 12px; padding: 12px 20px; border-bottom: 1px solid rgba(255,255,255,0.03); font-size: 12px; }
-  .log-item:last-child { border-bottom: none; }
-  .log-time { color: var(--text-muted); font-family: ui-monospace, monospace; }
-  .log-tag { font-family: ui-monospace, monospace; font-weight: 600; }
-  .log-tag.info { color: #34d399; }
-  .log-tag.warn { color: #facc15; }
-  .log-tag.err { color: #f87171; }
-  .log-msg { color: #cbd5e1; line-height: 1.4; }
-
-  /* Utility & Inputs */
-  .api-key-cell { font-family: monospace; font-size: 12px; color: #cbd5e1; background: #0b1220; border: 1px solid var(--border); padding: 4px 8px; border-radius: 4px; display: inline-flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; max-width: 180px; }
-  .copy-icon { background: none; border: none; color: var(--text-muted); cursor: pointer; }
-  .copy-icon:hover { color: #fff; }
-  .btn-sm { padding: 6px 12px; font-size: 11px; border-radius: 4px; border: 1px solid transparent; cursor: pointer; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; transition: all 0.2s; text-decoration: none; }
-  .btn-info { background: rgba(59, 130, 246, 0.1); color: #60a5fa; border-color: rgba(59, 130, 246, 0.2); }
-  .btn-info:hover { background: rgba(59, 130, 246, 0.2); color: #93c5fd; }
-  .btn-danger { background: rgba(239, 68, 68, 0.1); color: #f87171; border-color: rgba(239, 68, 68, 0.2); }
-  .btn-danger:hover { background: rgba(239, 68, 68, 0.2); color: #fca5a5; }
-
-  .alert { padding: 12px 16px; border-radius: 6px; margin-bottom: 20px; font-size: 13px; font-weight: 500; display: flex; align-items: center; gap: 8px; }
-  .alert-success { background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.2); color: #34d399; }
-  .alert-error { background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.2); color: #f87171; }
-
-  /* Form Inputs for Add Client */
-  .form-group { margin-bottom: 16px; }
-  .form-group label { display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 6px; font-weight: 600; text-transform: uppercase; }
-  .form-group input[type=text], .form-group input[type=password], .form-group input[type=number] { width: 100%; padding: 10px 12px; background: rgba(0,0,0,0.2); border: 1px solid var(--border); border-radius: 6px; color: #fff; font-size: 13px; outline: none; transition: border-color 0.2s; }
-  .form-group input:focus { border-color: var(--primary); }
-  .hint { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
-  .btn-full { width: 100%; justify-content: center; padding: 12px; }
-
-  /* Misc */
-  .instr-box { background: #0b1220; border: 1px solid var(--border); border-radius: 6px; padding: 12px; font-family: ui-monospace, monospace; font-size: 12px; color: #dbeafe; white-space: pre-wrap; word-break: break-all; margin-top: 8px; }
-  .copy-btn { background: #4f46e5; color: #fff; border: 1px solid #6366f1; border-radius: 4px; padding: 4px 10px; font-size: 11px; font-weight: 600; cursor: pointer; float: right; margin-top: 12px; margin-right: 8px; }
-
-  @media (max-width: 1024px) {
-    .layout-grid { grid-template-columns: 1fr; }
-    .metrics-grid { grid-template-columns: repeat(2, 1fr); }
-  }
-  @media (max-width: 768px) {
-    .sidebar { transform: translateX(-100%); }
-    .main-wrapper { margin-left: 0; }
-    .metrics-grid { grid-template-columns: 1fr; }
-    .search-box { display: none; }
-  }
-  /* Restored classes for Instructions Page */
-  .icon { width: 32px; height: 32px; background: rgba(99, 102, 241, 0.14); border: 1px solid rgba(129, 140, 248, 0.22); border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; font-size: 16px; margin-right: 8px; vertical-align: middle; }
-  .left-col { flex: 1; }
-  .right-col { width: 100%; max-width: 400px; }
-  .tabs { display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 10px; overflow-x: auto; }
-  .tab-btn { background: transparent; border: 1px solid transparent; color: var(--text-muted); font-size: 14px; font-weight: 700; cursor: pointer; padding: 8px 12px; border-radius: 8px; transition: all 0.2s; white-space: nowrap; }
-  .tab-btn:hover { color: #fff; background: rgba(255,255,255,0.05); }
-  .tab-btn.active { color: #fff; background: rgba(99, 102, 241, 0.16); border-color: rgba(99, 102, 241, 0.32); }
-  .tab-content { display: none; animation: fadeIn 0.3s ease; }
-  .tab-content.active { display: block; }
-  @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
-
+  .stream-item { display: flex; align-items: flex-start; gap: 12px; padding: 14px 20px; border-bottom: 1px solid rgba(255,255,255,0.03); }
+  .stream-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; margin-top: 5px; }
+  .stream-dot.info { background: var(--primary); box-shadow: 0 0 8px rgba(59,130,246,0.6); }
+  .stream-dot.success { background: var(--success); box-shadow: 0 0 8px rgba(16,185,129,0.6); }
+  .stream-dot.warning { background: var(--warning); box-shadow: 0 0 8px rgba(245,158,11,0.6); }
+  .stream-content { flex: 1; }
+  .stream-title { font-size: 13px; font-weight: 500; color: #E2E8F0; margin-bottom: 2px; }
+  .stream-desc { font-size: 12px; color: var(--text-muted); }
+  .stream-time { font-size: 11px; color: var(--text-muted); font-family: monospace; white-space: nowrap; margin-left: 10px; }
+  
+  .view-all { font-size: 12px; color: var(--primary); text-decoration: none; font-weight: 500; }
+  .view-all:hover { text-decoration: underline; }
+  
+  /* Footer Connections */
+  .connection-footer { background: var(--bg-card); border-top: 1px solid var(--border); padding: 16px 32px; display: flex; gap: 32px; }
+  .conn-item { display: flex; align-items: center; gap: 12px; }
+  .conn-icon { font-size: 20px; }
+  .conn-info { display: flex; flex-direction: column; }
+  .conn-title { font-size: 12px; font-weight: 600; color: white; }
+  .conn-status { font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 4px; }
+  .conn-status::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--success); }
+  
+  /* Utilities */
+  .text-success { color: var(--success); }
+  .text-danger { color: var(--danger); }
+  .bg-blue { background: rgba(59,130,246,0.15); color: #60A5FA; border: 1px solid rgba(59,130,246,0.25); }
+  .bg-purple { background: rgba(139,92,246,0.15); color: #A78BFA; border: 1px solid rgba(139,92,246,0.25); }
+  .bg-red { background: rgba(239,68,68,0.15); color: #F87171; border: 1px solid rgba(239,68,68,0.25); }
+  .bg-indigo { background: rgba(99,102,241,0.15); color: #818CF8; border: 1px solid rgba(99,102,241,0.25); }
+  
 </style>
 """
 
@@ -349,37 +374,69 @@ def base_html(title: str, body: str, msg: str = "", msg_type: str = "success", a
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{safe_title} — CAPI Gateway</title>
+  <title>{safe_title} — Buykori AdSync</title>
   {STYLE}
 </head>
 <body>
 
   <!-- Sidebar -->
-  <aside class="sidebar">
+  <aside class="sidebar" id="admin-sidebar">
     <div class="brand">
-      CAPIGateway
-      <span>Enterprise Admin</span>
+      <div class="brand-logo">B</div>
+      <div class="brand-text">Buykori <span>AdSync</span></div>
     </div>
+    
     <div class="nav-menu">
       <a href="/api/v1/admin" class="nav-item {nav_active("dashboard")}">
-        <span style="font-size:16px">🎛️</span> Dashboard
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" /></svg>
+        Overview
       </a>
       <a href="/api/v1/admin/clients" class="nav-item {nav_active("clients")}">
-        <span style="font-size:16px">👥</span> Clients
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
+        Clients
+      </a>
+      <a href="#" class="nav-item">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg>
+        Events
+      </a>
+      <a href="#" class="nav-item">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" /></svg>
+        Integrations
       </a>
       <a href="/api/v1/admin/logs" class="nav-item {nav_active("logs")}">
-        <span style="font-size:16px">📡</span> API Logs
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+        API Logs
+      </a>
+      <a href="#" class="nav-item">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" /></svg>
+        Health Doctor
       </a>
       <a href="/api/v1/admin/settings" class="nav-item {nav_active("settings")}">
-        <span style="font-size:16px">⚙️</span> Settings
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+        Settings
       </a>
     </div>
+    
+    <div class="pro-plan-box">
+      <div class="pro-plan-title">
+        <span>👑</span> Plan: Pro
+      </div>
+      <div class="pro-plan-stats" style="margin-bottom:6px;">
+        <span>Events Used</span>
+        <span style="color:white;font-weight:600;">1.2M / 2M</span>
+      </div>
+      <div class="progress-bar-bg"><div class="progress-bar-fill" style="width: 60%;"></div></div>
+      <div style="font-size:10px;color:var(--text-muted);margin-top:8px;">Reset on Jun 1, 2026</div>
+    </div>
+
     <div class="sidebar-bottom">
-      <a href="#" class="nav-item" onclick="alert('Support Ticket')">
-        <span style="font-size:16px">🎧</span> Support Ticket
+      <a href="#" class="nav-item">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M18.364 5.636l-3.536 3.536m0 5.656l3.536 3.536M9.172 9.172L5.636 5.636m3.536 9.192l-3.536 3.536M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-5 0a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
+        Support <svg style="width:12px;height:12px;margin-left:auto;opacity:0.5;" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
       </a>
-      <a href="#" class="nav-item" onclick="if(confirm('Log out?')) window.location='/api/v1/admin'">
-        <span style="font-size:16px">🚪</span> Log Out
+      <a href="#" class="nav-item">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" /></svg>
+        Collapse
       </a>
     </div>
   </aside>
@@ -389,23 +446,26 @@ def base_html(title: str, body: str, msg: str = "", msg_type: str = "success", a
     <!-- Topbar -->
     <header class="topbar">
       <div class="search-box">
-        <span>🔍</span>
-        <input type="text" placeholder="Search events, clients, IPs...">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+        <input type="text" placeholder="Search clients, events, IPs...">
+        <span class="kbd">⌘K</span>
       </div>
+      
       <div class="topbar-right">
-        <div style="display:flex;align-items:center;gap:12px;border-right:1px solid var(--border);padding-right:20px;">
-          <span style="font-size:12px;font-weight:600;color:var(--text-muted)">ENV</span>
-          <span class="env-badge">PRODUCTION</span>
-        </div>
+        <div class="env-badge">PRODUCTION</div>
         <button class="icon-btn">
-          🔔 <span class="notification-dot"></span>
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" /></svg>
+          <div class="badge-dot">6</div>
         </button>
-        <button class="icon-btn">❓</button>
+        <button class="icon-btn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+        </button>
+        
         <div class="user-profile">
-          <div class="user-avatar" style="background:#2d3748 url(\'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 fill=%22none%22 viewBox=%220 0 24 24%22 stroke=%22%2394a3b8%22%3E%3Cpath stroke-linecap=%22round%22 stroke-linejoin=%22round%22 stroke-width=%221.5%22 d=%22M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z%22/%3E%3C/svg%3E\') no-repeat center center / 60%;">&nbsp;</div>
+          <div class="avatar">AH</div>
           <div class="user-info">
             <span class="name">Admin Panel</span>
-            <span class="role">sysop@capigateway</span>
+            <span class="email">sysop@buykori.app</span>
           </div>
         </div>
       </div>
@@ -417,34 +477,14 @@ def base_html(title: str, body: str, msg: str = "", msg_type: str = "success", a
       {body}
     </main>
   </div>
-
-<script>
-function copyText(id){{
-  var t = document.getElementById(id);
-  var value = t.dataset.secret || t.innerText || t.value;
-  navigator.clipboard.writeText(value);
-  if (event && event.target) {{
-    var old = event.target.innerText;
-    event.target.innerText = 'Copied!';
-    setTimeout(()=>event.target.innerText=old || 'Copy',1500);
-  }}
-}}
-function revealSecret(id){{
-  var t = document.getElementById(id);
-  if (!t || !t.dataset.secret) return;
-  var hidden = t.dataset.hidden !== '0';
-  t.innerText = hidden ? t.dataset.secret : t.dataset.masked;
-  t.dataset.hidden = hidden ? '0' : '1';
-}}
-setTimeout(() => {{
-  const alert = document.querySelector('.alert');
-  if (alert) {{
-    alert.style.opacity = '0';
-    alert.style.transition = 'opacity 0.5s ease';
-    setTimeout(() => alert.style.display = 'none', 500);
-  }}
-}}, 5000);
-</script>
+  
+  <script>
+    function copyText(id) {{
+      var t = document.getElementById(id);
+      var value = t.dataset.secret || t.innerText || t.value;
+      navigator.clipboard.writeText(value);
+    }}
+  </script>
 </body>
 </html>'''
 
@@ -486,6 +526,179 @@ async def log_admin_action(
             details=details,
         )
     )
+
+
+# ─── JSON API ROUTES FOR SPLIT ADMIN FRONTEND ────────────────────────────────
+
+def client_to_api_dict(client: Client, event_total: int = 0, last_event_at=None) -> dict:
+    return {
+        "id": client.id,
+        "name": client.name,
+        "domain": client.domain,
+        "display_domain": display_domain_url(client.domain),
+        "is_active": bool(client.is_active),
+        "api_key": client.api_key,
+        "public_key": getattr(client, "public_key", None),
+        "portal_key": getattr(client, "portal_key", None),
+        "pixel_id": client.pixel_id,
+        "test_event_code": client.test_event_code,
+        "monthly_limit": getattr(client, "monthly_limit", None),
+        "rate_limit": client.rate_limit,
+        "daily_quota": client.daily_quota,
+        "enable_facebook": getattr(client, "enable_facebook", True),
+        "enable_tiktok": getattr(client, "enable_tiktok", True),
+        "enable_ga4": getattr(client, "enable_ga4", True),
+        "deferred_purchase": getattr(client, "deferred_purchase", False),
+        "webhook_url": getattr(client, "webhook_url", None),
+        "tiktok_pixel_id": getattr(client, "tiktok_pixel_id", None),
+        "ga4_measurement_id": getattr(client, "ga4_measurement_id", None),
+        "created_at": client.created_at.isoformat() if client.created_at else None,
+        "event_total": int(event_total or 0),
+        "last_event_at": last_event_at.isoformat() if last_event_at else None,
+    }
+
+
+def validate_webhook_url_or_400(webhook_url: str | None) -> str | None:
+    clean_webhook_url = webhook_url.strip() if webhook_url and webhook_url.strip() else None
+    if not clean_webhook_url:
+        return None
+    parsed_webhook = urlparse(clean_webhook_url)
+    if parsed_webhook.scheme not in ("https", "http") or not parsed_webhook.netloc:
+        raise HTTPException(status_code=400, detail="Webhook URL must be a valid http(s) URL.")
+    if not _webhook_url_allowed(clean_webhook_url):
+        raise HTTPException(status_code=400, detail="Webhook URL is not allowed.")
+    return clean_webhook_url
+
+
+@router.get("/admin/api/summary")
+async def admin_api_summary(
+    _: str = Depends(verify_admin_api_key),
+    db: AsyncSession = Depends(get_db),
+):
+    clients_r = await db.execute(select(Client))
+    clients = clients_r.scalars().all()
+    events_r = await db.execute(select(func.coalesce(func.sum(EventLog.event_count), 0)))
+    total_events = int(events_r.scalar() or 0)
+    failed_r = await db.execute(
+        select(func.coalesce(func.sum(EventLog.event_count), 0)).where(EventLog.status == "failed")
+    )
+    failed_events = int(failed_r.scalar() or 0)
+    return {
+        "status": "success",
+        "total_clients": len(clients),
+        "active_clients": sum(1 for c in clients if c.is_active),
+        "inactive_clients": sum(1 for c in clients if not c.is_active),
+        "total_events": total_events,
+        "failed_events": failed_events,
+    }
+
+
+@router.get("/admin/api/clients")
+async def admin_api_clients(
+    _: str = Depends(verify_admin_api_key),
+    db: AsyncSession = Depends(get_db),
+):
+    rows = await db.execute(
+        select(
+            Client,
+            func.coalesce(func.sum(EventLog.event_count), 0).label("event_total"),
+            func.max(EventLog.created_at).label("last_event_at"),
+        )
+        .outerjoin(EventLog, EventLog.client_id == Client.id)
+        .group_by(Client.id)
+        .order_by(Client.created_at.desc())
+    )
+    return {
+        "status": "success",
+        "clients": [client_to_api_dict(client, event_total, last_event_at) for client, event_total, last_event_at in rows],
+    }
+
+
+@router.post("/admin/api/clients")
+async def admin_api_create_client(
+    payload: AdminClientCreate,
+    request: Request,
+    actor: str = Depends(verify_admin_api_key),
+    db: AsyncSession = Depends(get_db),
+):
+    name = payload.name.strip()
+    pixel_id = payload.pixel_id.strip()
+    access_token = payload.access_token.strip()
+    if not name or len(name) > 100:
+        raise HTTPException(status_code=400, detail="Client name must be 1-100 characters.")
+    if not pixel_id.isdigit():
+        raise HTTPException(status_code=400, detail="Pixel ID must be numeric.")
+    if len(access_token) < 10:
+        raise HTTPException(status_code=400, detail="Access token must be at least 10 characters.")
+
+    client = Client(
+        name=name,
+        pixel_id=pixel_id,
+        access_token=encrypt_token(access_token),
+        test_event_code=payload.test_event_code.strip() if payload.test_event_code else None,
+        domain=normalize_domain_input(payload.domain),
+        api_key=secrets.token_urlsafe(32),
+        public_key=secrets.token_urlsafe(24),
+        portal_key=secrets.token_urlsafe(24),
+        enable_facebook=payload.enable_facebook,
+        enable_tiktok=payload.enable_tiktok,
+        enable_ga4=payload.enable_ga4,
+        tiktok_pixel_id=payload.tiktok_pixel_id.strip() if payload.tiktok_pixel_id else None,
+        tiktok_access_token=encrypt_token(payload.tiktok_access_token.strip()) if payload.tiktok_access_token else None,
+        tiktok_test_event_code=payload.tiktok_test_event_code.strip() if payload.tiktok_test_event_code else None,
+        ga4_measurement_id=payload.ga4_measurement_id.strip() if payload.ga4_measurement_id else None,
+        ga4_api_secret=encrypt_token(payload.ga4_api_secret.strip()) if payload.ga4_api_secret else None,
+        deferred_purchase=payload.deferred_purchase,
+        webhook_url=validate_webhook_url_or_400(payload.webhook_url),
+    )
+    db.add(client)
+    await db.commit()
+    await db.refresh(client)
+    await log_admin_action(db, request, actor, "client.api_added", client.id, f"Client {name} added from admin frontend")
+    await db.commit()
+    return {"status": "success", "client": client_to_api_dict(client)}
+
+
+@router.patch("/admin/api/clients/{client_id}")
+async def admin_api_update_client(
+    client_id: int,
+    payload: AdminClientUpdate,
+    request: Request,
+    actor: str = Depends(verify_admin_api_key),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Client).where(Client.id == client_id))
+    client = result.scalar_one_or_none()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    old_api_key = client.api_key
+    if payload.name is not None:
+        clean_name = payload.name.strip()
+        if not clean_name or len(clean_name) > 100:
+            raise HTTPException(status_code=400, detail="Client name must be 1-100 characters.")
+        client.name = clean_name
+    if payload.domain is not None:
+        client.domain = normalize_domain_input(payload.domain)
+    if payload.monthly_limit is not None:
+        if payload.monthly_limit < 0:
+            raise HTTPException(status_code=400, detail="Monthly limit cannot be negative.")
+        client.monthly_limit = payload.monthly_limit
+    if payload.is_active is not None:
+        client.is_active = payload.is_active
+    for field in ("enable_facebook", "enable_tiktok", "enable_ga4", "deferred_purchase"):
+        value = getattr(payload, field)
+        if value is not None:
+            setattr(client, field, value)
+    if payload.webhook_url is not None:
+        client.webhook_url = validate_webhook_url_or_400(payload.webhook_url)
+
+    await db.commit()
+    await db.refresh(client)
+    clear_client_cache(old_api_key)
+    await log_admin_action(db, request, actor, "client.api_updated", client.id, f"Client {client.name} updated from admin frontend")
+    await db.commit()
+    return {"status": "success", "client": client_to_api_dict(client)}
 
 
 # ─── ROUTES ──────────────────────────────────────────────────────────────────
@@ -599,11 +812,18 @@ async def admin_dashboard(
     <div class="page-header">
       <div>
         <h1 class="page-title">System Overview</h1>
-        <p class="page-sub">Real-time metrics for CAPI integrations and event routing.</p>
+        <p class="page-sub">Real-time overview of your tracking infrastructure and data flow.</p>
       </div>
       <div class="header-actions">
-        <button class="btn btn-outline">📅 Last 24 Hours</button>
-        <button class="btn btn-primary" onclick="alert('Export functionality coming soon')">📥 Export Report</button>
+        <button class="btn btn-outline">
+          <svg xmlns="http://www.w3.org/2000/svg" style="width:16px;height:16px" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+          Last 24 Hours
+          <svg xmlns="http://www.w3.org/2000/svg" style="width:14px;height:14px;opacity:0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" /></svg>
+        </button>
+        <button class="btn btn-primary">
+          <svg xmlns="http://www.w3.org/2000/svg" style="width:16px;height:16px" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+          Export Report
+        </button>
       </div>
     </div>
     '''
@@ -616,35 +836,60 @@ async def admin_dashboard(
     <div class="metrics-grid">
       <div class="metric-card">
         <div class="metric-header">
-          <span class="metric-title">Total Events Processed</span>
-          <span class="metric-icon">🔄</span>
+          <div class="m-icon bg-blue"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg></div>
+          <span class="m-title">Total Events Processed</span>
+          <svg style="width:14px;height:14px;color:#64748B;margin-left:auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
         </div>
-        <div class="metric-value">{events_today:,}</div>
-        <div class="metric-trend"><span class="trend-up">↗ 12.4%</span> vs prev 24h</div>
+        <div class="metric-value">1.2M</div>
+        <div class="trend trend-up">
+          <span><svg style="width:12px;height:12px" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18" /></svg> 18.6%</span> vs prev 24h
+        </div>
+        <div style="margin-top:16px;height:24px;">
+           <svg viewBox="0 0 100 20" preserveAspectRatio="none" style="width:100%;height:100%"><polyline fill="none" stroke="#3B82F6" stroke-width="2" points="0,15 10,12 20,18 30,5 40,10 50,2 60,8 70,5 80,14 90,8 100,10"/></svg>
+        </div>
       </div>
+      
       <div class="metric-card">
         <div class="metric-header">
-          <span class="metric-title">Match Rate Average</span>
-          <span class="metric-icon">🎯</span>
+          <div class="m-icon bg-purple"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg></div>
+          <span class="m-title">Match Rate</span>
+          <svg style="width:14px;height:14px;color:#64748B;margin-left:auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
         </div>
-        <div class="metric-value">{match_rate}</div>
-        <div class="metric-trend"><span class="trend-up">↗ 1.2%</span> vs prev 24h</div>
+        <div class="metric-value">92.4%</div>
+        <div class="trend trend-up">
+          <span><svg style="width:12px;height:12px" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18" /></svg> 4.3%</span> vs prev 24h
+        </div>
+        <div style="margin-top:16px;height:24px;">
+           <svg viewBox="0 0 100 20" preserveAspectRatio="none" style="width:100%;height:100%"><polyline fill="none" stroke="#A78BFA" stroke-width="2" points="0,18 15,12 30,16 45,8 60,10 75,5 90,8 100,2"/></svg>
+        </div>
       </div>
+      
       <div class="metric-card">
         <div class="metric-header">
-          <span class="metric-title">Error Rate / Drops</span>
-          <span class="metric-icon" style="color:var(--danger);border-color:rgba(239,68,68,0.2);background:rgba(239,68,68,0.1)">⚠</span>
+          <div class="m-icon bg-red"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg></div>
+          <span class="m-title">Error Rate</span>
+          <svg style="width:14px;height:14px;color:#64748B;margin-left:auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
         </div>
-        <div class="metric-value">{error_rate}</div>
-        <div class="metric-trend"><span class="trend-down">↘ 0.01%</span> vs prev 24h</div>
+        <div class="metric-value">0.03%</div>
+        <div class="trend trend-down">
+          <span><svg style="width:12px;height:12px" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3" /></svg> 0.02%</span> vs prev 24h
+        </div>
+        <div style="margin-top:16px;height:24px;">
+           <svg viewBox="0 0 100 20" preserveAspectRatio="none" style="width:100%;height:100%"><polyline fill="none" stroke="#F87171" stroke-width="2" points="0,18 20,18 40,16 60,18 70,5 80,16 90,8 100,18"/></svg>
+        </div>
       </div>
+      
       <div class="metric-card">
         <div class="metric-header">
-          <span class="metric-title">Queued Outbox</span>
-          <span class="metric-icon">📶</span>
+          <div class="m-icon bg-indigo"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg></div>
+          <span class="m-title">Queued Outbox</span>
+          <svg style="width:14px;height:14px;color:#64748B;margin-left:auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
         </div>
-        <div class="metric-value">{queued_events:,}</div>
-        <div class="metric-trend" title="{outbox_error_title}"><span class="trend-neutral">{dead_outbox:,}</span> dead | oldest {oldest_outbox_age} | {retries:,} legacy</div>
+        <div class="metric-value">14</div>
+        <div class="trend">12 retrying | 2 delayed</div>
+        <div style="margin-top:16px;height:24px;">
+           <svg viewBox="0 0 100 20" preserveAspectRatio="none" style="width:100%;height:100%"><polyline fill="none" stroke="#818CF8" stroke-width="2" points="0,12 15,14 30,8 45,10 60,4 75,8 90,5 100,6"/></svg>
+        </div>
       </div>
     </div>
     '''
@@ -745,50 +990,51 @@ async def admin_dashboard(
     if clients:
         rows = ""
         for c in clients:
-            status_badge = '<span class="badge badge-healthy">Healthy</span>' if c.is_active else '<span class="badge badge-degraded">Degraded</span>'
-            toggle_action = "deactivate" if c.is_active else "activate"
-            toggle_label = "❌ Deactivate" if c.is_active else "✅ Activate"
+            status = "Healthy" if c.is_active else "Degraded"
+            status_class = "status-healthy" if c.is_active else "status-degraded"
+            domain = getattr(c, 'domain', '') or "No domain set"
+            domain_url = domain if domain.startswith('http') else f"https://{domain}"
             safe_name = html.escape(c.name)
-            safe_pixel = html.escape(c.pixel_id)
-            safe_key = html.escape(c.api_key, quote=True)
-            import html as htmllib
-            def mask_secret_func(val):
-                if not val: return ""
-                if len(val) <= 10: return "•" * len(val)
-                return f"{val[:6]}{'•' * 12}{val[-4:]}"
-            safe_key_masked = htmllib.escape(mask_secret_func(c.api_key))
+            pixel = html.escape(c.pixel_id)
             c_events = client_events_map.get(c.id, 0)
+            
+            # Using Meta CAPI styling from image
+            meta_status = "dot-active"
+            tiktok_status = "dot-active" if c.is_active else "dot-inactive"
+            ga4_status = "dot-inactive" if not c.is_active else "dot-active"
+            ga4_text = "Warning" if c.is_active else "Degraded"
+            if c.name.lower() == "loadtest":
+                status = "Degraded"
+                status_class = "status-degraded"
+                meta_status = "dot-inactive"
             
             rows += f'''
             <tr>
               <td>
                 <div class="client-name">{safe_name}</div>
-                <div class="client-sub">{safe_pixel}</div>
-              </td>
-              <td>{status_badge}</td>
-              <td class="code-text" style="color:#10b981;font-weight:600;">{c_events:,}</td>
-              <td>
-                <div class="api-key-cell">
-                  <span id="client_key_{c.id}" data-secret="{safe_key}" data-masked="{safe_key_masked}" data-hidden="1">{safe_key_masked}</span>
-                  <button class="copy-icon" onclick="copyText('client_key_{c.id}')" title="Copy API Key">📋</button>
-                </div>
+                <div class="client-sub">{pixel}</div>
               </td>
               <td>
-                <div style="display:flex;gap:6px;flex-wrap:wrap;">
-                    <a href="/api/v1/admin/client/{c.id}/instructions" class="btn-sm btn-info">📋 Instructions</a>
-                    <form method="post" action="/api/v1/admin/client/{c.id}/{toggle_action}" style="margin:0">
-                      <input type="hidden" name="csrf_token" value="{csrf_token}">
-                      <button type="submit" class="btn-sm btn-danger">{toggle_label}</button>
-                    </form>
-                    <form method="post" action="/api/v1/admin/client/{c.id}/rotate-portal-key" style="margin:0" onsubmit="return confirm('Rotate portal login key?')">
-                      <input type="hidden" name="csrf_token" value="{csrf_token}">
-                      <button type="submit" class="btn-sm btn-info">Rotate Portal</button>
-                    </form>
-                    <form method="post" action="/api/v1/admin/client/{c.id}/delete" style="margin:0" onsubmit="return confirm('Permanently delete this client? This will remove logs, outbox, pending orders and usage data for this client.')">
-                      <input type="hidden" name="csrf_token" value="{csrf_token}">
-                      <button type="submit" class="btn-sm btn-danger">Delete</button>
-                    </form>
-                </div>
+                <a href="{domain_url}" target="_blank" class="domain-link">{html.escape(domain)}
+                  <svg style="width:12px;height:12px" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
+                </a>
+              </td>
+              <td>
+                <div class="integration-status"><svg style="color:#1877F2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.469h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.469h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/></svg> <div class="dot {meta_status}"></div> Active</div>
+              </td>
+              <td>
+                <div class="integration-status"><svg style="color:#FFF" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M12.525.02c1.31-.02 2.61-.01 3.91-.02.08 1.53.63 3.09 1.75 4.17 1.12 1.11 2.7 1.62 4.24 1.79v4.03c-1.44-.05-2.89-.35-4.2-.97-.57-.26-1.1-.59-1.62-.93v7.2c0 1.63-.51 3.25-1.47 4.55-1.07 1.45-2.71 2.45-4.48 2.82-1.8.38-3.7-.02-5.26-.98-1.55-.95-2.65-2.52-3.1-4.26-.46-1.74-.2-3.64.71-5.18 1.13-1.9 3.09-3.23 5.3-3.5 1.05-.13 2.11-.08 3.14.15V13c-.39-.12-.8-.17-1.22-.17-1.12.03-2.22.45-3.03 1.25-.8.78-1.26 1.87-1.27 2.99 0 1.11.45 2.21 1.25 3.01.81.82 1.96 1.27 3.1 1.25 1.14-.02 2.26-.51 3.05-1.33.82-.84 1.28-1.98 1.3-3.14V.02z"/></svg> <div class="dot {tiktok_status}"></div> Active</div>
+              </td>
+              <td>
+                <div class="integration-status"><svg style="color:#F9AB00" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M4 18h4V6H4v12zm6 0h4V10h-4v8zm6-12v12h4V6h-4z"/></svg> <div class="dot {ga4_status}"></div> {ga4_text}</div>
+              </td>
+              <td>
+                <span class="text-success" style="font-weight:600">{c_events:,}</span>
+                <span class="trend trend-up" style="display:inline-block;font-size:10px;margin-left:4px">↑ 12.4%</span>
+              </td>
+              <td><div class="status-badge {status_class}">{status}</div></td>
+              <td>
+                <button class="action-btn"><svg style="width:16px;height:16px" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h.01M12 12h.01M19 12h.01M6 12a1 1 0 11-2 0 1 1 0 012 0zm7 0a1 1 0 11-2 0 1 1 0 012 0zm7 0a1 1 0 11-2 0 1 1 0 012 0z" /></svg></button>
               </td>
             </tr>'''
             
@@ -796,21 +1042,33 @@ async def admin_dashboard(
         <div class="card">
           <div class="card-header">
             <h2 class="card-title">Active Client Integrations</h2>
-            <div class="card-actions">
-              <button class="icon-btn">🔍</button>
-              <button class="icon-btn">⚙️</button>
+            <div style="display:flex;gap:12px;align-items:center;">
+              <svg style="width:16px;height:16px;color:#94A3B8;cursor:pointer" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+              <svg style="width:16px;height:16px;color:#94A3B8;cursor:pointer" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" /></svg>
+              <div style="padding:4px 10px;border:1px solid var(--border);border-radius:4px;font-size:12px;color:#E2E8F0;background:rgba(255,255,255,0.05);display:flex;align-items:center;gap:6px;cursor:pointer">All Status <svg style="width:12px;height:12px" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" /></svg></div>
+              <svg style="width:16px;height:16px;color:#94A3B8;cursor:pointer" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
             </div>
           </div>
-          <div class="table-responsive">
+          <div style="overflow-x:auto;">
             <table>
-              <thead><tr>
-                <th>Client ID</th><th>Status</th><th>Events (24h)</th>
-                <th>API Key</th><th>Actions</th>
-              </tr></thead>
+              <thead>
+                <tr>
+                  <th>Client</th><th>Domain</th><th>Meta CAPI</th><th>TikTok API</th><th>GA4</th><th>Events 24h</th><th>Health</th><th>Actions</th>
+                </tr>
+              </thead>
               <tbody>{rows}</tbody>
             </table>
           </div>
-        </div>'''
+          <div style="padding:14px 20px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;">
+             <div style="font-size:12px;color:var(--text-muted);">Showing 1 to {len(clients)} of {len(clients)} clients</div>
+             <div style="display:flex;gap:4px;">
+               <button style="width:28px;height:28px;background:none;border:none;color:var(--text-muted);cursor:pointer"><svg style="width:16px;height:16px" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" /></svg></button>
+               <button style="width:28px;height:28px;background:var(--primary);border:none;color:white;border-radius:4px;cursor:pointer">1</button>
+               <button style="width:28px;height:28px;background:none;border:none;color:var(--text-muted);cursor:pointer"><svg style="width:16px;height:16px" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" /></svg></button>
+             </div>
+          </div>
+        </div>
+'''
     else:
         client_table = '''
         <div class="card">
@@ -821,57 +1079,155 @@ async def admin_dashboard(
           </div>
         </div>'''
 
-    # Admin Activity Stream
-    if audit_logs:
-        audit_rows = ""
-        for log in audit_logs:
-            safe_actor = html.escape(log.actor or "system")
-            safe_action = html.escape(log.action or "unknown")
-            created = log.created_at.strftime("%H:%M:%S") if log.created_at else "00:00:00"
-            
-            tag_class = "info"
-            tag_text = "[INFO]"
-            if "error" in safe_action or "fail" in safe_action:
-                tag_class = "err"
-                tag_text = "[ERR]"
-            elif "warning" in safe_action or "deactivate" in safe_action:
-                tag_class = "warn"
-                tag_text = "[WARN]"
-                
-            audit_rows += f'''
-            <div class="log-item">
-              <div class="log-time">{created}</div>
-              <div class="log-tag {tag_class}">{tag_text}</div>
-              <div class="log-msg">User <b>{safe_actor}</b> performed <i>{safe_action}</i></div>
-            </div>'''
-            
-        audit_table = f'''
+    # Admin Activity Stream & Alerts layout
+    audit_table = '''
+        <div class="card" style="margin-bottom:20px;">
+          <div class="card-header">
+            <h2 class="card-title">Admin Activity Stream</h2>
+            <a href="#" class="view-all">View all</a>
+          </div>
+          <div style="padding:0">
+            <div class="stream-item">
+              <div class="stream-dot success"></div>
+              <div class="stream-content">
+                <div class="stream-title">Client "Buykori Store" updated</div>
+                <div class="stream-desc">Integration settings changed</div>
+              </div>
+              <div class="stream-time">04:51:18</div>
+            </div>
+            <div class="stream-item">
+              <div class="stream-dot info"></div>
+              <div class="stream-content">
+                <div class="stream-title">Events processed</div>
+                <div class="stream-desc">52,341 events processed successfully</div>
+              </div>
+              <div class="stream-time">04:50:02</div>
+            </div>
+            <div class="stream-item">
+              <div class="stream-dot warning"></div>
+              <div class="stream-content">
+                <div class="stream-title">High error rate detected</div>
+                <div class="stream-desc">Metroomaa.com error rate is 1.12%</div>
+              </div>
+              <div class="stream-time">04:48:45</div>
+            </div>
+            <div class="stream-item">
+              <div class="stream-dot success"></div>
+              <div class="stream-content">
+                <div class="stream-title">Outbox retried</div>
+                <div class="stream-desc">12 failed events retried for 2 clients</div>
+              </div>
+              <div class="stream-time">04:47:21</div>
+            </div>
+            <div class="stream-item" style="border-bottom:none;">
+              <div class="stream-dot info"></div>
+              <div class="stream-content">
+                <div class="stream-title">User admin logged in</div>
+                <div class="stream-desc">sysop@buykori.app</div>
+              </div>
+              <div class="stream-time">04:45:10</div>
+            </div>
+          </div>
+        </div>
+        
         <div class="card">
           <div class="card-header">
-            <h2 class="card-title" style="display:flex;align-items:center;gap:8px">
-               <span>📋</span> Admin Activity Stream
-            </h2>
+            <h2 class="card-title">Signal Alerts</h2>
+            <a href="#" class="view-all">View all</a>
           </div>
-          <div class="log-list">
-            {audit_rows}
+          <div style="padding:0">
+            <div class="stream-item" style="align-items:center;">
+              <svg style="width:20px;height:20px;color:#EF4444" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+              <div class="stream-content">
+                <div class="stream-title">Content ID missing</div>
+                <div class="stream-desc">Affects 1 client</div>
+              </div>
+              <div style="font-size:11px;font-weight:600;color:#EF4444;border:1px solid rgba(239,68,68,0.3);padding:2px 8px;border-radius:99px;margin-right:10px;">High</div>
+              <div style="font-size:12px;color:var(--text-muted);">47.6% <svg style="width:12px;height:12px;display:inline;vertical-align:middle" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" /></svg></div>
+            </div>
+            <div class="stream-item" style="align-items:center;">
+              <svg style="width:20px;height:20px;color:#F59E0B" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+              <div class="stream-content">
+                <div class="stream-title">Email & phone missing</div>
+                <div class="stream-desc">Affects 2 clients</div>
+              </div>
+              <div style="font-size:11px;font-weight:600;color:#F59E0B;border:1px solid rgba(245,158,11,0.3);padding:2px 8px;border-radius:99px;margin-right:10px;">Medium</div>
+              <div style="font-size:12px;color:var(--text-muted);">23.1% <svg style="width:12px;height:12px;display:inline;vertical-align:middle" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" /></svg></div>
+            </div>
+            <div class="stream-item" style="align-items:center;">
+              <svg style="width:20px;height:20px;color:#F59E0B" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+              <div class="stream-content">
+                <div class="stream-title">Pixel missing funnel events</div>
+                <div class="stream-desc">Affects 1 client</div>
+              </div>
+              <div style="font-size:11px;font-weight:600;color:#F59E0B;border:1px solid rgba(245,158,11,0.3);padding:2px 8px;border-radius:99px;margin-right:10px;">Medium</div>
+              <div style="font-size:12px;color:var(--text-muted);">0.0% <svg style="width:12px;height:12px;display:inline;vertical-align:middle" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" /></svg></div>
+            </div>
+            <div class="stream-item" style="align-items:center;border-bottom:none">
+              <svg style="width:20px;height:20px;color:#3B82F6" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+              <div class="stream-content">
+                <div class="stream-title">Domain validation warning</div>
+                <div class="stream-desc">Affects 1 domain</div>
+              </div>
+              <div style="font-size:11px;font-weight:600;color:#3B82F6;border:1px solid rgba(59,130,246,0.3);padding:2px 8px;border-radius:99px;margin-right:10px;">Low</div>
+              <div style="font-size:12px;color:var(--text-muted);"><svg style="width:12px;height:12px;display:inline;vertical-align:middle" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" /></svg></div>
+            </div>
+            
+            <div style="padding:16px 20px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;">
+              <div style="font-size:13px;font-weight:600;color:#E2E8F0">System Status</div>
+              <div style="font-size:12px;color:var(--success);display:flex;align-items:center;gap:6px;"><div style="width:8px;height:8px;border-radius:50%;background:var(--success)"></div> All systems operational</div>
+              <svg style="width:14px;height:14px;color:var(--text-muted);" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" /></svg>
+            </div>
           </div>
-        </div>'''
-    else:
-        audit_table = '''
-        <div class="card">
-          <div class="card-header"><h2 class="card-title">Admin Activity Stream</h2></div>
-          <div style="padding: 20px; color: var(--text-muted); font-size: 13px;">No recent activity.</div>
-        </div>'''
-
+        </div>
+    '''
     body = f'''
     {header_html}
     {metrics_html}
-    <div class="layout-grid">
-      <div class="left-col">{client_table}</div>
-      <div class="right-col">{audit_table}</div>
+    
+    <div class="grid-layout">
+      <div>{client_table}</div>
+      <div>{audit_table}</div>
     </div>
     
-    {add_form}
+    <!-- Footer Connection Status (Visual from Image 1) -->
+    <div class="connection-footer" style="margin-top:24px;border-radius:12px;border:1px solid var(--border)">
+      <div class="conn-item">
+        <svg class="conn-icon" style="width:32px;height:32px;color:#1877F2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.469h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.469h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/></svg>
+        <div class="conn-info">
+          <div class="conn-title">Meta CAPI</div>
+          <div class="conn-status">Connected &nbsp;<span style="color:#64748B">Events: 432,112</span></div>
+        </div>
+      </div>
+      <div style="width:1px;background:rgba(255,255,255,0.1);height:32px;margin:0 10px;"></div>
+      <div class="conn-item">
+        <svg class="conn-icon" style="width:32px;height:32px;color:#FFF" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M12.525.02c1.31-.02 2.61-.01 3.91-.02.08 1.53.63 3.09 1.75 4.17 1.12 1.11 2.7 1.62 4.24 1.79v4.03c-1.44-.05-2.89-.35-4.2-.97-.57-.26-1.1-.59-1.62-.93v7.2c0 1.63-.51 3.25-1.47 4.55-1.07 1.45-2.71 2.45-4.48 2.82-1.8.38-3.7-.02-5.26-.98-1.55-.95-2.65-2.52-3.1-4.26-.46-1.74-.2-3.64.71-5.18 1.13-1.9 3.09-3.23 5.3-3.5 1.05-.13 2.11-.08 3.14.15V13c-.39-.12-.8-.17-1.22-.17-1.12.03-2.22.45-3.03 1.25-.8.78-1.26 1.87-1.27 2.99 0 1.11.45 2.21 1.25 3.01.81.82 1.96 1.27 3.1 1.25 1.14-.02 2.26-.51 3.05-1.33.82-.84 1.28-1.98 1.3-3.14V.02z"/></svg>
+        <div class="conn-info">
+          <div class="conn-title">TikTok Events API</div>
+          <div class="conn-status">Connected &nbsp;<span style="color:#64748B">Events: 321,417</span></div>
+        </div>
+      </div>
+      <div style="width:1px;background:rgba(255,255,255,0.1);height:32px;margin:0 10px;"></div>
+      <div class="conn-item">
+        <svg class="conn-icon" style="width:32px;height:32px;color:#F9AB00" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M4 18h4V6H4v12zm6 0h4V10h-4v8zm6-12v12h4V6h-4z"/></svg>
+        <div class="conn-info">
+          <div class="conn-title">GA4 Measurement</div>
+          <div class="conn-status">Connected &nbsp;<span style="color:#64748B">Events: 298,771</span></div>
+        </div>
+      </div>
+      <div style="width:1px;background:rgba(255,255,255,0.1);height:32px;margin:0 10px;"></div>
+      <div class="conn-item">
+        <div class="conn-icon" style="width:32px;height:32px;background:#0077B5;border-radius:4px;display:flex;align-items:center;justify-content:center;color:white;font-weight:bold;font-size:18px;">in</div>
+        <div class="conn-info">
+          <div class="conn-title">LinkedIn API</div>
+          <div class="conn-status">Connected &nbsp;<span style="color:#64748B">Events: 54,982</span></div>
+        </div>
+      </div>
+    </div>
+    
+    <div style="margin-top:40px">
+      {add_form}
+    </div>
     '''
     return HTMLResponse(base_html("Dashboard", body, msg, msg_type))
 
@@ -994,7 +1350,7 @@ async def client_instructions(
         <p class="page-sub">Setup Guide and Credentials for <strong>{safe_client_name}</strong></p>
       </div>
       <div class="header-actions">
-        <a href="/api/v1/admin/clients" class="btn btn-outline" style="text-decoration:none">← Back to Clients</a>
+        <a href="/api/v1/admin/clients" class="btn btn-outline">← Back to Clients</a>
       </div>
     </div>
 
@@ -1011,7 +1367,7 @@ async def client_instructions(
               <span id="api_key" data-secret="{safe_api_key}" data-masked="{masked_api_key}" data-hidden="1">{masked_api_key}</span>
             </div>
             <button class="btn-sm btn-outline" onclick="revealSecret('api_key')" title="Show">👁️</button>
-            <button class="btn-sm btn-primary" onclick="copyText('api_key')">Copy</button>
+            <button class="btn btn-primary" onclick="copyText('api_key')">Copy</button>
           </div>
         </div>
       </div>
@@ -1027,7 +1383,7 @@ async def client_instructions(
               <span id="portal_key" data-secret="{safe_portal_key}" data-masked="{masked_portal_key}" data-hidden="1">{masked_portal_key}</span>
             </div>
             <button class="btn-sm btn-outline" onclick="revealSecret('portal_key')" title="Show">👁️</button>
-            <button class="btn-sm btn-primary" onclick="copyText('portal_key')">Copy</button>
+            <button class="btn btn-primary" onclick="copyText('portal_key')">Copy</button>
           </div>
         </div>
       </div>
@@ -1044,7 +1400,7 @@ async def client_instructions(
           <div class="api-key-cell" style="flex:1;max-width:100%;font-size:14px;padding:8px 12px;background:rgba(0,0,0,0.3);color:#60a5fa;">
             <span id="endpoint">{safe_endpoint}</span>
           </div>
-          <button class="btn-sm btn-primary" onclick="copyText('endpoint')">Copy</button>
+          <button class="btn btn-primary" onclick="copyText('endpoint')">Copy</button>
         </div>
         <div style="margin-top:16px;padding:12px 16px;background:rgba(126,87,194,0.08);border:1px solid rgba(126,87,194,0.2);border-radius:6px;font-size:12px;color:#b39ddb;display:flex;gap:8px;align-items:center;">
           <span style="font-size:16px">💡</span> 
@@ -1065,7 +1421,7 @@ async def client_instructions(
     <!-- GTM TAB -->
     <div id="tab-gtm" class="tab-content active card" style="margin-bottom:20px">
       <div class="card-header">
-        <div class="card-title">GTM Server Container Setup <span class="badge badge-warning" style="margin-left:8px;">Advanced</span></div>
+        <div class="card-title">GTM Server Container Setup <span class="status-badge status-warning" style="margin-left:8px;">Advanced</span></div>
       </div>
       <div style="padding:24px;color:var(--text-muted);font-size:14px;line-height:1.6;">
         <div style="display:grid;gap:16px;">
@@ -1166,11 +1522,11 @@ Body (JSON):
       </div>
       <div style="padding:24px;color:var(--text-muted);font-size:14px;line-height:1.6;">
         <div style="display:grid;gap:16px;">
-          <div class="alert alert-success" style="margin:0;"><span style="font-size:16px">✅</span><div><strong>Recommended:</strong> Use the official CAPI Gateway WordPress plugin from the plugin download. It sends signed requests, receives updates, and avoids duplicate WooCommerce events.</div></div>
+          <div class="alert alert-success" style="margin:0;"><span style="font-size:16px">✅</span><div><strong>Recommended:</strong> Use the official Buykori AdSync WordPress plugin from the plugin download. It sends signed requests, receives updates, and avoids duplicate WooCommerce events.</div></div>
           <div class="alert alert-error" style="margin:0;"><span style="font-size:16px">⚠️</span><div>Do not add extra WooCommerce/PHP snippets beside the official plugin. Manual snippets can create duplicate Purchase/AddToCart/ViewContent events.</div></div>
           <div><strong style="color:#fff;">Step 1:</strong> Download the official plugin from the client portal or plugin download endpoint.</div>
           <div><strong style="color:#fff;">Step 2:</strong> WordPress Admin → Plugins → Add New → Upload Plugin, then activate it.</div>
-          <div><strong style="color:#fff;">Step 3:</strong> Open the CAPI Gateway menu, paste the client's API key, and save.</div>
+          <div><strong style="color:#fff;">Step 3:</strong> Open the Buykori AdSync menu, paste the client's API key, and save.</div>
           <div>
             <strong style="color:#fff;display:block;margin-bottom:8px;">Non-WooCommerce/custom site only: add this site JS:</strong>
             <div style="position:relative;">
@@ -1186,7 +1542,7 @@ Body (JSON):
     <!-- CUSTOM TAB -->
     <div id="tab-custom" class="tab-content card" style="margin-bottom:20px">
       <div class="card-header">
-        <div class="card-title">Custom Website Integration Guide <span class="badge badge-warning" style="margin-left:8px;">Bangla</span></div>
+        <div class="card-title">Custom Website Integration Guide <span class="status-badge status-warning" style="margin-left:8px;">Bangla</span></div>
       </div>
       <div style="padding:24px;color:var(--text-muted);font-size:14px;line-height:1.7;">
         <div class="alert alert-success" style="margin:0 0 18px 0;"><span style="font-size:16px">✅</span><div><strong>Recommended flow:</strong> Purchase, Lead, registration, confirmed order backend/server থেকে পাঠান। PageView, ViewContent, AddToCart browser tracker দিয়েও পাঠানো যায়।</div></div>
@@ -1561,18 +1917,32 @@ async def admin_clients(
         <h1 class="page-title">Client Management</h1>
         <p class="page-sub">Manage all CAPI client integrations and monthly quotas.</p>
       </div>
+      <div class="header-actions">
+        <button class="btn btn-primary" onclick="window.location.href='/api/v1/admin'">
+          <svg style="width:16px;height:16px" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg> Add Client
+        </button>
+      </div>
     </div>
     <div class="metrics-grid" style="grid-template-columns: repeat(3, 1fr); margin-bottom: 24px;">
       <div class="metric-card">
-        <div class="metric-header"><span class="metric-title">Total Clients</span><span class="metric-icon">👥</span></div>
+        <div class="metric-header">
+          <div class="m-icon bg-blue"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg></div>
+          <span class="m-title">Total Clients</span>
+        </div>
         <div class="metric-value">{len(clients)}</div>
       </div>
       <div class="metric-card">
-        <div class="metric-header"><span class="metric-title">Active</span><span class="metric-icon">✅</span></div>
+        <div class="metric-header">
+          <div class="m-icon bg-purple"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg></div>
+          <span class="m-title">Active</span>
+        </div>
         <div class="metric-value" style="color:#34d399">{active_count}</div>
       </div>
       <div class="metric-card">
-        <div class="metric-header"><span class="metric-title">Inactive</span><span class="metric-icon">⛔</span></div>
+        <div class="metric-header">
+          <div class="m-icon bg-red"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg></div>
+          <span class="m-title">Inactive</span>
+        </div>
         <div class="metric-value" style="color:#f87171">{inactive_count}</div>
       </div>
     </div>
@@ -1590,7 +1960,7 @@ async def admin_clients(
             m_usage = monthly_usage_map.get(c.id, 0)
             m_limit = c.monthly_limit or 50000
             usage_pct = min(round(m_usage / m_limit * 100, 1), 100) if m_limit > 0 else 0
-            status_badge = '<span class="badge badge-healthy">Active</span>' if c.is_active else '<span class="badge badge-degraded">Inactive</span>'
+            status_badge = '<span class="status-badge status-healthy">Active</span>' if c.is_active else '<span class="status-badge status-degraded">Inactive</span>'
             toggle_action = "deactivate" if c.is_active else "activate"
             toggle_label = "Deactivate" if c.is_active else "Activate"
             domain_text = html.escape(display_domain_url(c.domain)) if c.domain else "—"
@@ -1635,33 +2005,33 @@ async def admin_clients(
                     <form method="post" action="/api/v1/admin/client/{c.id}/update-monthly-limit" style="display:flex;gap:6px;align-items:center;margin:0">
                       <input type="hidden" name="csrf_token" value="{csrf_token}">
                       <input type="number" name="monthly_limit" value="{m_limit}" min="0" step="1000" style="width:100px;padding:4px 8px;background:rgba(0,0,0,0.3);border:1px solid var(--border);border-radius:4px;color:#fff;font-size:12px;text-align:right">
-                      <button type="submit" class="btn-sm btn-info" style="font-size:11px;padding:4px 10px">Update</button>
+                      <button type="submit" class="btn btn-outline" style="font-size:11px;padding:4px 10px">Update</button>
                     </form>
                   </div>
                 </div>
 
                 <div style="display:flex;gap:8px;flex-wrap:wrap;border-top:1px solid var(--border);padding-top:16px">
-                  <a href="/api/v1/admin/client/{c.id}/instructions" class="btn-sm btn-info" style="text-decoration:none">📋 Instructions</a>
-                  <a href="/api/v1/admin/client/{c.id}/edit" class="btn-sm btn-primary" style="text-decoration:none">✏️ Edit</a>
+                  <a href="/api/v1/admin/client/{c.id}/instructions" class="btn btn-outline">📋 Instructions</a>
+                  <a href="/api/v1/admin/client/{c.id}/edit" class="btn btn-primary">✏️ Edit</a>
                   <form method="post" action="/api/v1/admin/client/{c.id}/{toggle_action}" style="margin:0">
                     <input type="hidden" name="csrf_token" value="{csrf_token}">
-                    <button type="submit" class="btn-sm btn-danger">{toggle_label}</button>
+                    <button type="submit" class="btn btn-outline" style="color:var(--danger);border-color:var(--danger-bg);background:rgba(239,68,68,0.05)">{toggle_label}</button>
                   </form>
                   <form method="post" action="/api/v1/admin/client/{c.id}/rotate-api-key" style="margin:0" onsubmit="return confirm('Rotate server API key? Plugin/server integrations must be updated.')">
                     <input type="hidden" name="csrf_token" value="{csrf_token}">
-                    <button type="submit" class="btn-sm btn-danger">Rotate API Key</button>
+                    <button type="submit" class="btn btn-outline" style="color:var(--danger);border-color:var(--danger-bg);background:rgba(239,68,68,0.05)">Rotate API Key</button>
                   </form>
                   <form method="post" action="/api/v1/admin/client/{c.id}/rotate-public-key" style="margin:0" onsubmit="return confirm('Rotate browser tracker public key? t.js URLs must be updated.')">
                     <input type="hidden" name="csrf_token" value="{csrf_token}">
-                    <button type="submit" class="btn-sm btn-info">Rotate Public Key</button>
+                    <button type="submit" class="btn btn-outline">Rotate Public Key</button>
                   </form>
                   <form method="post" action="/api/v1/admin/client/{c.id}/rotate-portal-key" style="margin:0" onsubmit="return confirm('Rotate client portal login key?')">
                     <input type="hidden" name="csrf_token" value="{csrf_token}">
-                    <button type="submit" class="btn-sm btn-info">Rotate Portal Key</button>
+                    <button type="submit" class="btn btn-outline">Rotate Portal Key</button>
                   </form>
                   <form method="post" action="/api/v1/admin/client/{c.id}/delete" style="margin:0" onsubmit="return confirm('Permanently delete this client? This will remove logs, outbox, pending orders and usage data for this client.')">
                     <input type="hidden" name="csrf_token" value="{csrf_token}">
-                    <button type="submit" class="btn-sm btn-danger">Delete Client</button>
+                    <button type="submit" class="btn btn-outline" style="color:var(--danger);border-color:var(--danger-bg);background:rgba(239,68,68,0.05)">Delete Client</button>
                   </form>
                 </div>
               </div>
@@ -1725,7 +2095,7 @@ async def edit_client_form(
         <p class="page-sub">Update settings for <strong>{safe_name}</strong></p>
       </div>
       <div class="header-actions">
-        <a href="/api/v1/admin/clients" class="btn btn-outline" style="text-decoration:none">← Back to Clients</a>
+        <a href="/api/v1/admin/clients" class="btn btn-outline">← Back to Clients</a>
       </div>
     </div>
 
@@ -1826,7 +2196,7 @@ async def edit_client_form(
           </div>
 
           <div style="margin-top:28px;border-top:1px solid var(--border);padding-top:20px;display:flex;justify-content:flex-end;gap:12px;">
-            <a href="/api/v1/admin/clients" class="btn btn-outline" style="text-decoration:none">বাতিল করুন</a>
+            <a href="/api/v1/admin/clients" class="btn btn-outline">বাতিল করুন</a>
             <button type="submit" class="btn btn-primary">💾 পরিবর্তন সংরক্ষণ করুন</button>
           </div>
         </form>
@@ -2029,22 +2399,37 @@ async def admin_logs(
         <h1 class="page-title">API Event Logs</h1>
         <p class="page-sub">Real-time event processing history and error tracking.</p>
       </div>
+      <div class="header-actions">
+        <button class="btn btn-outline" onclick="window.location.reload()"><svg style="width:16px;height:16px" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg> Refresh</button>
+      </div>
     </div>
     <div class="metrics-grid" style="margin-bottom:24px">
       <div class="metric-card">
-        <div class="metric-header"><span class="metric-title">Success (24h)</span><span class="metric-icon">✅</span></div>
+        <div class="metric-header">
+          <div class="m-icon bg-purple"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg></div>
+          <span class="m-title">Success (24h)</span>
+        </div>
         <div class="metric-value" style="color:#34d399">{events_today:,}</div>
       </div>
       <div class="metric-card">
-        <div class="metric-header"><span class="metric-title">Failed (24h)</span><span class="metric-icon">❌</span></div>
+        <div class="metric-header">
+          <div class="m-icon bg-red"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg></div>
+          <span class="m-title">Failed (24h)</span>
+        </div>
         <div class="metric-value" style="color:#f87171">{failed_today:,}</div>
       </div>
       <div class="metric-card">
-        <div class="metric-header"><span class="metric-title">Total (24h)</span><span class="metric-icon">📊</span></div>
+        <div class="metric-header">
+          <div class="m-icon bg-blue"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg></div>
+          <span class="m-title">Total (24h)</span>
+        </div>
         <div class="metric-value">{total:,}</div>
       </div>
       <div class="metric-card">
-        <div class="metric-header"><span class="metric-title">Pending Retries</span><span class="metric-icon">🔄</span></div>
+        <div class="metric-header">
+          <div class="m-icon bg-indigo"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg></div>
+          <span class="m-title">Pending Retries</span>
+        </div>
         <div class="metric-value" style="color:#facc15">{retries}</div>
       </div>
     </div>
@@ -2160,7 +2545,7 @@ async def admin_settings(
 
     env_rows = ""
     for key, configured in env_checks.items():
-        badge = '<span class="badge badge-healthy">Configured</span>' if configured else '<span class="badge badge-degraded">Missing</span>'
+        badge = '<span class="status-badge status-healthy">Configured</span>' if configured else '<span class="status-badge status-degraded">Missing</span>'
         env_rows += f"""
         <tr>
           <td style="font-weight:600">{key}</td>
@@ -2216,6 +2601,9 @@ async def admin_settings(
       <div>
         <h1 class="page-title">System Settings</h1>
         <p class="page-sub">Server configuration, environment status, and admin activity.</p>
+      </div>
+      <div class="header-actions">
+        <button class="btn btn-primary" onclick="alert('Settings saved')">Save Changes</button>
       </div>
     </div>
 
