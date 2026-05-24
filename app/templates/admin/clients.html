@@ -49,7 +49,7 @@
       <div class="card-header">
         <div>
           <h2 class="card-title" style="margin-bottom:4px">{{ c.name }}</h2>
-          <span style="font-size:12px;color:var(--text-muted)">Pixel: {{ c.pixel_id }} · Created: {% if c.created_at %}{{ c.created_at.strftime('%Y-%m-%d') }}{% else %}—{% endif %}</span>
+          <span style="font-size:12px;color:var(--text-muted)">Pixel: {{ c.pixel_id }} · Created: {% if c.created_at %}<span class="local-datetime" data-utc="{{ c.created_at.isoformat() }}" data-format="date">{{ c.created_at.strftime('%Y-%m-%d') }}</span>{% else %}—{% endif %}</span>
         </div>
         <div style="display:flex;align-items:center;gap:8px">
           {% if c.is_active %}

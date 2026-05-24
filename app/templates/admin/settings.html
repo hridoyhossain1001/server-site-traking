@@ -60,7 +60,7 @@
       <tbody>
         {% for log in audit_logs %}
         <tr>
-          <td class="code-text">{% if log.created_at %}{{ log.created_at.strftime('%Y-%m-%d %H:%M') }}{% else %}—{% endif %}</td>
+          <td class="code-text">{% if log.created_at %}<span class="local-datetime" data-utc="{{ log.created_at.isoformat() }}">{{ log.created_at.strftime('%Y-%m-%d %H:%M') }}</span>{% else %}—{% endif %}</td>
           <td>{{ log.actor or 'system' }}</td>
           <td><span style="color:#818cf8">{{ log.action or '—' }}</span></td>
           <td class="code-text">{{ log.client_id or '—' }}</td>

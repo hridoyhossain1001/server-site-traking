@@ -146,6 +146,34 @@
       clearTimeout(t._tid);
       t._tid = setTimeout(function() { t.style.opacity = '0'; }, 1800);
     }
+
+    document.addEventListener("DOMContentLoaded", function() {
+      document.querySelectorAll('.local-datetime').forEach(function(el) {
+        var utcStr = el.getAttribute('data-utc');
+        if (utcStr) {
+          try {
+            if (!utcStr.endsWith('Z') && !utcStr.includes('+')) {
+              utcStr += 'Z';
+            }
+            var d = new Date(utcStr);
+            if (!isNaN(d.getTime())) {
+              var format = el.getAttribute('data-format');
+              if (format === 'time') {
+                el.textContent = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+              } else if (format === 'date') {
+                el.textContent = d.toLocaleDateString(undefined, { year: 'numeric', month: '2-digit', day: '2-digit' });
+              } else {
+                var dateStr = d.toLocaleDateString(undefined, { year: 'numeric', month: '2-digit', day: '2-digit' });
+                var timeStr = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+                el.textContent = dateStr + ' ' + timeStr;
+              }
+            }
+          } catch (e) {
+            console.error(e);
+          }
+        }
+      });
+    });
   </script>
 </body>
 </html>
