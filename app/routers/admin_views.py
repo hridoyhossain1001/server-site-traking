@@ -481,6 +481,13 @@ async def delete_client(
     await db.execute(sql_delete(EventDedup).where(EventDedup.client_id == client_id))
     await db.execute(sql_delete(UsageCounter).where(UsageCounter.client_id == client_id))
     await db.execute(sql_delete(EventLog).where(EventLog.client_id == client_id))
+
+    # Delete client sessions and users to avoid foreign key constraint violations
+    from app.models.client_session import ClientSession
+    from app.models.client_user import ClientUser
+    await db.execute(sql_delete(ClientSession).where(ClientSession.client_id == client_id))
+    await db.execute(sql_delete(ClientUser).where(ClientUser.client_id == client_id))
+
     await db.delete(client)
     await log_admin_action(db, request, username, "client.deleted", client_id, f"Deleted client: {client_name}")
     await db.commit()

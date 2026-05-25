@@ -27,28 +27,6 @@ RETRY_DELAYS = [30, 120, 600, 1800, 3600]
 STALE_RETRYING_SECONDS = 600  # 10 minutes
 
 
-async def save_failed_event(
-    db: AsyncSession,
-    client_id: int,
-    events_data: list,
-    error_message: str,
-) -> bool:
-    """ব্যর্থ ইভেন্ট DB-তে সংরক্ষণ করো retry-এর জন্য"""
-    try:
-        failed = FailedEvent(
-            client_id=client_id,
-            event_payload=events_data,
-            error_message=error_message[:500],
-        )
-        db.add(failed)
-        await db.flush()
-        logger.info(f"[Client {client_id}] Failed event saved for retry")
-        return True
-    except Exception as e:
-        await db.rollback()
-        logger.error(f"Failed to save failed event: {e}")
-        return False
-
 
 def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None:

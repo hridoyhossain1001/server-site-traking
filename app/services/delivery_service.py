@@ -164,6 +164,34 @@ async def _send_webhook_secondary(client, events_data: list[dict], context: dict
                 context.get("ip_address"),
             )
 
+def is_event_enabled_for_platform(client, event_name: str, platform: str) -> bool:
+    """Check if an event is enabled for a platform under client's event routing rules."""
+    # First check global settings
+    if platform == "meta":
+        global_enabled = bool(getattr(client, "enable_facebook", True) and client.pixel_id and client.access_token)
+    elif platform == "tiktok":
+        global_enabled = bool(getattr(client, "enable_tiktok", True) and client.tiktok_pixel_id and client.tiktok_access_token)
+    elif platform == "ga4":
+        global_enabled = bool(getattr(client, "enable_ga4", True) and client.ga4_measurement_id and client.ga4_api_secret)
+    else:
+        global_enabled = False
+
+    if not global_enabled:
+        return False
+
+    # If the client has custom rules, check them
+    rules = getattr(client, "event_rules", None)
+    if rules and isinstance(rules, list):
+        for rule in rules:
+            if isinstance(rule, dict) and rule.get("eventName") == event_name:
+                rule_key = f"{platform}Enabled"
+                if rule_key in rule:
+                    return bool(rule.get(rule_key))
+                break
+
+    return global_enabled
+
+
 async def deliver_events_to_platforms(
     client,
     events: list[EventData],
@@ -175,16 +203,29 @@ async def deliver_events_to_platforms(
     Raises exceptions if the primary delivery platform fails.
     Fires secondary deliveries as parallel background tasks.
     """
-    event_names = ", ".join(sorted({event.event_name for event in events}))
-    events_data = [event.model_dump(exclude_none=True) for event in events]
-
-    facebook_enabled = bool(getattr(client, "enable_facebook", True) and client.pixel_id and client.access_token)
-    tiktok_enabled = bool(getattr(client, "enable_tiktok", True) and client.tiktok_pixel_id and client.tiktok_access_token)
-    ga4_enabled = bool(getattr(client, "enable_ga4", True) and client.ga4_measurement_id and client.ga4_api_secret)
+    # Filter events for each platform based on custom event routing rules
+    facebook_events = [e for e in events if is_event_enabled_for_platform(client, e.event_name, "meta")]
+    tiktok_events = [e for e in events if is_event_enabled_for_platform(client, e.event_name, "tiktok")]
+    ga4_events = [e for e in events if is_event_enabled_for_platform(client, e.event_name, "ga4")]
+    
+    facebook_enabled = len(facebook_events) > 0
+    tiktok_enabled = len(tiktok_events) > 0
+    ga4_enabled = len(ga4_events) > 0
     webhook_enabled = bool(client.webhook_url)
 
     if not any([facebook_enabled, tiktok_enabled, ga4_enabled, webhook_enabled]):
-        raise RuntimeError("No delivery platform enabled for this client")
+        logger.info(f"[{client.name}] All events in batch filtered by rules or no platforms enabled.")
+        return {
+            "primary_platform": "None",
+            "result": {"ok": True, "message": "Filtered by custom event routing rules"},
+            "_tasks": [],
+        }
+
+    event_names = ", ".join(sorted({event.event_name for event in events}))
+    events_data = [event.model_dump(exclude_none=True) for event in events]
+    # Filter the dict representations for ga4/webhook
+    ga4_events_data = [event.model_dump(exclude_none=True) for event in ga4_events]
+    webhook_events_data = events_data  # webhook gets everything
 
     result = None
     primary_platform = None
@@ -192,10 +233,10 @@ async def deliver_events_to_platforms(
     primary_ga4_sent = False
 
     if facebook_enabled:
-        result = await send_to_facebook(client, events)
+        result = await send_to_facebook(client, facebook_events)
         primary_platform = "Facebook"
     elif tiktok_enabled:
-        tiktok_result = await send_to_tiktok(client, events)
+        tiktok_result = await send_to_tiktok(client, tiktok_events)
         if not tiktok_result or tiktok_result.get("code") not in (0, None):
             raise RuntimeError(f"TikTok send failed: {tiktok_result}")
         result = tiktok_result
@@ -203,7 +244,7 @@ async def deliver_events_to_platforms(
         primary_platform = "TikTok"
     elif ga4_enabled:
         ga4_result = await send_to_ga4(
-            events=events_data,
+            events=ga4_events_data,
             measurement_id=client.ga4_measurement_id,
             api_secret=client.ga4_api_secret,
             cookies=context.get("cookies") or {},
@@ -217,7 +258,7 @@ async def deliver_events_to_platforms(
         primary_platform = "GA4"
     elif webhook_enabled:
         webhook_errors = []
-        for event_data in events_data:
+        for event_data in webhook_events_data:
             sent = await send_webhook(
                 client.webhook_url,
                 "event.sent",
@@ -232,23 +273,33 @@ async def deliver_events_to_platforms(
                 webhook_errors.append(event_data.get("event_name") or "unknown")
         if webhook_errors:
             raise RuntimeError(f"Webhook send failed for: {', '.join(webhook_errors)}")
-        result = {"ok": True, "sent_count": len(events_data)}
+        result = {"ok": True, "sent_count": len(webhook_events_data)}
         primary_platform = "Webhook"
 
     # Fire secondary sends in parallel as background tasks
     secondary_tasks = []
     if tiktok_enabled and not primary_tiktok_sent:
         secondary_tasks.append(
-            _send_tiktok_secondary(client, events, event_names, context.get("ip_address"))
+            _send_tiktok_secondary(
+                client,
+                tiktok_events,
+                ", ".join(sorted({e.event_name for e in tiktok_events})),
+                context.get("ip_address")
+            )
         )
 
     if ga4_enabled and not primary_ga4_sent:
         secondary_tasks.append(
-            _send_ga4_secondary(client, events_data, event_names, context)
+            _send_ga4_secondary(
+                client,
+                ga4_events_data,
+                ", ".join(sorted({e.event_name for e in ga4_events})),
+                context
+            )
         )
 
     if webhook_enabled and primary_platform != "Webhook":
-        secondary_tasks.append(_send_webhook_secondary(client, events_data, context))
+        secondary_tasks.append(_send_webhook_secondary(client, webhook_events_data, context))
 
     # Fire secondary sends as true background tasks — don't block the outbox worker
     tasks = []

@@ -21,6 +21,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
 
+from app.database import engine
 from app.models.usage_counter import UsageCounter
 
 logger = logging.getLogger(__name__)
@@ -36,21 +37,47 @@ async def _atomic_reserve(
     Atomically increment a usage counter and return the NEW count.
     PostgreSQL INSERT ... ON CONFLICT DO UPDATE ... RETURNING guarantees atomicity.
     """
-    stmt = (
-        pg_insert(UsageCounter)
-        .values(
-            client_id=client_id,
-            window_key=window_key,
-            count=event_count,
+    if engine.dialect.name == "postgresql":
+        stmt = (
+            pg_insert(UsageCounter)
+            .values(
+                client_id=client_id,
+                window_key=window_key,
+                count=event_count,
+            )
+            .on_conflict_do_update(
+                constraint="uq_client_window",
+                set_={"count": UsageCounter.count + event_count},
+            )
+            .returning(UsageCounter.count)
         )
-        .on_conflict_do_update(
-            constraint="uq_client_window",
-            set_={"count": UsageCounter.count + event_count},
+        result = await db.execute(stmt)
+        return result.scalar()
+    else:
+        # SQLite fallback (thread-safe fallback checking if row exists and incrementing inside transaction)
+        stmt = (
+            select(UsageCounter)
+            .where(
+                UsageCounter.client_id == client_id,
+                UsageCounter.window_key == window_key,
+            )
+            .with_for_update()
         )
-        .returning(UsageCounter.count)
-    )
-    result = await db.execute(stmt)
-    return result.scalar()
+        result = await db.execute(stmt)
+        row = result.scalar_one_or_none()
+        if row:
+            row.count += event_count
+            await db.flush()
+            return row.count
+        else:
+            row = UsageCounter(
+                client_id=client_id,
+                window_key=window_key,
+                count=event_count,
+            )
+            db.add(row)
+            await db.flush()
+            return row.count
 
 
 async def _atomic_rollback(
@@ -251,52 +278,61 @@ async def increment_usage_counters_db(
 
     # ─── Per-Minute Rate Counter ───────────────────────────────────────
     minute_key = f"rate:{now.strftime('%Y-%m-%dT%H:%M')}"
-    rate_stmt = (
-        pg_insert(UsageCounter)
-        .values(
-            client_id=client.id,
-            window_key=minute_key,
-            count=event_count,
+    if engine.dialect.name == "postgresql":
+        rate_stmt = (
+            pg_insert(UsageCounter)
+            .values(
+                client_id=client.id,
+                window_key=minute_key,
+                count=event_count,
+            )
+            .on_conflict_do_update(
+                constraint="uq_client_window",
+                set_={"count": UsageCounter.count + event_count},
+            )
         )
-        .on_conflict_do_update(
-            constraint="uq_client_window",
-            set_={"count": UsageCounter.count + event_count},
-        )
-    )
-    await db.execute(rate_stmt)
+        await db.execute(rate_stmt)
+    else:
+        await _atomic_reserve(db, client.id, minute_key, event_count)
 
     # ─── Daily Quota Counter ───────────────────────────────────────────
     if client.daily_quota:
         daily_key = f"daily:{now.strftime('%Y-%m-%d')}"
-        daily_stmt = (
-            pg_insert(UsageCounter)
-            .values(
-                client_id=client.id,
-                window_key=daily_key,
-                count=event_count,
+        if engine.dialect.name == "postgresql":
+            daily_stmt = (
+                pg_insert(UsageCounter)
+                .values(
+                    client_id=client.id,
+                    window_key=daily_key,
+                    count=event_count,
+                )
+                .on_conflict_do_update(
+                    constraint="uq_client_window",
+                    set_={"count": UsageCounter.count + event_count},
+                )
             )
-            .on_conflict_do_update(
-                constraint="uq_client_window",
-                set_={"count": UsageCounter.count + event_count},
-            )
-        )
-        await db.execute(daily_stmt)
+            await db.execute(daily_stmt)
+        else:
+            await _atomic_reserve(db, client.id, daily_key, event_count)
 
     monthly_limit = getattr(client, "monthly_limit", None)
     if monthly_limit and monthly_limit > 0:
         monthly_key = f"monthly:{now.strftime('%Y-%m')}"
-        monthly_stmt = (
-            pg_insert(UsageCounter)
-            .values(
-                client_id=client.id,
-                window_key=monthly_key,
-                count=event_count,
+        if engine.dialect.name == "postgresql":
+            monthly_stmt = (
+                pg_insert(UsageCounter)
+                .values(
+                    client_id=client.id,
+                    window_key=monthly_key,
+                    count=event_count,
+                )
+                .on_conflict_do_update(
+                    constraint="uq_client_window",
+                    set_={"count": UsageCounter.count + event_count},
+                )
             )
-            .on_conflict_do_update(
-                constraint="uq_client_window",
-                set_={"count": UsageCounter.count + event_count},
-            )
-        )
-        await db.execute(monthly_stmt)
+            await db.execute(monthly_stmt)
+        else:
+            await _atomic_reserve(db, client.id, monthly_key, event_count)
 
     await db.flush()

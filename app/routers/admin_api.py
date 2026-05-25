@@ -2,6 +2,10 @@ import os
 import secrets
 import logging
 import hmac
+import base64
+import json
+import time
+import hashlib
 from urllib.parse import urlparse
 from fastapi import APIRouter, Depends, HTTPException, Request, Header
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,8 +23,9 @@ from app.models.usage_counter import UsageCounter
 from app.security import encrypt_token
 from app.services.webhook_service import _webhook_url_allowed
 from app.dependencies import clear_client_cache
-from app.utils.display import normalize_domain_input, display_domain_url
+from app.utils.display import normalize_domain_input, display_domain_url, mask_secret
 from app.routers.admin_views import log_admin_action
+from app.limiter import limiter
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -55,24 +60,90 @@ class AdminClientUpdate(BaseModel):
     test_event_code: str | None = None
     tiktok_test_event_code: str | None = None
 
-def verify_admin_api_key(x_admin_api_key: str = Header("", alias="X-Admin-API-Key")) -> str:
+def base64url_encode(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode('utf-8').rstrip('=')
+
+def base64url_decode(data: str) -> bytes:
+    padding = '=' * (4 - (len(data) % 4))
+    return base64.urlsafe_b64decode(data + padding)
+
+def create_jwt(payload: dict, secret: str) -> str:
+    header = {"alg": "HS256", "typ": "JWT"}
+    header_json = json.dumps(header, separators=(',', ':')).encode('utf-8')
+    payload_json = json.dumps(payload, separators=(',', ':')).encode('utf-8')
+    
+    header_b64 = base64url_encode(header_json)
+    payload_b64 = base64url_encode(payload_json)
+    
+    signing_input = f"{header_b64}.{payload_b64}".encode('utf-8')
+    signature = hmac.new(secret.encode('utf-8'), signing_input, hashlib.sha256).digest()
+    signature_b64 = base64url_encode(signature)
+    
+    return f"{header_b64}.{payload_b64}.{signature_b64}"
+
+def decode_jwt(token: str, secret: str) -> dict:
+    try:
+        parts = token.split('.')
+        if len(parts) != 3:
+            raise ValueError("Invalid token format")
+        
+        header_b64, payload_b64, signature_b64 = parts
+        signing_input = f"{header_b64}.{payload_b64}".encode('utf-8')
+        expected_signature = hmac.new(secret.encode('utf-8'), signing_input, hashlib.sha256).digest()
+        expected_signature_b64 = base64url_encode(expected_signature)
+        
+        if not hmac.compare_digest(signature_b64, expected_signature_b64):
+            raise ValueError("Invalid signature")
+            
+        payload = json.loads(base64url_decode(payload_b64).decode('utf-8'))
+        
+        if "exp" in payload and payload["exp"] < time.time():
+            raise ValueError("Token expired")
+            
+        return payload
+    except Exception as e:
+        raise ValueError(f"Token decoding failed: {e}")
+
+def verify_admin_api_key(
+    authorization: str = Header(None, alias="Authorization"),
+    x_admin_api_key: str = Header(None, alias="X-Admin-API-Key"),
+) -> str:
     admin_key = os.getenv("ADMIN_API_KEY", "")
     if not admin_key:
         raise HTTPException(status_code=503, detail="Admin API key is not configured")
-    if not x_admin_api_key or not hmac.compare_digest(x_admin_api_key, admin_key):
-        raise HTTPException(status_code=403, detail="Admin access required")
-    return "admin-api"
+    
+    if authorization and authorization.lower().startswith("bearer "):
+        token = authorization[7:].strip()
+        try:
+            payload = decode_jwt(token, admin_key)
+            if payload.get("sub") == "admin":
+                return "admin-api"
+        except Exception as e:
+            raise HTTPException(status_code=401, detail=f"Invalid or expired token: {str(e)}")
+            
+    if x_admin_api_key and hmac.compare_digest(x_admin_api_key, admin_key):
+        return "admin-api"
+        
+    raise HTTPException(status_code=403, detail="Admin access required")
 
-def client_to_api_dict(client: Client, event_total: int = 0, last_event_at=None) -> dict:
+def client_to_api_dict(client: Client, event_total: int = 0, last_event_at=None, mask_keys: bool = False) -> dict:
+    api_key = mask_secret(client.api_key) if mask_keys else client.api_key
+    public_key = getattr(client, "public_key", None)
+    if public_key and mask_keys:
+        public_key = mask_secret(public_key)
+    portal_key = getattr(client, "portal_key", None)
+    if portal_key and mask_keys:
+        portal_key = mask_secret(portal_key)
+
     return {
         "id": client.id,
         "name": client.name,
         "domain": client.domain,
         "display_domain": display_domain_url(client.domain),
         "is_active": bool(client.is_active),
-        "api_key": client.api_key,
-        "public_key": getattr(client, "public_key", None),
-        "portal_key": getattr(client, "portal_key", None),
+        "api_key": api_key,
+        "public_key": public_key,
+        "portal_key": portal_key,
         "pixel_id": client.pixel_id,
         "test_event_code": client.test_event_code,
         "monthly_limit": getattr(client, "monthly_limit", None),
@@ -140,7 +211,7 @@ async def admin_api_clients(
     )
     return {
         "status": "success",
-        "clients": [client_to_api_dict(client, event_total, last_event_at) for client, event_total, last_event_at in rows],
+        "clients": [client_to_api_dict(client, event_total, last_event_at, mask_keys=True) for client, event_total, last_event_at in rows],
     }
 
 @router.post("/admin/api/clients")
@@ -244,7 +315,7 @@ async def admin_api_get_client(
         raise HTTPException(status_code=404, detail="Client not found")
 
     data = client_to_api_dict(client)
-    data["access_token"] = client.access_token
+    data["access_token"] = mask_secret(client.access_token) if client.access_token else ""
     data["portal_key"] = client.portal_key
     data["public_key"] = getattr(client, "public_key", None)
     return {"status": "success", "client": data}
@@ -301,6 +372,13 @@ async def admin_api_delete_client(
     await db.execute(sql_delete(EventDedup).where(EventDedup.client_id == client_id))
     await db.execute(sql_delete(UsageCounter).where(UsageCounter.client_id == client_id))
     await db.execute(sql_delete(EventLog).where(EventLog.client_id == client_id))
+
+    # Delete client sessions and users to avoid foreign key constraint violations
+    from app.models.client_session import ClientSession
+    from app.models.client_user import ClientUser
+    await db.execute(sql_delete(ClientSession).where(ClientSession.client_id == client_id))
+    await db.execute(sql_delete(ClientUser).where(ClientUser.client_id == client_id))
+
     await db.delete(client)
     clear_client_cache(client_api_key)
 
@@ -313,7 +391,8 @@ class AdminLoginRequest(BaseModel):
     password: str
 
 @router.post("/admin/api/login")
-async def admin_api_login(payload: AdminLoginRequest):
+@limiter.limit("5/minute")
+async def admin_api_login(request: Request, payload: AdminLoginRequest):
     admin_user = os.getenv("ADMIN_USERNAME", "admin")
     admin_pass = os.getenv("ADMIN_PASSWORD")
     admin_key = os.getenv("ADMIN_API_KEY")
@@ -330,7 +409,18 @@ async def admin_api_login(payload: AdminLoginRequest):
             detail="Incorrect username or password"
         )
 
-    return {"status": "success", "admin_api_key": admin_key}
+    token_payload = {
+        "sub": "admin",
+        "exp": int(time.time()) + 24 * 3600
+    }
+    jwt_token = create_jwt(token_payload, admin_key)
+
+    return {"status": "success", "admin_api_key": jwt_token, "token": jwt_token}
+
+def escape_sql_wildcards(search_term: str) -> str:
+    if not search_term:
+        return ""
+    return search_term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 @router.get("/admin/api/events")
 async def admin_api_events(
@@ -378,15 +468,16 @@ async def admin_api_events(
             )
 
     if search:
+        escaped_search = escape_sql_wildcards(search)
         query = query.where(
-            EventLog.event_name.ilike(f"%{search}%") |
-            EventLog.ip_address.ilike(f"%{search}%") |
-            EventLog.error_message.ilike(f"%{search}%")
+            EventLog.event_name.ilike(f"%{escaped_search}%", escape="\\") |
+            EventLog.ip_address.ilike(f"%{escaped_search}%", escape="\\") |
+            EventLog.error_message.ilike(f"%{escaped_search}%", escape="\\")
         )
         count_query = count_query.where(
-            EventLog.event_name.ilike(f"%{search}%") |
-            EventLog.ip_address.ilike(f"%{search}%") |
-            EventLog.error_message.ilike(f"%{search}%")
+            EventLog.event_name.ilike(f"%{escaped_search}%", escape="\\") |
+            EventLog.ip_address.ilike(f"%{escaped_search}%", escape="\\") |
+            EventLog.error_message.ilike(f"%{escaped_search}%", escape="\\")
         )
 
     result = await db.execute(query.offset(offset).limit(limit))
@@ -448,7 +539,7 @@ async def admin_api_events(
             } if log.status == "success" else {
                 "error": {"message": log.error_message or "API execution failed", "code": 400}
             },
-            "latencyMs": 45 + (log.id % 80)
+            "latencyMs": None
         })
 
     return {
@@ -456,4 +547,3 @@ async def admin_api_events(
         "events": events_list,
         "totalCount": total_count
     }
-

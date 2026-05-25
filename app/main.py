@@ -65,6 +65,7 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("ℹ️  create_all স্কিপ — Alembic migration ব্যবহার করুন।")
 
+
     # ─── Background Task Management ────────────────────────────────────
     # Store references so tasks aren't garbage collected and add error callbacks
     _background_tasks: set[asyncio.Task] = set()

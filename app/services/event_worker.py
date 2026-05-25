@@ -140,14 +140,47 @@ async def process_outbox_row(row_id: int) -> None:
             return
 
         client = _snapshot(client_row)
-        events = [EventData(**event) for event in row.event_payload]
+        events = []
         context = row.request_context or {}
-        event_names = _event_names(events)
+        event_names = "Unknown"
 
         try:
+            events = [EventData(**event) for event in row.event_payload]
+            event_names = _event_names(events)
             delivery_res = await deliver_events_to_platforms(client, events, context)
             primary_platform = delivery_res["primary_platform"]
             result = delivery_res["result"]
+
+            # If all events were filtered by routing rules or no platforms were enabled,
+            # log as "filtered" instead of "success" and rollback usage reservation
+            if primary_platform == "None":
+                row.status = "sent"
+                row.sent_at = _now()
+                row.locked_at = None
+                row.locked_by = None
+                row.last_error = None
+
+                events_data = [event.model_dump(exclude_none=True) for event in events]
+                for event_data in events_data:
+                    db.add(EventLog(**_event_log_kwargs(
+                        client.id,
+                        event_data,
+                        "filtered",
+                        context.get("ip_address"),
+                        fb_response=json.dumps(result) if result else None,
+                    )))
+
+                # Rollback usage since nothing was actually sent
+                if row.usage_reserved:
+                    try:
+                        async with db.begin_nested():
+                            await rollback_usage_reservation(db, client, row.usage_reserved)
+                    except Exception as usage_err:
+                        logger.warning(f"[{client.name}] Usage rollback failed for filtered events: {usage_err}")
+
+                await db.commit()
+                logger.info(f"[{client.name}] Outbox row {row.id} filtered ({len(events)} events) — no platform enabled for these events.")
+                return
 
             row.status = "sent"
             row.sent_at = _now()
@@ -205,10 +238,13 @@ async def process_event_outbox_forever() -> None:
             async with AsyncSessionLocal() as db:
                 rows = await claim_due_events(db)
             if rows:
-                await asyncio.gather(
+                results = await asyncio.gather(
                     *(process_outbox_row(row.id) for row in rows),
                     return_exceptions=True,
                 )
+                for res in results:
+                    if isinstance(res, Exception):
+                        logger.error(f"Exception occurred in process_outbox_row: {res}", exc_info=res)
             else:
                 await asyncio.sleep(WORKER_POLL_SECONDS)
         except Exception as exc:

@@ -5,7 +5,7 @@ Monitoring Router — সিস্টেম স্বাস্থ্য পর�
 import logging
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends
-from sqlalchemy import select, func, and_
+from sqlalchemy import select, func, and_, case
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -108,32 +108,25 @@ async def client_stats(db: AsyncSession = Depends(get_db)):
     clients_result = await db.execute(select(Client).where(Client.is_active == True))
     clients = clients_result.scalars().all()
 
+    # Single grouped query instead of N+1 per-client queries
+    stats_result = await db.execute(
+        select(
+            EventLog.client_id,
+            func.coalesce(func.sum(
+                case((EventLog.status == "success", EventLog.event_count), else_=0)
+            ), 0).label("success_count"),
+            func.count(
+                case((EventLog.status == "failed", EventLog.id), else_=None)
+            ).label("failed_count"),
+        )
+        .where(EventLog.created_at >= today_start)
+        .group_by(EventLog.client_id)
+    )
+    client_stats_map = {row.client_id: (int(row.success_count), int(row.failed_count)) for row in stats_result}
+
     stats = []
     for c in clients:
-        # আজকের সফল ইভেন্ট
-        success = await db.execute(
-            select(func.coalesce(func.sum(EventLog.event_count), 0)).where(
-                and_(
-                    EventLog.client_id == c.id,
-                    EventLog.status == "success",
-                    EventLog.created_at >= today_start,
-                )
-            )
-        )
-        # আজকের ব্যর্থ ইভেন্ট
-        failed = await db.execute(
-            select(func.count(EventLog.id)).where(
-                and_(
-                    EventLog.client_id == c.id,
-                    EventLog.status == "failed",
-                    EventLog.created_at >= today_start,
-                )
-            )
-        )
-
-        success_count = success.scalar() or 0
-        failed_count = failed.scalar() or 0
-
+        success_count, failed_count = client_stats_map.get(c.id, (0, 0))
         stats.append({
             "client": c.name,
             "pixel_id": c.pixel_id,

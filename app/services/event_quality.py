@@ -208,6 +208,8 @@ def boost_event_quality(
         if event.event_name == "Purchase" and not cd.order_id:
             for key in ("transaction_id", "order_number", "orderId"):
                 value = getattr(cd, key, None)
+                if value is None and getattr(cd, "model_extra", None) is not None:
+                    value = cd.model_extra.get(key)
                 if value:
                     cd.order_id = str(value)
                     break
@@ -230,9 +232,19 @@ def boost_event_quality(
                 return
             except Exception:
                 pass
-            if hasattr(model, "model_extra") and isinstance(model.model_extra, dict):
-                model.model_extra[key] = val
-            elif hasattr(model, "__dict__"):
+            if hasattr(model, "model_extra"):
+                if getattr(model, "model_extra", None) is None:
+                    try:
+                        object.__setattr__(model, "model_extra", {})
+                    except Exception:
+                        try:
+                            model.model_extra = {}
+                        except Exception:
+                            pass
+                if isinstance(model.model_extra, dict):
+                    model.model_extra[key] = val
+                    return
+            if hasattr(model, "__dict__"):
                 model.__dict__[key] = val
 
         # 1. Click ID based campaign fallback mapping

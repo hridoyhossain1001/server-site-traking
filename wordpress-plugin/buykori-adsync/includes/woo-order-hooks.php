@@ -244,8 +244,9 @@ function buykorigw_send_order_initiate_checkout_fallback( $order_or_id ) {
         && buykorigw_recent_initiate_checkout_marker( $browser_ic_sent )
     ) {
         if ( ! empty( $settings['debug_mode'] ) ) {
-            buykorigw_add_order_note( $order_id, 'InitiateCheckout browser marker found; sending order-backed fallback with cart/customer data' . ( $browser_event_id ? ': ' . $browser_event_id : '' ) . '.' );
+            buykorigw_add_order_note( $order_id, 'InitiateCheckout browser marker found; skipping order-backed fallback to prevent duplicate telemetry.' );
         }
+        return;
     }
 
     list( $content_ids, $contents, $num_items ) = buykorigw_order_contents_payload( $order );
@@ -396,6 +397,36 @@ function buykorigw_on_order_cancelled( $order_id ) {
     $already_tracked   = $order->get_meta( '_buykorigw_tracked' );
     $already_confirmed = $order->get_meta( '_buykorigw_confirmed' );
     $refund_sent       = $order->get_meta( '_buykorigw_refunded_event_sent' );
+    $confirm_status    = $order->get_meta( '_buykorigw_confirm_status' );
+
+    if ( $settings['deferred_purchase'] && ! $already_confirmed ) {
+        if ( $confirm_status === 'cancelled' ) {
+            return;
+        }
+
+        $success = buykorigw_cancel_order( $order_id );
+
+        if ( $success ) {
+            $order->update_meta_data( '_buykorigw_confirm_status', 'cancelled' );
+            $order->update_meta_data( '_buykorigw_cancelled_at', current_time( 'mysql' ) );
+            $order->add_order_note( '[Buykori AdSync] Pending Purchase event cancelled. Nothing was sent to ad platforms.' );
+            $order->save();
+
+            if ( $settings['debug_mode'] ) {
+                error_log( "[Buykori AdSync] âœ… Pending Purchase cancelled for order #$order_id." );
+            }
+        } else {
+            buykorigw_schedule_cancel_retry( $order_id );
+            $order->update_meta_data( '_buykorigw_confirm_status', 'cancel_retry_scheduled' );
+            $order->add_order_note( '[Buykori AdSync] Pending Purchase cancel sync failed; retry scheduled.' );
+            $order->save();
+
+            if ( $settings['debug_mode'] ) {
+                error_log( "[Buykori AdSync] âš ï¸ Pending Purchase cancel failed for order #$order_id; retry scheduled." );
+            }
+        }
+        return;
+    }
 
     if ( ( $already_tracked || $already_confirmed ) && ! $refund_sent ) {
         $success = buykorigw_send_refund_event( $order );
@@ -447,18 +478,21 @@ function buykorigw_on_order_cancelled( $order_id ) {
 function buykorigw_confirm_order( $order_id ) {
     $settings = buykorigw_get_settings();
     $url      = rtrim( $settings['gateway_url'], '/' ) . '/events/confirm';
+    $body     = wp_json_encode( array(
+        'order_id' => (string) $order_id,
+    ) );
+
+    $headers = array_merge( array(
+        'Content-Type' => 'application/json',
+        'X-API-Key'    => $settings['api_key'],
+        'X-CAPI-Origin'=> buykorigw_site_origin(),
+    ), buykorigw_signed_headers( $settings['api_key'], $body ) );
 
     $response = wp_remote_post( $url, array(
         'timeout'   => 15,
         'sslverify' => true,
-        'headers'   => array(
-            'Content-Type' => 'application/json',
-            'X-API-Key'    => $settings['api_key'],
-            'X-CAPI-Origin'=> buykorigw_site_origin(),
-        ),
-        'body'      => wp_json_encode( array(
-            'order_id' => (string) $order_id,
-        ) ),
+        'headers'   => $headers,
+        'body'      => $body,
     ) );
 
     if ( is_wp_error( $response ) ) {

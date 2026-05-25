@@ -661,6 +661,11 @@ function buykorigw_bypass_rest_cookie_error($errors) {
 
 function buykorigw_rest_track_event(WP_REST_Request $request)
 {
+    $rest_nonce = $request->get_header('x-wp-nonce');
+    if (empty($rest_nonce) || !wp_verify_nonce($rest_nonce, 'wp_rest')) {
+        return new WP_REST_Response(array('success' => false, 'message' => 'Invalid nonce'), 403);
+    }
+
     // ─── Origin / Referer Validation ─────────────────────────────────────
     $allowed_host = parse_url(home_url(), PHP_URL_HOST);
     if (!$allowed_host) {

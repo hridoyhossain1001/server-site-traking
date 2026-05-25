@@ -5,7 +5,7 @@ from typing import Optional, List
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, Request, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, and_, update, desc
+from sqlalchemy import select, func, and_, update, desc, cast, Float
 
 from app.database import get_db
 from app.models.client import Client
@@ -17,13 +17,21 @@ from app.security import encrypt_token, decrypt_token
 from app.routers.deferred_events import _queue_confirmed_event
 import calendar
 from app.models.client_user import ClientUser
-from app.routers.client_auth import get_client_user_from_cookie
+from app.routers.client_auth import (
+    _clean_name,
+    _validate_email,
+    _validate_password,
+    get_client_user_from_cookie,
+    require_allowed_origin,
+)
+from app.services.auth_service import hash_password, verify_password
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # ─── Auth Dependency ──────────────────────────────────────────────────────────
 async def get_current_portal_client(request: Request, db: AsyncSession = Depends(get_db)) -> Client:
+    require_allowed_origin(request)
     client = await get_client_from_portal_session(request, db)
     if not client or not client.is_active:
         raise HTTPException(status_code=401, detail="Unauthorized session. Please login.")
@@ -55,6 +63,46 @@ class CampaignTestRequest(BaseModel):
     ip: Optional[str] = None
     userAgent: Optional[str] = None
     customParams: Optional[dict] = None
+
+class PasswordUpdateRequest(BaseModel):
+    currentPassword: str
+    newPassword: str
+
+
+ALLOWED_RULE_EVENTS = {
+    "PageView",
+    "ViewContent",
+    "AddToCart",
+    "ViewCart",
+    "RemoveFromCart",
+    "InitiateCheckout",
+    "AddPaymentInfo",
+    "Purchase",
+    "Lead",
+    "Search",
+    "Refund",
+}
+
+
+def _validate_rules(rules: List[dict]) -> List[dict]:
+    if len(rules) > 100:
+        raise HTTPException(status_code=400, detail="Too many routing rules.")
+    cleaned = []
+    for rule in rules:
+        if not isinstance(rule, dict):
+            raise HTTPException(status_code=400, detail="Invalid routing rule.")
+        event_name = str(rule.get("eventName", "")).strip()
+        if not event_name or len(event_name) > 80:
+            raise HTTPException(status_code=400, detail="Invalid event name in routing rule.")
+        if event_name not in ALLOWED_RULE_EVENTS and not event_name.replace("_", "").isalnum():
+            raise HTTPException(status_code=400, detail="Invalid event name in routing rule.")
+        cleaned.append({
+            "eventName": event_name,
+            "metaEnabled": bool(rule.get("metaEnabled")),
+            "tiktokEnabled": bool(rule.get("tiktokEnabled")),
+            "ga4Enabled": bool(rule.get("ga4Enabled")),
+        })
+    return cleaned
 
 # ─── Profile & Usage Stats ───────────────────────────────────────────────────
 @router.get("/profile")
@@ -112,7 +160,7 @@ async def update_profile(
     client: Client = Depends(get_current_portal_client),
     db: AsyncSession = Depends(get_db)
 ):
-    client.name = payload.name
+    client.name = _clean_name(payload.name, "Display name")
     
     user = None
     try:
@@ -122,7 +170,16 @@ async def update_profile(
         user = result_user.scalars().first()
 
     if user and payload.email:
-        user.email = payload.email
+        email = _validate_email(payload.email)
+        existing = await db.execute(
+            select(ClientUser).where(ClientUser.email == email, ClientUser.id != user.id)
+        )
+        if existing.scalar_one_or_none():
+            raise HTTPException(status_code=409, detail="An account already exists for this email.")
+        user.email = email
+    if user and payload.notificationEmail is not None:
+        user.notification_email = _validate_email(payload.notificationEmail) if payload.notificationEmail.strip() else None
+        # notification_email is persisted by the portal state migration.
 
     await db.commit()
     
@@ -158,6 +215,22 @@ async def update_profile(
         "eventsQuota": events_quota
     }}
 
+@router.post("/account/password")
+async def update_account_password(
+    payload: PasswordUpdateRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    require_allowed_origin(request)
+    _validate_password(payload.newPassword)
+    user, _, _ = await get_client_user_from_cookie(request, db)
+    if not verify_password(payload.currentPassword, user.password_hash):
+        raise HTTPException(status_code=400, detail="Current password is incorrect.")
+    user.password_hash = hash_password(payload.newPassword)
+    await db.commit()
+    return {"success": True}
+
+
 @router.post("/profile/reset-demo")
 async def reset_demo(client: Client = Depends(get_current_portal_client)):
     return {"success": True}
@@ -169,7 +242,8 @@ async def get_connection(client: Client = Depends(get_current_portal_client)):
         "wpVersion": "6.4.3",
         "lastHeartbeat": client.updated_at.isoformat() if client.updated_at else datetime.now(timezone.utc).isoformat(),
         "status": "Active" if client.is_active else "Disconnected",
-        "token": client.public_key or ""
+        "token": client.public_key or "",
+        "api_key": client.api_key
     }
 
 @router.post("/connection/test")
@@ -186,7 +260,8 @@ async def test_wp_connection(
             "wpVersion": "6.4.3",
             "lastHeartbeat": client.updated_at.isoformat(),
             "status": "Active",
-            "token": client.public_key or client.api_key
+            "token": client.public_key or client.api_key,
+            "api_key": client.api_key
         }
     }
 
@@ -203,7 +278,8 @@ async def revoke_wp_token(
             "wpVersion": "6.4.3",
             "lastHeartbeat": datetime.now(timezone.utc).isoformat(),
             "status": "Disconnected",
-            "token": client.public_key
+            "token": client.public_key,
+            "api_key": client.api_key
         }
     }
 
@@ -248,7 +324,10 @@ async def update_credentials(
         if payload.enabled is not None:
             client.enable_facebook = payload.enabled
         if val is not None:
-            client.pixel_id = val.strip()
+            clean_val = val.strip()
+            if clean_val and not clean_val.isdigit():
+                raise HTTPException(status_code=400, detail="Meta Pixel ID must be numeric.")
+            client.pixel_id = clean_val or "0"
         if token and not token.startswith("EAAD*****") and token.strip():
             client.access_token = encrypt_token(token.strip())
         if test_code is not None:
@@ -257,7 +336,10 @@ async def update_credentials(
         if payload.enabled is not None:
             client.enable_tiktok = payload.enabled
         if val is not None:
-            client.tiktok_pixel_id = val.strip()
+            clean_val = val.strip()
+            if clean_val and not clean_val.isdigit():
+                raise HTTPException(status_code=400, detail="TikTok Pixel ID must be numeric.")
+            client.tiktok_pixel_id = clean_val or None
         if token and not token.startswith("tt_ac*****") and token.strip():
             client.tiktok_access_token = encrypt_token(token.strip())
         if test_code is not None:
@@ -266,11 +348,18 @@ async def update_credentials(
         if payload.enabled is not None:
             client.enable_ga4 = payload.enabled
         if val is not None:
-            client.ga4_measurement_id = val.strip()
+            clean_val = val.strip()
+            if clean_val and not clean_val.startswith("G-"):
+                raise HTTPException(status_code=400, detail="GA4 Measurement ID must start with G-.")
+            client.ga4_measurement_id = clean_val or None
         if token and not token.startswith("secret*****") and token.strip():
             client.ga4_api_secret = encrypt_token(token.strip())
+    else:
+        raise HTTPException(status_code=400, detail="Unknown platform.")
 
     await db.commit()
+    from app.dependencies import clear_client_cache
+    clear_client_cache(client.api_key)
 
     meta_status = "Valid" if client.pixel_id and client.access_token else "Untested"
     tiktok_status = "Valid" if client.tiktok_pixel_id and client.tiktok_access_token else "Untested"
@@ -303,12 +392,12 @@ async def update_credentials(
     }
 
 # ─── Event Routing Rules ─────────────────────────────────────────────────────
-# Note: In the current MVP, event routing rules are derived dynamically from 
-# the client's enabled platforms settings (Meta, TikTok, GA4) and are not 
-# persisted separately in the database. The POST endpoint echoes the rules 
-# back to satisfy the client portal interface state.
+# Note: Event routing rules are stored in the client.event_rules column.
+# If not set, we default based on client's globally enabled platforms.
 @router.get("/rules")
 async def get_rules(client: Client = Depends(get_current_portal_client)):
+    if client.event_rules and isinstance(client.event_rules, list):
+        return client.event_rules
     return [
         { "eventName": "PageView", "metaEnabled": client.enable_facebook, "tiktokEnabled": client.enable_tiktok, "ga4Enabled": client.enable_ga4 },
         { "eventName": "AddToCart", "metaEnabled": client.enable_facebook, "tiktokEnabled": client.enable_tiktok, "ga4Enabled": client.enable_ga4 },
@@ -317,8 +406,19 @@ async def get_rules(client: Client = Depends(get_current_portal_client)):
     ]
 
 @router.post("/rules")
-async def update_rules(payload: RulesUpdateRequest, client: Client = Depends(get_current_portal_client)):
-    return {"success": True, "rules": payload.rules}
+async def update_rules(
+    payload: RulesUpdateRequest,
+    client: Client = Depends(get_current_portal_client),
+    db: AsyncSession = Depends(get_db)
+):
+    client.event_rules = _validate_rules(payload.rules)
+    await db.commit()
+    
+    # Clear client cache
+    from app.dependencies import clear_client_cache
+    clear_client_cache(client.api_key)
+    
+    return {"success": True, "rules": client.event_rules}
 
 # ─── Telemetry Logs ───────────────────────────────────────────────────────────
 @router.get("/events")
@@ -419,7 +519,7 @@ async def get_events(
             } if log.status == "success" else {
                 "error": {"message": log.error_message or "API execution failed", "code": 400}
             },
-            "latencyMs": 45 + (log.id % 80)
+            "latencyMs": None
         })
 
     return {
@@ -483,7 +583,7 @@ async def get_api_logs(
             "endpoint": endpoint,
             "method": "POST",
             "statusCode": 200 if log.status == "success" else 400,
-            "latencyMs": 45 + (log.id % 80),
+            "latencyMs": None,
             "retryCount": 0 if log.status == "success" else 1,
             "requestBody": f"{{\n  \"event_name\": \"{display_event_name}\",\n  \"event_time\": {int(log.created_at.timestamp()) if log.created_at else 0}\n}}",
             "responseBody": "{\n  \"status\": \"accepted\"\n}" if log.status == "success" else f"{{\n  \"error\": \"{log.error_message or 'Relay failure'}\"\n}}"
@@ -542,6 +642,8 @@ async def get_live_stream_pulse(
 # ─── Interactive Suggestions (Bypassing Gemini using Rule-Engine) ───────────
 @router.get("/suggestions")
 async def get_suggestions(client: Client = Depends(get_current_portal_client)):
+    dismissed = set(getattr(client, 'dismissed_suggestions', None) or [])
+    resolved = set(getattr(client, 'resolved_suggestions', None) or [])
     recommendations = []
     
     if not client.ga4_measurement_id or not client.enable_ga4:
@@ -588,14 +690,52 @@ async def get_suggestions(client: Client = Depends(get_current_portal_client)):
             "platform": "Meta CAPI"
         })
 
-    return recommendations
+    # Filter dismissed suggestions, mark resolved ones
+    filtered = []
+    for s in recommendations:
+        if s["id"] in dismissed:
+            continue
+        if s["id"] in resolved:
+            s["resolved"] = True
+        filtered.append(s)
+
+    return filtered
+
+class SuggestionActionRequest(BaseModel):
+    id: str
 
 @router.post("/suggestions/toggle-resolve")
-async def toggle_resolve_suggestion():
+async def toggle_resolve_suggestion(
+    payload: SuggestionActionRequest,
+    client: Client = Depends(get_current_portal_client),
+    db: AsyncSession = Depends(get_db)
+):
+    resolved = list(getattr(client, 'resolved_suggestions', None) or [])
+    if payload.id in resolved:
+        resolved.remove(payload.id)
+    else:
+        resolved.append(payload.id)
+    try:
+        client.resolved_suggestions = resolved
+        await db.commit()
+    except Exception:
+        pass  # Column may not exist yet — gracefully degrade
     return {"success": True}
 
 @router.post("/suggestions/dismiss")
-async def dismiss_suggestion():
+async def dismiss_suggestion(
+    payload: SuggestionActionRequest,
+    client: Client = Depends(get_current_portal_client),
+    db: AsyncSession = Depends(get_db)
+):
+    dismissed = list(getattr(client, 'dismissed_suggestions', None) or [])
+    if payload.id not in dismissed:
+        dismissed.append(payload.id)
+    try:
+        client.dismissed_suggestions = dismissed
+        await db.commit()
+    except Exception:
+        pass  # Column may not exist yet — gracefully degrade
     return {"success": True}
 
 @router.post("/suggestions/ai-review")
@@ -723,24 +863,39 @@ async def get_deferred_purchases(
     )
     confirmed_today = confirmed_today_r.scalar() or 0
 
-    pending_value = 0.0
-    oldest_age_hours = 0.0
-    now_utc = datetime.now(timezone.utc)
+    # Calculate aggregate pending COD values using database func.sum() and func.min() instead of a paginated loop
+    sum_stmt = select(func.sum(cast(PendingEvent.event_data['custom_data']['value'], Float))).where(
+        and_(
+            PendingEvent.client_id == client.id,
+            PendingEvent.status == "pending"
+        )
+    )
+    sum_res = await db.execute(sum_stmt)
+    pending_value = sum_res.scalar() or 0.0
+
+    oldest_stmt = select(func.min(PendingEvent.created_at)).where(
+        and_(
+            PendingEvent.client_id == client.id,
+            PendingEvent.status == "pending"
+        )
+    )
+    oldest_res = await db.execute(oldest_stmt)
+    oldest_created = oldest_res.scalar()
     
+    now_utc = datetime.now(timezone.utc)
+    if oldest_created:
+        created = oldest_created.replace(tzinfo=timezone.utc) if oldest_created.tzinfo is None else oldest_created
+        oldest_age_hours = round((now_utc - created).total_seconds() / 3600, 1)
+    else:
+        oldest_age_hours = 0.0
+
     pending_list = []
     for pe in pending_events:
         ed = pe.event_data or {}
         custom_data = ed.get("custom_data", {}) or {}
-        try:
-            pending_value += float(custom_data.get("value") or 0)
-        except (TypeError, ValueError):
-            pass
-
         created = pe.created_at.replace(tzinfo=timezone.utc) if pe.created_at.tzinfo is None else pe.created_at
         age_sec = (now_utc - created).total_seconds()
         age_h = round(age_sec / 3600, 1)
-        if age_h > oldest_age_hours:
-            oldest_age_hours = age_h
 
         ud = ed.get("user_data", {}) or {}
         customer_ph = ud.get("ph", ["—"])

@@ -158,6 +158,9 @@ add_action( 'wp_ajax_nopriv_buykorigw_track_event', 'buykorigw_ajax_track_event'
 
 function buykorigw_ajax_track_event() {
     $nonce = isset( $_POST['nonce'] ) ? sanitize_text_field( wp_unslash( $_POST['nonce'] ) ) : '';
+    if ( ! wp_verify_nonce( $nonce, 'buykorigw_track_nonce' ) ) {
+        wp_send_json_error( 'Invalid nonce', 403 );
+    }
 
     // ─── Origin Validation (replaces nonce for cache-safe security) ─────
     $allowed_host = parse_url( home_url(), PHP_URL_HOST );
@@ -209,6 +212,7 @@ function buykorigw_ajax_track_event() {
 
     $settings   = buykorigw_get_settings();
     $event_name = isset( $_POST['event_name'] ) ? sanitize_text_field( wp_unslash( $_POST['event_name'] ) ) : '';
+    $event_id   = isset( $_POST['event_id'] ) ? sanitize_text_field( wp_unslash( $_POST['event_id'] ) ) : '';
     $event_json = isset( $_POST['event_data'] ) ? wp_unslash( $_POST['event_data'] ) : '{}';
     $page_url   = isset( $_POST['page_url'] ) ? esc_url_raw( wp_unslash( $_POST['page_url'] ) ) : '';
     $fbp        = isset( $_POST['fbp'] ) ? sanitize_text_field( wp_unslash( $_POST['fbp'] ) ) : '';
@@ -286,8 +290,7 @@ function buykorigw_ajax_track_event() {
         $event_payload['custom_data'] = $custom_data;
     }
 
-    // Generate unique event_id for deduplication
-    $event_payload['event_id'] = 'wp_' . $event_name . '_' . time() . '_' . wp_rand( 1000, 9999 );
+    $event_payload['event_id'] = ! empty( $event_id ) ? $event_id : 'wp_' . $event_name . '_' . time() . '_' . wp_rand( 1000, 9999 );
 
     // Send to gateway
     buykorigw_send_event( $event_payload, false );
@@ -341,7 +344,7 @@ function buykorigw_normalize_campaign_value( $key, $value ) {
 }
 
 function buykorigw_ajax_rate_limited() {
-    $ip = buykorigw_get_real_ip();
+    $ip = sanitize_text_field( $_SERVER['REMOTE_ADDR'] ?? '' );
     if ( empty( $ip ) ) {
         return false;
     }
@@ -578,6 +581,9 @@ function buykorigw_track_purchase( $order_id ) {
     }
 
     buykorigw_update_order_meta( $order_id, '_buykorigw_tracked', 1 );
+    if ( $settings['deferred_purchase'] ) {
+        buykorigw_update_order_meta( $order_id, '_buykorigw_confirm_status', 'pending' );
+    }
 
     if ( $settings['debug_mode'] ) {
         error_log( '[Buykori AdSync] Purchase tracked for order #' . $order_id );

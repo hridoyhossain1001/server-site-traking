@@ -63,9 +63,10 @@ def is_gibberish(name: str) -> bool:
     if _GIBBERISH_REGEX.search(name_clean):
         return True
         
-    # ৫. কোনো কনসোনেন্ট-অনলি বা অতি কম ভাওয়েল চেক (ইংরেজী নামের ক্ষেত্রে)
-    # ইংরেজি অক্ষরে লেখা নামের সাইজ > ৪ হলে এবং কোনো ভাওয়েল (a, e, i, o, u, y) না থাকলে
-    if len(name_clean) > 4 and name_clean.isalpha():
+    # ৫. কোনো কনসোনেন্ট-অনলি বা অতি কম ভাওয়েল চেক (শুধুমাত্র ASCII/ইংরেজী নামের ক্ষেত্রে)
+    # বাংলা বা অন্যান্য non-Latin নামে ইংরেজি ভাওয়েল থাকবে না, তাই isascii() guard দিয়ে
+    # শুধুমাত্র ইংরেজি অক্ষরে লেখা নামে এই চেক করা হয়
+    if len(name_clean) > 4 and name_clean.isascii() and name_clean.isalpha():
         vowels = set("aeiouy")
         if not any(char in vowels for char in name_clean.lower()):
             return True

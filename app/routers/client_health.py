@@ -25,6 +25,7 @@ from app.database import get_db
 from app.dependencies import get_current_client, CachedClient
 from app.models.event_log import EventLog
 from app.models.client import Client
+from app.routers.admin_api import verify_admin_api_key
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -263,14 +264,9 @@ async def client_usage(
 )
 async def admin_clients_health(
     db: AsyncSession = Depends(get_db),
-    x_admin_api_key: str = Header(None, alias="X-Admin-API-Key"),
+    _: str = Depends(verify_admin_api_key),
 ):
     """অ্যাডমিন — সব ক্লায়েন্টের health status এক পেজে দেখুন"""
-    admin_key = os.getenv("ADMIN_API_KEY", "")
-    if not admin_key:
-        raise HTTPException(status_code=503, detail="Admin API key is not configured")
-    if not x_admin_api_key or not hmac.compare_digest(x_admin_api_key, admin_key):
-        raise HTTPException(status_code=403, detail="Admin access required")
 
     now = datetime.now(timezone.utc)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -459,8 +455,11 @@ async def client_update_setup(
 
     # Facebook
     if payload.pixel_id is not None:
-        c.pixel_id = payload.pixel_id.strip() or "0"
-        c.enable_facebook = bool(payload.pixel_id.strip())
+        clean_pixel_id = payload.pixel_id.strip()
+        if clean_pixel_id and not clean_pixel_id.isdigit():
+            raise HTTPException(status_code=400, detail="Meta Pixel ID must be numeric.")
+        c.pixel_id = clean_pixel_id or "0"
+        c.enable_facebook = bool(clean_pixel_id)
     if payload.access_token is not None and payload.access_token.strip():
         c.access_token = encrypt_token(payload.access_token.strip())
         c.enable_facebook = True
@@ -469,8 +468,11 @@ async def client_update_setup(
 
     # TikTok
     if payload.tiktok_pixel_id is not None:
-        c.tiktok_pixel_id = payload.tiktok_pixel_id.strip() or None
-        c.enable_tiktok = bool(payload.tiktok_pixel_id.strip())
+        clean_tiktok_pixel_id = payload.tiktok_pixel_id.strip()
+        if clean_tiktok_pixel_id and not clean_tiktok_pixel_id.isdigit():
+            raise HTTPException(status_code=400, detail="TikTok Pixel ID must be numeric.")
+        c.tiktok_pixel_id = clean_tiktok_pixel_id or None
+        c.enable_tiktok = bool(clean_tiktok_pixel_id)
     if payload.tiktok_access_token is not None and payload.tiktok_access_token.strip():
         c.tiktok_access_token = encrypt_token(payload.tiktok_access_token.strip())
         c.enable_tiktok = True
@@ -479,8 +481,11 @@ async def client_update_setup(
 
     # GA4
     if payload.ga4_measurement_id is not None:
-        c.ga4_measurement_id = payload.ga4_measurement_id.strip() or None
-        c.enable_ga4 = bool(payload.ga4_measurement_id.strip())
+        clean_measurement_id = payload.ga4_measurement_id.strip()
+        if clean_measurement_id and not clean_measurement_id.startswith("G-"):
+            raise HTTPException(status_code=400, detail="GA4 Measurement ID must start with G-.")
+        c.ga4_measurement_id = clean_measurement_id or None
+        c.enable_ga4 = bool(clean_measurement_id)
     if payload.ga4_api_secret is not None and payload.ga4_api_secret.strip():
         c.ga4_api_secret = encrypt_token(payload.ga4_api_secret.strip())
         c.enable_ga4 = True

@@ -3,9 +3,9 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import update
 from app.models.event_outbox import EventOutbox
-from app.database import SQLALCHEMY_DATABASE_URL
+from app.database import DATABASE_URL
 
-db_url = SQLALCHEMY_DATABASE_URL
+db_url = DATABASE_URL
 
 engine = create_async_engine(db_url)
 async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)

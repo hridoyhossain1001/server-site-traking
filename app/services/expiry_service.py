@@ -58,6 +58,7 @@ async def expire_old_pending_events():
                                 PendingEvent.created_at <= auto_confirm_cutoff
                             )
                         )
+                        .with_for_update(skip_locked=True)
                     )
                     pending_events = pending_r.scalars().all()
 
@@ -66,9 +67,10 @@ async def expire_old_pending_events():
                         confirmed_count = 0
                         for pe in pending_events:
                             try:
-                                await _queue_confirmed_event(cached_client, pe, db)
-                                pe.status = "confirmed"
-                                pe.confirmed_at = datetime.now(timezone.utc)
+                                async with db.begin_nested():
+                                    await _queue_confirmed_event(cached_client, pe, db)
+                                    pe.status = "confirmed"
+                                    pe.confirmed_at = datetime.now(timezone.utc)
                                 confirmed_count += 1
                             except Exception as ex:
                                 logger.error(f"⏰ Background auto-confirm failed for order {pe.order_id}: {ex}")

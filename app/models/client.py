@@ -1,5 +1,5 @@
 import secrets
-from sqlalchemy import Column, Integer, String, Boolean, DateTime
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, JSON
 from sqlalchemy.sql import func
 from app.database import Base
 
@@ -39,5 +39,8 @@ class Client(Base):
     webhook_url = Column(String, nullable=True)                    # Custom Webhook URL (outbound)
     # ─── Monthly Usage Limit (Rate Limiting Per-Client) ───────────────
     monthly_limit = Column(Integer, default=50000)                  # মাসিক সর্বোচ্চ ইভেন্ট (0 = unlimited)
+    event_rules = Column(JSON, nullable=True)                      # Custom routing rules for events (JSON)
+    resolved_suggestions = Column(JSON, nullable=True)
+    dismissed_suggestions = Column(JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

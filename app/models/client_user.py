@@ -11,6 +11,7 @@ class ClientUser(Base):
     email = Column(String(255), unique=True, nullable=False, index=True)
     password_hash = Column(String(255), nullable=False)
     full_name = Column(String(120), nullable=True)
+    notification_email = Column(String(255), nullable=True)
     role = Column(String(40), nullable=False, default="owner")
     is_active = Column(Boolean, nullable=False, default=True)
     email_verified = Column(Boolean, nullable=False, default=False)

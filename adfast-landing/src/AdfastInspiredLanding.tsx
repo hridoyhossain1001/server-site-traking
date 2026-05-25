@@ -33,6 +33,9 @@ const faqs = [
   ['What improves event match quality?', 'Content IDs, value, currency, click IDs, user agent, IP and hashed customer fields.'],
 ];
 
+const CLIENT_PORTAL_URL = 'https://client.buykori.app';
+const PRIVACY_URL = 'https://buykori.app/privacy';
+
 function Logo() {
   return (
     <div className="bk-logo">
@@ -115,7 +118,7 @@ export default function AdfastInspiredLanding() {
               <a href="#pricing">Pricing</a>
               <a href="#faq">FAQ</a>
             </nav>
-            <div><a href="https://client.buykori.app">Sign in</a><a className="bk-dark" href="https://client.buykori.app">Sign up</a></div>
+            <div><a href={CLIENT_PORTAL_URL}>Sign in</a><a className="bk-dark" href={CLIENT_PORTAL_URL}>Sign up</a></div>
           </header>
 
           <div className="bk-hero-grid">
@@ -193,7 +196,7 @@ export default function AdfastInspiredLanding() {
                 <h3>{name}</h3>
                 <strong>{price}<span>{price !== 'Custom' ? '/month' : ''}</span></strong>
                 <p>{note}</p>
-                <a href="/client">{index === 1 ? 'Start 14 Days Trial' : index === 2 ? 'Talk to sales' : 'Start for free'}</a>
+                <a href={CLIENT_PORTAL_URL}>{index === 1 ? 'Start 14 Days Trial' : index === 2 ? 'Talk to sales' : 'Start for free'}</a>
                 <ul>{(points as string[]).map((point) => <li key={point}><Check size={15} />{point}</li>)}</ul>
               </article>
             ))}
@@ -215,13 +218,13 @@ export default function AdfastInspiredLanding() {
         <section className="bk-cta">
           <h2>Ready to Optimize Your Ads and Maximize Your Results?</h2>
           <p>Start using Buykori AdSync today and take control of your ad campaigns with real-time insights.</p>
-          <a href="/client">Get Started for Free <ArrowRight size={15} /></a>
+          <a href={CLIENT_PORTAL_URL}>Get Started for Free <ArrowRight size={15} /></a>
         </section>
 
         <footer className="bk-footer">
           <Logo />
           <div><Sparkles size={16} /> Meta <span>TikTok</span><span>GA4</span></div>
-          <a href="#">Privacy Policy</a>
+          <a href={PRIVACY_URL}>Privacy Policy</a>
         </footer>
       </div>
     </div>

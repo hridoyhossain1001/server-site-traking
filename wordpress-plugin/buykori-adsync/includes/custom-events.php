@@ -378,10 +378,12 @@ function buykorigw_inject_custom_events_js()
             if (!cfg.ajax_url) return;
 
             function sendCustom(ev) {
+                var eventId = 'wp_' + ev.name + '_' + Math.floor(Date.now() / 1000) + '_' + Math.floor(Math.random() * 9000 + 1000);
                 var formData = new FormData();
                 formData.append('action', 'buykorigw_track_event');
                 formData.append('nonce', cfg.nonce);
                 formData.append('event_name', ev.name);
+                formData.append('event_id', eventId);
                 var data = {};
                 if (ev.value) data.value = ev.value;
                 if (ev.currency) data.currency = ev.currency;
@@ -397,6 +399,14 @@ function buykorigw_inject_custom_events_js()
                 formData.append('ttp', getCookie('_ttp') || '');
                 formData.append('ttclid', getQueryParam('ttclid') || getCookie('_ttclid') || '');
                 appendCustomerData(formData);
+                if (cfg.enable_hybrid) {
+                    if (window.fbq && cfg.fb_pixel_id) {
+                        fbq('trackCustom', ev.name, data, { eventID: eventId });
+                    }
+                    if (window.ttq && cfg.tt_pixel_id) {
+                        ttq.track(ev.name, data, { event_id: eventId });
+                    }
+                }
                 navigator.sendBeacon
                     ? navigator.sendBeacon(cfg.ajax_url, formData)
                     : fetch(cfg.ajax_url, { method: 'POST', body: formData, keepalive: true });

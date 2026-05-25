@@ -29,7 +29,7 @@ CLIENT_SESSION_COOKIE = "buykori_client_session"
 SESSION_DAYS = int(os.getenv("CLIENT_SESSION_DAYS", "30"))
 COOKIE_DOMAIN = os.getenv("CLIENT_COOKIE_DOMAIN", ".buykori.app")
 COOKIE_SECURE = os.getenv("CLIENT_COOKIE_SECURE", "true").lower() in ("true", "1", "yes")
-COOKIE_SAMESITE = os.getenv("CLIENT_COOKIE_SAMESITE", "none")
+COOKIE_SAMESITE = os.getenv("CLIENT_COOKIE_SAMESITE", "lax")
 ALLOWED_CLIENT_AUTH_HOSTS = {
     host.strip().lower()
     for host in os.getenv(

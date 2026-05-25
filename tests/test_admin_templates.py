@@ -395,7 +395,12 @@ async def test_admin_api_login_success():
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "success"
-    assert data["admin_api_key"] == "test-admin-api-key"
+    
+    # Verify it is a valid JWT
+    jwt_token = data["admin_api_key"]
+    from app.routers.admin_api import decode_jwt
+    payload = decode_jwt(jwt_token, "test-admin-api-key")
+    assert payload["sub"] == "admin"
 
 @pytest.mark.anyio
 async def test_admin_api_login_failed_wrong_credentials():
@@ -515,4 +520,131 @@ async def test_admin_api_events_endpoint():
     data = response.json()
     assert data["totalCount"] == 1
     assert "token" in data["events"][0]["responseBody"]["error"]["message"].lower()
+
+
+@pytest.mark.anyio
+async def test_admin_api_delete_client_with_users_and_sessions():
+    async with TestingSessionLocal() as session:
+        # Create a client
+        client_to_del = Client(
+            name="To Delete Client API",
+            api_key="del-api-key",
+            portal_key="del-portal-key",
+            pixel_id="111111",
+            access_token=encrypt_token("token-del"),
+            is_active=True,
+        )
+        session.add(client_to_del)
+        await session.flush()
+        
+        # Create a user
+        user = ClientUser(
+            client_id=client_to_del.id,
+            email="del-user@example.com",
+            password_hash=hash_password("password"),
+            full_name="User to Delete",
+            role="owner",
+            is_active=True,
+            email_verified=True,
+        )
+        session.add(user)
+        await session.flush()
+        
+        # Create a session
+        sess = ClientSession(
+            user_id=user.id,
+            client_id=client_to_del.id,
+            token_hash=hash_session_token("some-session-token"),
+            expires_at=datetime.now(timezone.utc) + timedelta(days=7),
+        )
+        session.add(sess)
+        await session.commit()
+        await session.refresh(client_to_del)
+        client_id = client_to_del.id
+
+    client = TestClient(app)
+    headers = {"X-Admin-API-Key": "test-admin-api-key"}
+    
+    # Execute delete request
+    response = client.delete(f"/api/v1/admin/api/clients/{client_id}", headers=headers)
+    assert response.status_code == 200
+    assert response.json()["status"] == "success"
+
+    # Verify database is clean
+    async with TestingSessionLocal() as session:
+        client_check = await session.get(Client, client_id)
+        assert client_check is None
+        
+        user_check = (await session.execute(select(ClientUser).where(ClientUser.client_id == client_id))).scalars().all()
+        assert len(user_check) == 0
+
+        sess_check = (await session.execute(select(ClientSession).where(ClientSession.client_id == client_id))).scalars().all()
+        assert len(sess_check) == 0
+
+
+@pytest.mark.anyio
+async def test_admin_views_delete_client_with_users_and_sessions():
+    async with TestingSessionLocal() as session:
+        # Create a client
+        client_to_del = Client(
+            name="To Delete Client View",
+            api_key="del-view-key",
+            portal_key="del-view-portal",
+            pixel_id="222222",
+            access_token=encrypt_token("token-del-view"),
+            is_active=True,
+        )
+        session.add(client_to_del)
+        await session.flush()
+        
+        # Create a user
+        user = ClientUser(
+            client_id=client_to_del.id,
+            email="del-user-view@example.com",
+            password_hash=hash_password("password"),
+            full_name="User to Delete View",
+            role="owner",
+            is_active=True,
+            email_verified=True,
+        )
+        session.add(user)
+        await session.flush()
+        
+        # Create a session
+        sess = ClientSession(
+            user_id=user.id,
+            client_id=client_to_del.id,
+            token_hash=hash_session_token("some-view-session-token"),
+            expires_at=datetime.now(timezone.utc) + timedelta(days=7),
+        )
+        session.add(sess)
+        await session.commit()
+        await session.refresh(client_to_del)
+        client_id = client_to_del.id
+
+    client = TestClient(app)
+    # Generate CSRF token
+    from app.routers.admin_views import create_admin_csrf_token
+    csrf_token = create_admin_csrf_token("admin")
+    
+    # Execute delete POST request
+    response = client.post(
+        f"/api/v1/admin/client/{client_id}/delete",
+        auth=("admin", "test-admin-password"),
+        data={"csrf_token": csrf_token},
+        follow_redirects=False
+    )
+    assert response.status_code == 303  # redirect status
+    assert "deleted" in response.headers["location"].lower()
+
+    # Verify database is clean
+    async with TestingSessionLocal() as session:
+        client_check = await session.get(Client, client_id)
+        assert client_check is None
+        
+        user_check = (await session.execute(select(ClientUser).where(ClientUser.client_id == client_id))).scalars().all()
+        assert len(user_check) == 0
+
+        sess_check = (await session.execute(select(ClientSession).where(ClientSession.client_id == client_id))).scalars().all()
+        assert len(sess_check) == 0
 

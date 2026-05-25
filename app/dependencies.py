@@ -46,6 +46,7 @@ class CachedClient:
     ga4_api_secret: str | None
     deferred_purchase: bool
     webhook_url: str | None
+    event_rules: dict | list | None = None
 
 
 _client_cache: dict[str, tuple[CachedClient, float]] = {}
@@ -70,10 +71,17 @@ def _origin_allowed_for_cookie_auth(request: Request) -> bool:
 
 
 def clear_client_cache(api_key: str):
-    """Admin update-এর পর cache ক্লিয়ার করতে ব্যবহৃত হয়"""
+    """Admin update-এর পর cache ক্লিয়ার করতে ব্যবহৃত হয়।
+    api_key এবং public:{public_key} উভয় ধরনের cache entry মুছে ফেলে।"""
+    keys_to_delete = []
     for cache_key, (cached, _) in list(_client_cache.items()):
         if cache_key == api_key or cached.api_key == api_key:
-            del _client_cache[cache_key]
+            keys_to_delete.append(cache_key)
+            # Also clear any public key cache entry for this client
+            if cached.public_key:
+                keys_to_delete.append(f"public:{cached.public_key}")
+    for k in keys_to_delete:
+        _client_cache.pop(k, None)
 
 def set_in_client_cache(cache_key: str, cached_client: CachedClient):
     """ক্যাশে নতুন ক্লায়েন্ট অ্যাড করার সময় ক্যাশের সাইজ ১০০০-এর নিচে রাখে যাতে মেমোরি লিক না হয়"""
@@ -116,6 +124,7 @@ def _snapshot(client: Client) -> CachedClient:
         ga4_api_secret=getattr(client, 'ga4_api_secret', None),
         deferred_purchase=getattr(client, 'deferred_purchase', False) or False,
         webhook_url=getattr(client, 'webhook_url', None),
+        event_rules=getattr(client, 'event_rules', None),
     )
 
 
@@ -158,6 +167,8 @@ async def get_current_client(
     if not x_api_key:
         encrypted_session = request.cookies.get("client_session")
         if encrypted_session:
+            if not _origin_allowed_for_cookie_auth(request):
+                raise HTTPException(status_code=403, detail="Origin is not allowed.")
             try:
                 decrypted = decrypt_token(encrypted_session, allow_legacy_plaintext=False)
             except Exception:

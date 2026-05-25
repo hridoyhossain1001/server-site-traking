@@ -346,9 +346,10 @@
                 xhr.open('POST', url, false);
                 if (cfg.rest_url) {
                     xhr.setRequestHeader('Content-Type', 'application/json');
+                    if (cfg.rest_nonce) xhr.setRequestHeader('X-WP-Nonce', cfg.rest_nonce);
                     xhr.send(jsonBody);
                 } else {
-                    xhr.send(buildAjaxFormData(eventName, eventData));
+                    xhr.send(buildAjaxFormData(eventName, eventData, eventId));
                 }
             } catch(e) {}
             return;
@@ -366,26 +367,22 @@
                 keepalive: true
             }).then(function(response) {
                 if (!response || !response.ok) {
-                    sendViaAjax(eventName, eventData);
+                    sendViaAjax(eventName, eventData, eventId);
                 }
             }).catch(function() {
-                sendViaAjax(eventName, eventData);
+                sendViaAjax(eventName, eventData, eventId);
             });
-        } else if (cfg.rest_url && navigator.sendBeacon) {
-            var blob = new Blob([jsonBody], {type: 'application/json'});
-            if (!navigator.sendBeacon(cfg.rest_url, blob)) {
-                sendViaAjax(eventName, eventData);
-            }
         } else {
-            sendViaAjax(eventName, eventData);
+            sendViaAjax(eventName, eventData, eventId);
         }
     }
 
-    function buildAjaxFormData(eventName, eventData) {
+    function buildAjaxFormData(eventName, eventData, eventId) {
         var fd = new FormData();
         fd.append('action', 'buykorigw_track_event');
         fd.append('nonce', cfg.nonce);
         fd.append('event_name', eventName);
+        fd.append('event_id', eventId || '');
         fd.append('event_data', JSON.stringify(eventData));
         fd.append('page_url', window.location.href);
         fd.append('page_title', document.title);
@@ -398,8 +395,8 @@
         return fd;
     }
 
-    function sendViaAjax(eventName, eventData) {
-        var fd = buildAjaxFormData(eventName, eventData);
+    function sendViaAjax(eventName, eventData, eventId) {
+        var fd = buildAjaxFormData(eventName, eventData, eventId);
         if (navigator.sendBeacon) {
             navigator.sendBeacon(cfg.ajax_url, fd);
         } else {
