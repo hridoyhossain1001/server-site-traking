@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ title }} — Buykori AdSync</title>
+  <link rel="stylesheet" href="/static/css/admin.css">
+</head>
+<body>
+
+  <!-- Sidebar -->
+  <aside class="sidebar" id="admin-sidebar">
+    <div class="brand">
+      <div class="brand-logo">B</div>
+      <div class="brand-text">Buykori <span>AdSync</span></div>
+    </div>
+
+    <div class="nav-menu">
+      <a href="/api/v1/admin" class="nav-item {% if active_page == 'dashboard' %}active{% endif %}">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" /></svg>
+        Overview
+      </a>
+      <a href="/api/v1/admin/clients" class="nav-item {% if active_page == 'clients' %}active{% endif %}">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
+        Clients
+      </a>
+      <a href="#" class="nav-item">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg>
+        Events
+      </a>
+      <a href="#" class="nav-item">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" /></svg>
+        Integrations
+      </a>
+      <a href="/api/v1/admin/logs" class="nav-item {% if active_page == 'logs' %}active{% endif %}">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+        API Logs
+      </a>
+      <a href="#" class="nav-item">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" /></svg>
+        Health Doctor
+      </a>
+      <a href="/api/v1/admin/settings" class="nav-item {% if active_page == 'settings' %}active{% endif %}">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+        Settings
+      </a>
+    </div>
+
+    <div class="pro-plan-box">
+      <div class="pro-plan-title">
+        <span>👑</span> Plan: Pro
+      </div>
+      <div class="pro-plan-stats" style="margin-bottom:6px;">
+        <span>Events Used</span>
+        <span style="color:white;font-weight:600;">1.2M / 2M</span>
+      </div>
+      <div class="progress-bar-bg"><div class="progress-bar-fill" style="width: 60%;"></div></div>
+      <div style="font-size:10px;color:var(--text-muted);margin-top:8px;">Reset on Jun 1, 2026</div>
+    </div>
+
+    <div class="sidebar-bottom">
+      <a href="#" class="nav-item">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M18.364 5.636l-3.536 3.536m0 5.656l3.536 3.536M9.172 9.172L5.636 5.636m3.536 9.192l-3.536 3.536M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-5 0a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
+        Support <svg style="width:12px;height:12px;margin-left:auto;opacity:0.5;" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
+      </a>
+      <a href="#" class="nav-item">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" /></svg>
+        Collapse
+      </a>
+    </div>
+  </aside>
+
+  <!-- Main Content Area -->
+  <div class="main-wrapper">
+    <!-- Topbar -->
+    <header class="topbar">
+      <div class="search-box">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+        <input type="text" placeholder="Search clients, events, IPs...">
+        <span class="kbd">⌘K</span>
+      </div>
+
+      <div class="topbar-right">
+        <div class="env-badge">PRODUCTION</div>
+        <button class="icon-btn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" /></svg>
+          <div class="badge-dot">6</div>
+        </button>
+        <button class="icon-btn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+        </button>
+
+        <div class="user-profile">
+          <div class="avatar">AH</div>
+          <div class="user-info">
+            <span class="name">Admin Panel</span>
+            <span class="email">sysop@buykori.app</span>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- Page Content -->
+    <main class="content">
+      {% if msg %}
+      <div class="alert alert-{% if msg_type == 'error' %}error{% else %}success{% endif %}">
+        <span>{{ msg }}</span>
+      </div>
+      {% endif %}
+
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+
+  <script>
+    function copyText(id) {
+      var t = document.getElementById(id);
+      var value = t.dataset.secret || t.innerText || t.value || '';
+      navigator.clipboard.writeText(value.trim()).then(function() {
+        showToast('Copied!');
+      });
+    }
+
+    function revealSecret(id) {
+      var el = document.getElementById(id);
+      if (!el) return;
+      if (el.dataset.hidden === '1') {
+        el.innerText = el.dataset.secret || '';
+        el.dataset.hidden = '0';
+      } else {
+        el.innerText = el.dataset.masked || '';
+        el.dataset.hidden = '1';
+      }
+    }
+
+    function showToast(msg) {
+      var t = document.getElementById('bk-toast');
+      if (!t) {
+        t = document.createElement('div');
+        t.id = 'bk-toast';
+        t.style.cssText = 'position:fixed;bottom:24px;right:24px;background:#ff8b45;color:#111;font-weight:700;font-size:13px;padding:10px 20px;border-radius:8px;z-index:9999;box-shadow:0 8px 24px rgba(255,139,69,0.4);transition:opacity .3s;pointer-events:none;';
+        document.body.appendChild(t);
+      }
+      t.textContent = msg;
+      t.style.opacity = '1';
+      clearTimeout(t._tid);
+      t._tid = setTimeout(function() { t.style.opacity = '0'; }, 1800);
+    }
+
+    document.addEventListener("DOMContentLoaded", function() {
+      document.querySelectorAll('.local-datetime').forEach(function(el) {
+        var utcStr = el.getAttribute('data-utc');
+        if (utcStr) {
+          try {
+            if (!utcStr.endsWith('Z') && !utcStr.includes('+')) {
+              utcStr += 'Z';
+            }
+            var d = new Date(utcStr);
+            if (!isNaN(d.getTime())) {
+              var format = el.getAttribute('data-format');
+              if (format === 'time') {
+                el.textContent = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+              } else if (format === 'date') {
+                el.textContent = d.toLocaleDateString(undefined, { year: 'numeric', month: '2-digit', day: '2-digit' });
+              } else {
+                var dateStr = d.toLocaleDateString(undefined, { year: 'numeric', month: '2-digit', day: '2-digit' });
+                var timeStr = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+                el.textContent = dateStr + ' ' + timeStr;
+              }
+            }
+          } catch (e) {
+            console.error(e);
+          }
+        }
+      });
+    });
+  </script>
+</body>
+</html>

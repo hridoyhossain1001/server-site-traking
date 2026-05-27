@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">API Event Logs</h1>
+    <p class="page-sub">Real-time event processing history and error tracking.</p>
+  </div>
+  <div class="header-actions">
+    <button class="btn btn-outline" onclick="window.location.reload()"><svg style="width:16px;height:16px" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg> Refresh</button>
+  </div>
+</div>
+<div class="metrics-grid" style="margin-bottom:24px">
+  <div class="metric-card">
+    <div class="metric-header">
+      <div class="m-icon bg-purple"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg></div>
+      <span class="m-title">Success (24h)</span>
+    </div>
+    <div class="metric-value" style="color:#34d399">{{ "{:,}".format(events_today) }}</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-header">
+      <div class="m-icon bg-red"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg></div>
+      <span class="m-title">Failed (24h)</span>
+    </div>
+    <div class="metric-value" style="color:#f87171">{{ "{:,}".format(failed_today) }}</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-header">
+      <div class="m-icon bg-blue"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg></div>
+      <span class="m-title">Total (24h)</span>
+    </div>
+    <div class="metric-value">{{ "{:,}".format(total) }}</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-header">
+      <div class="m-icon bg-indigo"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg></div>
+      <span class="m-title">Pending Retries</span>
+    </div>
+    <div class="metric-value" style="color:#facc15">{{ retries }}</div>
+  </div>
+</div>
+
+{% if event_logs %}
+<div class="card" style="margin-bottom:24px">
+  <div class="card-header"><h2 class="card-title">📡 Recent Events (Last 100)</h2></div>
+  <div class="table-responsive">
+    <table>
+      <thead><tr>
+        <th>Time</th><th>Client</th><th>Event</th><th style="text-align:center">Count</th><th>Status</th><th>IP</th><th>EMQ</th>
+      </tr></thead>
+      <tbody>
+        {% for log in event_logs %}
+        <tr>
+          <td class="code-text">{% if log.created_at %}<span class="local-datetime" data-utc="{{ log.created_at.isoformat() }}" data-format="time">{{ log.created_at.strftime('%H:%M:%S') }}</span>{% else %}—{% endif %}</td>
+          <td>{{ client_map.get(log.client_id, '#' ~ log.client_id) }}</td>
+          <td><span style="color:#818cf8;font-weight:600">{{ log.event_name or '—' }}</span></td>
+          <td class="code-text" style="text-align:center">{{ log.event_count or 1 }}</td>
+          <td><span class="badge {% if log.status == 'success' %}badge-healthy{% else %}badge-degraded{% endif %}">{{ log.status or 'unknown' }}</span></td>
+          <td class="code-text">{{ log.ip_address or '—' }}</td>
+          <td class="code-text">{% if log.emq_score %}{{ "{:.1f}".format(log.emq_score) }}{% else %}—{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% else %}
+<div class="card" style="margin-bottom:24px">
+  <div class="card-header"><h2 class="card-title">📡 Recent Events</h2></div>
+  <div style="padding:30px;text-align:center;color:var(--text-muted)">No event logs recorded yet.</div>
+</div>
+{% endif %}
+
+{% if failed_events %}
+<div class="card">
+  <div class="card-header"><h2 class="card-title">⚠️ Failed Events (Last 50)</h2></div>
+  <div class="table-responsive">
+    <table>
+      <thead><tr>
+        <th>Time</th><th>Client</th><th>Error</th><th style="text-align:center">Retries</th><th>Status</th>
+      </tr></thead>
+      <tbody>
+        {% for fe in failed_events %}
+        <tr>
+          <td class="code-text">{% if fe.created_at %}<span class="local-datetime" data-utc="{{ fe.created_at.isoformat() }}">{{ fe.created_at.strftime('%Y-%m-%d %H:%M') }}</span>{% else %}—{% endif %}</td>
+          <td>{{ client_map.get(fe.client_id, '#' ~ fe.client_id) }}</td>
+          <td style="color:var(--text-muted);font-size:12px;max-width:300px;overflow:hidden;text-overflow:ellipsis">{{ fe.error_message[:80] }}</td>
+          <td class="code-text" style="text-align:center">{{ fe.retry_count or 0 }}/{{ fe.max_retries or 5 }}</td>
+          <td>
+            <span style="color:{% if fe.status == 'pending' %}#facc15{% elif fe.status == 'retrying' %}#818cf8{% else %}#f87171{% endif %};font-weight:600;font-size:12px">
+              {{ fe.status|upper }}
+            </span>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% else %}
+<div class="card">
+  <div class="card-header"><h2 class="card-title">⚠️ Failed Events</h2></div>
+  <div style="padding:30px;text-align:center;color:var(--text-muted)">No failed events. Everything is running smoothly! 🎉</div>
+</div>
+{% endif %}
+{% endblock %}

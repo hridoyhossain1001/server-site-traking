@@ -1,0 +1,372 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="page-header" style="margin-bottom:24px;">
+  <div>
+    <h1 class="page-title">📋 Client Instructions</h1>
+    <p class="page-sub">Setup Guide and Credentials for <strong>{{ client.name }}</strong></p>
+  </div>
+  <div class="header-actions">
+    <a href="/api/v1/admin/clients" class="btn btn-outline">← Back to Clients</a>
+  </div>
+</div>
+
+<!-- Credentials Grid -->
+<div class="layout-grid" style="grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 24px;">
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title"><span class="icon" style="margin-right:8px;font-size:18px;">🔑</span> API Key (Server)</div>
+    </div>
+    <div style="padding:20px;">
+      <p style="color:var(--text-muted);font-size:13px;margin-bottom:12px;line-height:1.5;">Keep this secret. Use only in Server or GTM backend requests.</p>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <div class="api-key-cell" style="flex:1;max-width:100%;font-size:14px;padding:8px 12px;background:rgba(0,0,0,0.3);">
+          <span id="api_key" data-secret="{{ client.api_key }}" data-masked="{{ masked_api_key }}" data-hidden="1">{{ masked_api_key }}</span>
+        </div>
+        <button class="btn-sm btn-outline" onclick="revealSecret('api_key')" title="Show">👁️</button>
+        <button class="btn btn-primary" onclick="copyText('api_key')">Copy</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title"><span class="icon" style="margin-right:8px;font-size:18px;">🔐</span> Portal Login Key</div>
+    </div>
+    <div style="padding:20px;">
+      <p style="color:var(--text-muted);font-size:13px;margin-bottom:12px;line-height:1.5;">Give this key to the client for them to log into their analytics portal.</p>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <div class="api-key-cell" style="flex:1;max-width:100%;font-size:14px;padding:8px 12px;background:rgba(0,0,0,0.3);">
+          <span id="portal_key" data-secret="{{ portal_key }}" data-masked="{{ masked_portal_key }}" data-hidden="1">{{ masked_portal_key }}</span>
+        </div>
+        <button class="btn-sm btn-outline" onclick="revealSecret('portal_key')" title="Show">👁️</button>
+        <button class="btn btn-primary" onclick="copyText('portal_key')">Copy</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Endpoint Card -->
+<div class="card" style="margin-bottom:24px;">
+  <div class="card-header">
+    <div class="card-title"><span class="icon" style="margin-right:8px;font-size:18px;">🌐</span> CAPI Endpoint URL</div>
+  </div>
+  <div style="padding:20px;">
+    <p style="color:var(--text-muted);font-size:13px;margin-bottom:12px;">All tracking events must be POSTed to this endpoint URL.</p>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <div class="api-key-cell" style="flex:1;max-width:100%;font-size:14px;padding:8px 12px;background:rgba(0,0,0,0.3);color:#60a5fa;">
+        <span id="endpoint">{{ endpoint }}</span>
+      </div>
+      <button class="btn btn-primary" onclick="copyText('endpoint')">Copy</button>
+    </div>
+    <div style="margin-top:16px;padding:12px 16px;background:rgba(126,87,194,0.08);border:1px solid rgba(126,87,194,0.2);border-radius:6px;font-size:12px;color:#b39ddb;display:flex;gap:8px;align-items:center;">
+      <span style="font-size:16px">💡</span>
+      <span><strong>Custom Domain:</strong> If you mapped a custom domain (e.g. capi.yourdomain.com), replace the herokuapp URL with it.</span>
+    </div>
+  </div>
+</div>
+
+<!-- Tabs -->
+<div class="tabs" style="margin-bottom:24px;border-bottom:2px solid rgba(255,255,255,0.05);">
+  <button class="tab-btn active" onclick="openTab(event, 'tab-gtm')">⚙️ GTM Server</button>
+  <button class="tab-btn" onclick="openTab(event, 'tab-generator')">🛠️ JS Generator</button>
+  <button class="tab-btn" onclick="openTab(event, 'tab-wp')">📝 WordPress</button>
+  <button class="tab-btn" onclick="openTab(event, 'tab-custom')">💻 cURL / Custom</button>
+  <button class="tab-btn" onclick="openTab(event, 'tab-test')">🧪 Testing</button>
+</div>
+
+<!-- GTM TAB -->
+<div id="tab-gtm" class="tab-content active card" style="margin-bottom:20px">
+  <div class="card-header">
+    <div class="card-title">GTM Server Container Setup <span class="status-badge status-warning" style="margin-left:8px;">Advanced</span></div>
+  </div>
+  <div style="padding:24px;color:var(--text-muted);font-size:14px;line-height:1.6;">
+    <div style="display:grid;gap:16px;">
+      <div><strong style="color:#fff;">Step 1:</strong> Create a <strong>Server Container</strong> in Google Tag Manager.</div>
+      <div><strong style="color:#fff;">Step 2:</strong> Create a new <strong>Tag → HTTP Request</strong>.</div>
+      <div>
+        <strong style="color:#fff;display:block;margin-bottom:8px;">Step 3: Apply these settings:</strong>
+        <div style="position:relative;">
+          <button class="btn-sm btn-outline" onclick="copyText('gtm_settings')" style="position:absolute;top:12px;right:12px;">Copy Text</button>
+          <pre class="instr-box" id="gtm_settings" style="padding:16px;background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.05);color:#93c5fd;font-size:13px;margin:0;">URL: {{ endpoint }}
+Method: POST
+Content-Type: application/json
+
+Headers:
+  X-API-Key: {{ client.api_key }}
+  X-CAPI-Origin: {{ capi_origin }}
+  X-CAPI-Timestamp: {% raw %}{{unix_timestamp}}{% endraw %}
+  X-CAPI-Signature: {% raw %}{{hmac_sha256(timestamp + "." + raw_body, api_key)}}{% endraw %}
+
+Body (JSON):
+{% raw %}{{
+  "data": [{
+    "event_name": "{{Event Name}}",
+    "event_time": "{{timestamp}}",
+    "event_id": "{{Event ID}}",
+    "action_source": "website",
+    "event_source_url": "{{Page URL}}",
+    "user_data": {
+      "client_ip_address": "{{Client IP}}",
+      "client_user_agent": "{{User Agent}}",
+      "fbp": "{{FBP Cookie}}",
+      "fbc": "{{FBC Cookie}}"
+    }
+  }]
+}}{% endraw %}</pre>
+        </div>
+      </div>
+      <div><strong style="color:#fff;">Step 4:</strong> Set the Trigger to specific conversion events only. Avoid sending every minor event.</div>
+    </div>
+    <div class="alert alert-success" style="margin-top:20px;margin-bottom:0;">
+      <span style="font-size:16px">💡</span>
+      <div>
+        <strong>Pro Tips:</strong>
+        <ul style="margin:4px 0 0 16px;padding:0;">
+          <li><strong>event_id</strong> must be unique (e.g. <code>order-12345-1715000000</code>).</li>
+          <li>Send the <strong>exact same event_id</strong> from Browser and Server for deduplication to work.</li>
+          <li>Always include <code>"action_source": "website"</code>.</li>
+          <li>If the client has a locked domain, signed headers are required for server-to-server requests.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- GENERATOR TAB -->
+<div id="tab-generator" class="tab-content card" style="margin-bottom:20px">
+  <div class="card-header">
+    <div class="card-title">Client-Side JS Event Generator</div>
+  </div>
+  <div style="padding:24px;">
+    <div class="alert alert-error">
+      <span style="font-size:16px">⚠️</span>
+      <div>
+        <strong>Warning:</strong>
+        Only track necessary events (Purchase, Lead, AddToCart). Sending every minor event will rapidly exhaust the client's monthly API quota.
+      </div>
+    </div>
+
+    <div class="form-group" style="max-width:400px;margin-bottom:20px;">
+      <label>Select an Event to Generate Code:</label>
+      <select id="event_selector" style="width:100%; padding:10px 12px; background:rgba(0,0,0,0.3); border:1px solid var(--border); color:#fff; border-radius:6px; font-size:14px; outline:none;">
+        <option value="page_view">page_view</option>
+        <option value="session_start">session_start</option>
+        <option value="user_signup">user_signup / register</option>
+        <option value="user_login">user_login</option>
+        <option value="view_item">view_item</option>
+        <option value="add_to_cart">add_to_cart</option>
+        <option value="begin_checkout">begin_checkout</option>
+        <option value="purchase">purchase</option>
+        <option value="lead">lead</option>
+      </select>
+    </div>
+
+    <button class="btn btn-primary" onclick="generateEventCode()" style="margin-bottom:24px;">⚡ Generate JS Snippet</button>
+
+    <div id="code_result_area" style="display:none;position:relative;">
+      <p style="color:#34d399; font-size:13px; margin-bottom:8px;font-weight:600;">%#% Code Ready! Paste this in the site's Header or onClick handler:</p>
+      <button class="btn-sm btn-outline" onclick="copyText('generated_code_box')" style="position:absolute;top:32px;right:12px;">Copy</button>
+      <pre class="instr-box" id="generated_code_box" style="min-height:80px;padding:16px;background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.05);color:#e2e8f0;font-size:13px;"></pre>
+    </div>
+  </div>
+</div>
+
+<!-- WORDPRESS TAB -->
+<div id="tab-wp" class="tab-content card" style="margin-bottom:20px">
+  <div class="card-header">
+    <div class="card-title">WordPress + WooCommerce Setup</div>
+  </div>
+  <div style="padding:24px;color:var(--text-muted);font-size:14px;line-height:1.6;">
+    <div style="display:grid;gap:16px;">
+      <div class="alert alert-success" style="margin:0;"><span style="font-size:16px">✅</span><div><strong>Recommended:</strong> Use the official Buykori AdSync WordPress plugin from the plugin download. It sends signed requests, receives updates, and avoids duplicate WooCommerce events.</div></div>
+      <div class="alert alert-error" style="margin:0;"><span style="font-size:16px">⚠️</span><div>Do not add extra WooCommerce/PHP snippets beside the official plugin. Manual snippets can create duplicate Purchase/AddToCart/ViewContent events.</div></div>
+      <div><strong style="color:#fff;">Step 1:</strong> Download the official plugin from the client portal or plugin download endpoint.</div>
+      <div><strong style="color:#fff;">Step 2:</strong> WordPress Admin → Plugins → Add New → Upload Plugin, then activate it.</div>
+      <div><strong style="color:#fff;">Step 3:</strong> Open the Buykori AdSync menu, paste the client's API key, and save.</div>
+      <div>
+        <strong style="color:#fff;display:block;margin-bottom:8px;">Non-WooCommerce/custom site only: add this site JS:</strong>
+        <div style="position:relative;">
+          <button class="btn-sm btn-outline" onclick="copyText('wp_pv_easy')" style="position:absolute;top:12px;right:12px;">Copy</button>
+          <pre class="instr-box" id="wp_pv_easy" style="padding:16px;background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.05);color:#93c5fd;font-size:13px;margin:0;">&lt;script src="{{ tracker_url }}" defer&gt;&lt;/script&gt;</pre>
+        </div>
+      </div>
+      <div class="alert alert-success" style="margin:0;"><span style="font-size:16px">✅</span><div>WooCommerce events should come from the official plugin only. For custom buttons/forms, use the plugin's Custom Event Builder or the custom site JS above.</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- CUSTOM TAB -->
+<div id="tab-custom" class="tab-content card" style="margin-bottom:20px">
+  <div class="card-header">
+    <div class="card-title">Custom Website Integration Guide <span class="status-badge status-warning" style="margin-left:8px;">Bangla</span></div>
+  </div>
+  <div style="padding:24px;color:var(--text-muted);font-size:14px;line-height:1.7;">
+    <div class="alert alert-success" style="margin:0 0 18px 0;"><span style="font-size:16px">✅</span><div><strong>Recommended flow:</strong> Purchase, Lead, registration, confirmed order backend/server থেকে পাঠান। PageView, ViewContent, AddToCart browser tracker দিয়েও পাঠানো যায়।</div></div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px;margin-bottom:22px;">
+      <div style="padding:14px;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:8px;"><strong style="color:#fff;display:block;margin-bottom:6px;">Server Endpoint</strong><code>{{ endpoint }}</code></div>
+      <div style="padding:14px;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:8px;"><strong style="color:#fff;display:block;margin-bottom:6px;">Auth Header</strong><code>X-API-Key</code> দিয়ে server API key পাঠাতে হবে।</div>
+      <div style="padding:14px;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:8px;"><strong style="color:#fff;display:block;margin-bottom:6px;">Browser Script</strong><code>{{ tracker_url }}</code></div>
+    </div>
+
+    <h3 style="color:#fff;font-size:16px;margin:0 0 10px 0;">১. Backend থেকে event পাঠানোর নিয়ম</h3>
+    <p>যেকোনো custom website, যেমন Laravel, PHP, Node.js, Next.js, Django, Flask, ASP.NET বা অন্য backend থেকে JSON payload পাঠানো যাবে। Server API key কখনো frontend JavaScript-এ রাখবেন না।</p>
+    <div style="position:relative;margin:14px 0 22px;">
+      <button class="btn-sm btn-outline" onclick="copyText('custom_payload_contract')" style="position:absolute;top:12px;right:12px;">Copy</button>
+      <pre class="instr-box" id="custom_payload_contract" style="padding:16px;background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.05);color:#e2e8f0;font-size:13px;margin:0;">POST {{ endpoint }}
+Headers:
+  Content-Type: application/json
+  X-API-Key: {{ client.api_key }}
+  X-CAPI-Origin: {{ capi_origin }}
+  X-CAPI-Timestamp: UNIX_TIMESTAMP
+  X-CAPI-Signature: HMAC_SHA256(timestamp + "." + raw_body, api_key)</pre>
+    </div>
+
+    <h3 style="color:#fff;font-size:16px;margin:0 0 10px 0;">২. Purchase payload example</h3>
+    <div style="position:relative;margin-bottom:22px;">
+      <button class="btn-sm btn-outline" onclick="copyText('custom_purchase_payload')" style="position:absolute;top:12px;right:12px;">Copy</button>
+      <pre class="instr-box" id="custom_purchase_payload" style="padding:16px;background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.05);color:#93c5fd;font-size:13px;margin:0;">{
+  "data": [{
+    "event_name": "Purchase",
+    "event_time": 1715000000,
+    "event_id": "order_1001",
+    "event_source_url": "https://example.com/thank-you/1001",
+    "action_source": "website",
+    "user_data": {
+      "em": ["customer@example.com"],
+      "ph": ["017xxxxxxxx"],
+      "client_ip_address": "USER_IP",
+      "client_user_agent": "USER_BROWSER_USER_AGENT",
+      "fbp": "fb.1.xxxxx",
+      "fbc": "fb.1.xxxxx",
+      "ttp": "tiktok_browser_id",
+      "ttclid": "tiktok_click_id"
+    },
+    "custom_data": {
+      "value": 1500,
+      "currency": "BDT",
+      "content_ids": ["PRODUCT_ID_123"],
+      "content_type": "product",
+      "num_items": 1,
+      "order_id": "1001"
+    }
+  }]
+}</pre>
+    </div>
+
+    <h3 style="color:#fff;font-size:16px;margin:0 0 10px 0;">৩. cURL test</h3>
+    <div style="position:relative;margin-bottom:22px;">
+      <button class="btn-sm btn-outline" onclick="copyText('curl_ex')" style="position:absolute;top:12px;right:12px;">Copy</button>
+      <pre class="instr-box" id="curl_ex" style="padding:16px;background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.05);color:#93c5fd;font-size:13px;margin:0;">curl -X POST "{{ endpoint }}" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: {{ client.api_key }}" \
+  -d '{
+    "data": [{
+      "event_name": "Purchase",
+      "event_time": 1715000000,
+      "event_id": "order_1001",
+      "event_source_url": "https://example.com/thank-you/1001",
+      "action_source": "website",
+      "user_data": {
+        "em": ["customer@example.com"],
+        "ph": ["017xxxxxxxx"],
+        "client_ip_address": "203.0.113.10",
+        "client_user_agent": "Mozilla/5.0"
+      },
+      "custom_data": {
+        "value": 1500,
+        "currency": "BDT",
+        "content_ids": ["123"],
+        "content_type": "product",
+        "order_id": "1001"
+      }
+    }]
+  }'</pre>
+    </div>
+
+    <h3 style="color:#fff;font-size:16px;margin:0 0 10px 0;">৪. Browser tracker option</h3>
+    <p>যাদের backend integration করা কঠিন, তারা public tracker key দিয়ে browser script বসাতে পারে। এই key browser-safe, কিন্তু server API key browser-এ দেওয়া যাবে না。</p>
+    <div style="position:relative;margin-bottom:22px;">
+      <button class="btn-sm btn-outline" onclick="copyText('custom_browser_script')" style="position:absolute;top:12px;right:12px;">Copy</button>
+      <pre class="instr-box" id="custom_browser_script" style="padding:16px;background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.05);color:#93c5fd;font-size:13px;margin:0;">&lt;script src="{{ tracker_url }}" defer&gt;&lt;/script&gt;
+
+&lt;script&gt;
+capi('setUser', {
+  email: 'customer@example.com',
+  phone: '+8801XXXXXXXXX'
+});
+
+capi('track', 'ViewContent', {
+  content_ids: ['123'],
+  content_type: 'product',
+  value: 1200,
+  currency: 'BDT'
+});
+&lt;/script&gt;</pre>
+    </div>
+
+    <h3 style="color:#fff;font-size:16px;margin:0 0 10px 0;">৫. Must-follow rules</h3>
+    <ul style="margin:0;padding-left:18px;display:grid;gap:8px;">
+      <li><code>event_id</code> unique হতে হবে। Purchase হলে <code>order_1001</code> type ID ব্যবহার করুন।</li>
+      <li><code>content_ids</code> Facebook/TikTok catalog product ID-এর সাথে exact match করতে হবে।</li>
+      <li><code>currency</code> ISO code হবে, যেমন <code>BDT</code>, <code>USD</code>।</li>
+      <li><code>client_ip_address</code> এবং <code>client_user_agent</code> দিলে match quality ভালো হয়।</li>
+      <li>Email/phone raw দিলেও server auto SHA-256 hash করবে। আগে hash করা থাকলেও accept করবে।</li>
+      <li>একই event browser এবং server দুদিক থেকে পাঠালে একই <code>event_id</code> দিন, না হলে duplicate হতে পারে।</li>
+    </ul>
+  </div>
+</div>
+
+<!-- TESTING TAB -->
+<div id="tab-test" class="tab-content card" style="margin-bottom:20px">
+  <div class="card-header">
+    <div class="card-title">Testing Guide</div>
+  </div>
+  <div style="padding:24px;color:var(--text-muted);font-size:14px;line-height:1.6;">
+    <ol style="margin:0;padding-left:20px;display:grid;gap:12px;">
+      <li>Go to <strong>Facebook Events Manager</strong> → Your Pixel → <strong>Test Events</strong> tab.</li>
+      <li>Copy your unique Test Code (e.g. <code>TEST12345</code>).</li>
+      <li>In this Admin Dashboard, Edit the Client and paste the code in the <strong>Test Event Code</strong> field.</li>
+      <li>Trigger events on your website. They will show up in the FB Test Events tab in real-time.</li>
+      <li><strong style="color:#f87171">Important:</strong> Once testing is done, clear the Test Event Code from the Admin Panel to resume live tracking.</li>
+    </ol>
+  </div>
+</div>
+
+<script>
+function openTab(evt, tabId) {
+  var i, tc, tl;
+  tc = document.getElementsByClassName("tab-content");
+  for (i = 0; i < tc.length; i++) { tc[i].className = tc[i].className.replace(" active", ""); }
+  tl = document.getElementsByClassName("tab-btn");
+  for (i = 0; i < tl.length; i++) { tl[i].className = tl[i].className.replace(" active", ""); }
+  document.getElementById(tabId).className += " active";
+  evt.currentTarget.className += " active";
+}
+
+function generateEventCode() {
+    var ev = document.getElementById('event_selector').value;
+    var code = "";
+    var fbEvent = "";
+    var params = "";
+
+    switch(ev) {
+        case 'page_view': fbEvent = 'PageView'; break;
+        case 'session_start': fbEvent = 'PageView'; params = ", {custom_event: 'session_start'}"; break;
+        case 'user_signup': fbEvent = 'CompleteRegistration'; break;
+        case 'user_login': fbEvent = 'Login'; break;
+        case 'view_item': fbEvent = 'ViewContent'; params = ", {value: 100, currency: 'BDT', content_ids: ['ID-123'], content_type: 'product'}"; break;
+        case 'add_to_cart': fbEvent = 'AddToCart'; params = ", {value: 100, currency: 'BDT', content_ids: ['ID-123']}"; break;
+        case 'begin_checkout': fbEvent = 'InitiateCheckout'; params = ", {value: 500, currency: 'BDT'}"; break;
+        case 'purchase': fbEvent = 'Purchase'; params = ", {value: 1500, currency: 'BDT', content_ids: ['ID-123'], order_id: 'ORD-001'}"; break;
+        case 'lead': fbEvent = 'Lead'; break;
+    }
+
+    code = "<script>\n  // Event: " + ev + "\n  capi('track', '" + fbEvent + "'" + params + ");\n</scr" + "ipt>";
+
+    document.getElementById('generated_code_box').innerText = code;
+    document.getElementById('code_result_area').style.display = 'block';
+}
+</script>
+{% endblock %}

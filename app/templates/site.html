@@ -1,0 +1,1143 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Buykori AdSync - Server-Side Ads Tracking</title>
+  <meta name="description" content="Buykori AdSync sends cleaner WooCommerce server-side events to Meta CAPI, TikTok Events API and GA4." />
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Outfit:wght@400;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap');
+
+    *{box-sizing:border-box}
+    html{scroll-behavior:smooth}
+    body{
+      margin:0;
+      min-width:320px;
+      background-color: #0b1329;
+      background-image: 
+        radial-gradient(at 0% 0%, hsla(242,50%,15%,1) 0px, transparent 50%),
+        radial-gradient(at 100% 0%, hsla(168,50%,12%,1) 0px, transparent 50%),
+        radial-gradient(at 100% 100%, hsla(285,40%,15%,1) 0px, transparent 50%),
+        radial-gradient(at 0% 100%, hsla(202,60%,14%,1) 0px, transparent 50%);
+      background-attachment: fixed;
+      color:#e2eaf8;
+      font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif
+    }
+    a{text-decoration:none;color:inherit}
+    button,input{font:inherit}
+    button{font-family:inherit}
+
+    /* Scrollbars matching dashboard styling */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(255,139,69,0.25);
+      border-radius: 99px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: rgba(255,139,69,0.45);
+    }
+
+    .bk-page{
+      min-height:100vh;
+      padding:32px 20px;
+      background:transparent;
+    }
+    .bk-canvas{
+      width:min(100%,1240px);
+      margin:auto;
+      overflow:hidden;
+      background: rgba(15, 23, 42, 0.45) !important;
+      backdrop-filter: blur(24px) saturate(160%);
+      -webkit-backdrop-filter: blur(24px) saturate(160%);
+      border: 1px solid rgba(255, 255, 255, 0.1) !important;
+      border-radius: 28px;
+      box-shadow: 
+        0 24px 90px rgba(0, 0, 0, 0.4),
+        inset 0 1px 1px rgba(255, 255, 255, 0.05);
+    }
+    .bk-hero{
+      position:relative;
+      overflow:hidden;
+      min-height:760px;
+      background: 
+        radial-gradient(circle at 16% 8%, rgba(255, 139, 69, 0.15), transparent 40%),
+        radial-gradient(circle at 72% 4%, rgba(139, 92, 246, 0.18), transparent 45%),
+        linear-gradient(180deg, rgba(15, 23, 42, 0.5) 0%, rgba(10, 17, 38, 0.2) 100%);
+      border-bottom:1px solid rgba(255, 255, 255, 0.05);
+    }
+    .bk-hero:before{
+      content:"";
+      position:absolute;
+      inset:0 0 auto;
+      height:155px;
+      background:linear-gradient(90deg,rgba(255,139,69,.08),rgba(139,92,246,.12),rgba(255,255,255,0));
+    }
+    .bk-nav,.bk-hero-grid,.bk-section,.bk-budget,.bk-pricing,.bk-faq,.bk-footer{width:min(100% - 48px,1010px);margin:auto}
+    .bk-nav{position:relative;z-index:2;display:flex;align-items:center;justify-content:space-between;padding:30px 0}
+    .bk-logo{display:flex;align-items:center;gap:9px;color:#ffffff;font-size:15px;letter-spacing:-.03em;font-family:'Outfit',sans-serif;font-weight:700}
+    .bk-logo span{
+      display:grid;
+      place-items:center;
+      width:28px;
+      height:28px;
+      color:white;
+      background:#ff8b45;
+      border-radius:9px;
+      box-shadow: 0 0 15px rgba(255, 139, 69, 0.4);
+      font-size:13px;
+      font-weight:900;
+    }
+    .bk-nav nav{display:flex;gap:34px;color:#94a3b8;font-size:12px;font-weight:650}
+    .bk-nav nav a{transition: color 0.2s;}
+    .bk-nav nav a:hover,.bk-nav>div:last-child button:first-child:hover{color:#ff8b45}
+    .bk-nav>div:last-child{display:flex;align-items:center;gap:14px;color:#cbd5e1;font-size:12px;font-weight:750}
+    .bk-auth-link{padding:0;border:0;background:transparent;color:inherit;cursor:pointer;font-size:12px;font-weight:750;transition: color 0.2s;}
+    .bk-dark{
+      padding:9px 18px;
+      color:#fff;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 999px;
+      cursor:pointer;
+      font-size:12px;
+      font-weight:850;
+      transition: all 0.25s ease;
+    }
+    .bk-dark:hover{
+      background: rgba(255, 255, 255, 0.16);
+      box-shadow: 0 0 15px rgba(255,255,255,0.1);
+      transform: translateY(-1px);
+    }
+    .bk-hero-grid{position:relative;z-index:1;display:grid;grid-template-columns:.88fr 1.12fr;align-items:center;gap:56px;padding:88px 0 110px}
+    .bk-eyebrow,.bk-kicker{margin:0 0 14px;color:#64748b;font-size:10px;font-weight:850;letter-spacing:.24em;text-transform:uppercase}
+    .bk-eyebrow span{margin:0 10px;color:#ff8b45}
+    .bk-hero h1{
+      max-width:535px;
+      margin:0;
+      color:#ffffff;
+      font-size:clamp(42px,5.6vw,62px);
+      font-weight:620;
+      letter-spacing:-.07em;
+      line-height:1.06;
+      font-family:'Space Grotesk',sans-serif;
+    }
+    .bk-hero mark{
+      display:inline-flex;
+      padding:0 8px 2px;
+      color:#ff8b45;
+      background: rgba(255, 139, 69, 0.08);
+      border: 1px solid rgba(255, 139, 69, 0.25);
+      border-radius:12px;
+      box-shadow: 0 0 20px rgba(255,139,69,0.15);
+    }
+    .bk-sub{max-width:430px;margin:25px 0 0;color:#94a3b8;font-size:14px;line-height:1.9}
+    .bk-actions{display:flex;flex-wrap:wrap;gap:14px;margin-top:30px}
+    .bk-orange,.bk-soft,.bk-cta a,.bk-cta button{
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      gap:8px;
+      min-height:44px;
+      padding:0 24px;
+      border-radius:999px;
+      font-size:12px;
+      font-weight:850;
+      transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+      cursor: pointer;
+    }
+    .bk-orange,.bk-cta a,.bk-cta button{
+      color:#fff;
+      background: linear-gradient(135deg, rgba(255, 139, 69, 0.85), rgba(255, 98, 0, 0.95)) !important;
+      border: 1px solid rgba(255, 255, 255, 0.25) !important;
+      box-shadow: 0 8px 30px rgba(255, 139, 69, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.3) !important;
+    }
+    .bk-orange:hover,.bk-cta a:hover,.bk-cta button:hover {
+      box-shadow: 0 12px 35px rgba(255, 139, 69, 0.5), 0 0 15px rgba(255, 139, 69, 0.2) !important;
+      transform: translateY(-1.5px);
+    }
+    .bk-soft{
+      color:#e2eaf8;
+      background:rgba(255,255,255,0.06);
+      border:1px solid rgba(255,255,255,0.12);
+    }
+    .bk-soft:hover{
+      background:rgba(255,255,255,0.12);
+      border-color:rgba(255,255,255,0.25);
+      transform: translateY(-1.5px);
+    }
+    .bk-dashboard{
+      width:100%;
+      max-width:655px;
+      margin:auto;
+      padding:8px;
+      border: 1px solid rgba(255, 255, 255, 0.12) !important;
+      border-radius:24px;
+      background: rgba(15, 23, 42, 0.45) !important;
+      box-shadow: 0 38px 90px rgba(0,0,0,0.5);
+      transform:translateX(24px) rotate(-7deg);
+      backdrop-filter:blur(24px);
+    }
+    .bk-window{overflow:hidden;border:1px solid rgba(255,255,255,0.06);border-radius:18px;background:rgba(10, 17, 38, 0.7)}
+    .bk-window-top{display:flex;align-items:center;gap:8px;height:48px;padding:0 16px;border-bottom:1px solid rgba(255,255,255,0.06)}
+    .bk-window-top i{width:10px;height:10px;border-radius:999px}
+    .bk-window-top i:nth-child(1){background:#ff8b45}
+    .bk-window-top i:nth-child(2){background:#f4cda8}
+    .bk-window-top i:nth-child(3){background:#a9d8c7}
+    .bk-window-top b{width:112px;height:28px;margin-left:auto;border-radius:999px;background:rgba(255,255,255,0.06)}
+    .bk-window-body{display:grid;grid-template-columns:144px 1fr}
+    .bk-window aside{min-height:440px;padding:18px 14px;background:rgba(15, 23, 42, 0.3);border-right:1px solid rgba(255,255,255,0.06)}
+    .bk-window aside .bk-logo{margin-bottom:24px;font-size:12px}
+    .bk-window aside p{margin:0 0 8px;padding:10px 12px;color:#94a3b8;border-radius:12px;font-size:11px;font-weight:650}
+    .bk-window aside .active{color:#ff8b45;background:rgba(255,139,69,0.12)}
+    .bk-window main{padding:20px}
+    .bk-dash-head,.bk-mini article:nth-child(2) p{display:flex;align-items:center;justify-content:space-between}
+    .bk-dash-head small,.bk-metrics small{color:#64748b;font-size:10px;font-weight:850;text-transform:uppercase}
+    .bk-dash-head h3{margin:3px 0 0;font-size:18px;letter-spacing:-.05em;color:#ffffff}
+    .bk-dash-head>span{padding:7px 11px;color:#94a3b8;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.03);border-radius:999px;font-size:11px;font-weight:750}
+    .bk-metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:18px}
+    .bk-metrics article,.bk-bars,.bk-mini article{border:1px solid rgba(255,255,255,0.06);border-radius:18px;background:rgba(15,23,42,0.4);box-shadow:none}
+    .bk-metrics article{padding:14px}
+    .bk-metrics strong{display:block;margin-top:8px;font-size:24px;letter-spacing:-.07em;color:#ffffff}
+    .bk-metrics em{display:block;margin-top:3px;color:#10b981;font-size:10px;font-style:normal;font-weight:850}
+    .bk-bars{display:flex;align-items:flex-end;gap:9px;height:140px;margin-top:14px;padding:20px;background:rgba(15,23,42,0.3);border-color:rgba(255,255,255,0.05)}
+    .bk-bars span{flex:1;min-width:8px;border-radius:10px 10px 2px 2px;background:linear-gradient(180deg,#ffd0a7,#ff8b45)}
+    .bk-mini{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px}
+    .bk-mini article{padding:18px}
+    .bk-mini article:first-child{display:flex;align-items:center;gap:16px}
+    .bk-mini b{font-size:13px;color:#ffffff}
+    .bk-mini p{margin:7px 0 0;color:#94a3b8;font-size:11px}
+    .bk-ring{display:grid;place-items:center;flex:0 0 auto;width:70px;height:70px;color:#ffffff;border:13px solid #10b981;border-right-color:rgba(16,185,129,0.15);border-radius:999px;background:rgba(15,23,42,0.6);font-size:22px;font-weight:850}
+    .bk-intro{padding:100px 24px 68px;text-align:center}
+    .bk-intro p{max-width:640px;margin:auto;color:#f1f5f9;font-size:clamp(24px,3.2vw,32px);font-weight:540;letter-spacing:-.06em;line-height:1.34;font-family:'Space Grotesk',sans-serif}
+    .bk-section,.bk-budget,.bk-integrations,.bk-pricing,.bk-faq,.bk-tools,.bk-comparison,.bk-testimonials{padding:76px 0}
+    .bk-section-head{display:flex;align-items:end;justify-content:space-between;gap:24px;margin-bottom:38px}
+    .bk-section h2,.bk-budget h2,.bk-integrations h2,.bk-pricing h2,.bk-faq h2,.bk-tools h2,.bk-comparison h2,.bk-testimonials h2{
+      margin:0;
+      color:#ffffff;
+      font-size:clamp(32px,4vw,44px);
+      font-weight:560;
+      letter-spacing:-.065em;
+      line-height:1.08;
+      font-family:'Space Grotesk',sans-serif;
+    }
+    .bk-tabs{display:flex;flex-wrap:wrap;gap:3px;padding:4px;color:#94a3b8;border:1px solid rgba(255,255,255,0.08);border-radius:999px;background:rgba(255,255,255,0.04);font-size:11px;font-weight:750}
+    .bk-tabs span{padding:9px 14px;border-radius:999px;cursor:pointer;}
+    .bk-tabs span:first-child{color:#ffffff;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.1);box-shadow:none}
+    .bk-feature-grid,.bk-budget-notes,.bk-plan-grid,.bk-tools-grid,.bk-testimonial-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:24px}
+    
+    .bk-feature-grid article,.bk-plan-grid article,.bk-tools-grid article,.bk-testimonial-grid article{
+      border:1px solid rgba(255,255,255,0.08);
+      border-radius:12px;
+      background:rgba(15, 23, 42, 0.45);
+      box-shadow:0 20px 60px rgba(0, 0, 0, 0.3);
+      backdrop-filter:blur(16px);
+      transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .bk-feature-grid article:hover, .bk-plan-grid article:hover, .bk-tools-grid article:hover, .bk-testimonial-grid article:hover {
+      border-color: rgba(255, 139, 69, 0.25);
+      box-shadow: 0 20px 60px rgba(255, 139, 69, 0.05), 0 0 20px rgba(255, 139, 69, 0.03);
+      transform: translateY(-2px);
+    }
+    .bk-feature-grid article{min-height:250px;padding:28px}
+    .bk-feature-grid i,.bk-budget-notes .dot,.bk-tools-grid i{display:grid;place-items:center;width:38px;height:38px;color:#ff8b45;border-radius:13px;background:rgba(255,139,69,0.12);font-style:normal;font-weight:900}
+    .bk-feature-grid h3,.bk-budget-notes h3,.bk-tools-grid h3{margin:22px 0 0;font-size:16px;letter-spacing:-.03em;color:#ffffff;font-family:'Outfit',sans-serif}
+    .bk-feature-grid p,.bk-budget-notes p,.bk-tools-grid p{margin:10px 0 0;color:#94a3b8;font-size:12px;line-height:1.8}
+    .bk-feature-grid article div:last-child{display:flex;align-items:end;gap:10px;margin-top:30px}
+    .bk-feature-grid strong{font-size:25px;letter-spacing:-.06em;color:#ffffff}
+    .bk-spark{display:flex;align-items:end;gap:6px;height:54px;color:#ff8b45}
+    .bk-spark span{width:8px;border-radius:999px;background:linear-gradient(180deg,#ffd0a7,#ff8b45)}
+    .bk-budget,.bk-integrations,.bk-pricing,.bk-tools,.bk-comparison,.bk-testimonials{text-align:center}
+    .bk-budget h2,.bk-integrations h2,.bk-pricing h2,.bk-tools h2,.bk-comparison h2,.bk-testimonials h2{max-width:680px;margin:auto}
+    
+    .bk-table{
+      overflow:hidden;
+      margin-top:46px;
+      border:1px solid rgba(255,255,255,0.08);
+      border-radius:12px;
+      background:rgba(15,23,42,0.4);
+      box-shadow: 0 28px 70px rgba(0,0,0,0.25);
+      text-align:left;
+    }
+    .bk-table h3{margin:0;padding:17px 22px;border-bottom:1px solid rgba(255,139,69,0.15);background:rgba(255,139,69,0.08);font-size:15px;color:#ffffff}
+    .bk-table table{width:100%;min-width:640px;border-collapse:collapse;font-size:14px}
+    .bk-table th,.bk-table td{padding:17px 22px;border-top:1px solid rgba(255,255,255,0.06)}
+    .bk-table th{color:#64748b;font-size:11px;text-align:left;background:rgba(255,255,255,0.02)}
+    .bk-table td:first-child{color:#ffffff;font-weight:750}
+    .bk-table td{color:#cbd5e1}
+    .bk-budget-notes{margin-top:28px;text-align:left}
+    .bk-budget-notes article{padding:14px}
+    .bk-integrations{padding-inline:24px;background:radial-gradient(circle at 50% 40%,rgba(255,190,157,.06),transparent 28%),linear-gradient(180deg,transparent,#0b1329 80%,transparent)}
+    .bk-integrations>p:not(.bk-kicker),.bk-tools>p,.bk-comparison>p,.bk-testimonials>p{max-width:520px;margin:18px auto 0;color:#94a3b8;font-size:14px;line-height:1.75}
+    
+    .bk-logo-cloud{display:flex;flex-wrap:wrap;justify-content:center;gap:14px;max-width:720px;margin:34px auto 0}
+    .bk-logo-cloud span{
+      padding:13px 20px;
+      color:#e2eaf8;
+      border:1px solid rgba(255,255,255,0.08);
+      border-radius:999px;
+      background:rgba(255,255,255,0.03);
+      box-shadow:none;
+      font-size:12px;
+      font-weight:850;
+      transition: all 0.2s;
+    }
+    .bk-logo-cloud span:hover {
+      border-color: rgba(255, 139, 69, 0.25);
+      background: rgba(255, 139, 69, 0.08);
+    }
+    .bk-plan-grid{margin-top:44px;text-align:left}
+    .bk-plan-grid article{padding:28px}
+    .bk-plan-grid .featured{
+      border-color:#ff8b45;
+      box-shadow: 0 0 0 4px rgba(255,139,69,0.18), 0 24px 70px rgba(0,0,0,0.4);
+      background:rgba(15,23,42,0.6) !important;
+    }
+    .bk-plan-grid h3{margin:0;font-size:15px;color:#ffffff;font-family:'Outfit',sans-serif}
+    .bk-plan-grid>article>strong{display:block;margin-top:19px;font-size:42px;letter-spacing:-.07em;color:#ffffff;font-family:'Space Grotesk',sans-serif}
+    .bk-plan-grid strong span{margin-left:3px;color:#94a3b8;font-size:14px;font-weight:650;letter-spacing:0}
+    .bk-plan-grid>article>p{min-height:44px;color:#94a3b8;font-size:12px;line-height:1.7}
+    .bk-plan-grid article>a,.bk-plan-grid article>button{
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      width:100%;
+      min-height:42px;
+      margin-top:22px;
+      color:#ffffff;
+      border:1px solid rgba(255,255,255,0.1);
+      border-radius:999px;
+      background:rgba(255,255,255,0.06);
+      cursor:pointer;
+      font-size:12px;
+      font-weight:850;
+      transition: all 0.25s;
+    }
+    .bk-plan-grid article>a:hover, .bk-plan-grid article>button:hover {
+      background: rgba(255,255,255,0.12);
+      border-color: rgba(255,255,255,0.25);
+    }
+    .bk-plan-grid .featured>a,.bk-plan-grid .featured>button{
+      color:white;
+      border-color:#ff8b45;
+      background:#ff8b45 !important;
+      box-shadow:0 12px 28px rgba(255,139,69,0.22);
+    }
+    .bk-plan-grid .featured>a:hover,.bk-plan-grid .featured>button:hover{
+      box-shadow: 0 15px 35px rgba(255,139,69,0.4);
+    }
+    .bk-plan-grid ul{display:grid;gap:12px;margin:24px 0 0;padding:0;list-style:none}
+    .bk-plan-grid li{display:flex;gap:10px;color:#94a3b8;font-size:12px;line-height:1.55}
+    .bk-plan-grid li:before{content:"";width:15px;height:15px;flex:0 0 auto;border-radius:50%;background:#ff8b45;box-shadow:inset 0 0 0 4px #1e293b}
+    .bk-tools{background:transparent;padding-inline:24px}
+    .bk-tools-grid{width:min(100%,1010px);margin:44px auto 0;text-align:left}
+    .bk-tools-grid article{min-height:150px;padding:24px;border-color:rgba(255,255,255,0.08);background:rgba(15,23,42,0.4)}
+    .bk-comparison{padding-inline:24px}
+    .bk-comparison-table{
+      width:min(100%,1010px);
+      margin:42px auto 0;
+      overflow:auto;
+      border:1px solid rgba(255,255,255,0.08);
+      border-radius:16px;
+      background:rgba(15,23,42,0.4);
+      box-shadow:0 22px 55px rgba(0,0,0,0.3);
+      text-align:left;
+    }
+    .bk-comparison table{width:100%;min-width:760px;border-collapse:collapse}
+    .bk-comparison th,.bk-comparison td{padding:22px;border-right:1px solid rgba(255,255,255,0.06);border-bottom:1px solid rgba(255,255,255,0.06)}
+    .bk-comparison tr:last-child td{border-bottom:0}
+    .bk-comparison th:last-child,.bk-comparison td:last-child{border-right:0}
+    .bk-comparison th{background:rgba(255,139,69,0.05);color:#ffffff;font-size:13px}
+    .bk-comparison td{color:#cbd5e1;font-size:13px;line-height:1.65}
+    .bk-comparison td strong{color:#ffffff}
+    .bk-testimonials{background:transparent;padding-inline:24px}
+    .bk-testimonial-grid{width:min(100%,1010px);margin:44px auto 0;text-align:left}
+    .bk-testimonial-grid article{padding:28px;border-color:rgba(255,255,255,0.08);background:rgba(15,23,42,0.4)}
+    .bk-stars{color:#ff8b45;letter-spacing:2px;font-size:18px}
+    .bk-testimonial-grid p{color:#cbd5e1;line-height:1.8}
+    .bk-testimonial-grid strong{display:block;margin-top:20px;color:#ffffff}
+    .bk-faq{display:grid;grid-template-columns:.78fr 1.22fr;gap:56px}
+    .bk-faq>div:first-child>p:not(.bk-kicker){max-width:370px;margin-top:24px;color:#94a3b8;font-size:14px;line-height:1.8}
+    .bk-faq-list{display:grid;gap:12px}
+    .bk-faq-list details{overflow:hidden;border:1px solid rgba(255,255,255,0.08);border-radius:14px;background:rgba(15,23,42,0.4);box-shadow:none}
+    .bk-faq-list summary{display:flex;align-items:center;justify-content:space-between;gap:20px;width:100%;padding:18px 20px;color:#ffffff;cursor:pointer;text-align:left;font-size:14px;font-weight:850;list-style:none}
+    .bk-faq-list summary::-webkit-details-marker{display:none}
+    .bk-faq-list summary:after{content:"+";color:#94a3b8;font-size:19px}
+    .bk-faq-list details[open] summary:after{content:"-"}
+    .bk-faq-list p{margin:0;padding:0 20px 18px;color:#94a3b8;font-size:14px;line-height:1.75}
+    .bk-cta{
+      width:min(100% - 48px,1010px);
+      margin:74px auto;
+      padding:72px 34px;
+      color:white;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius:16px;
+      background:radial-gradient(circle at top left,rgba(255,139,69,.22),transparent 34%),linear-gradient(135deg,#161927,#2f3449);
+      box-shadow: 0 30px 70px rgba(0, 0, 0, 0.4);
+      text-align:center;
+    }
+    .bk-cta h2{max-width:620px;margin:auto;font-size:clamp(30px,4vw,42px);font-weight:540;letter-spacing:-.06em;line-height:1.16;font-family:'Space Grotesk',sans-serif}
+    .bk-cta p{max-width:540px;margin:18px auto 0;color:#d7dce8;font-size:14px;line-height:1.7}
+    .bk-cta a,.bk-cta button{margin-top:32px;border:0;cursor:pointer}
+    .bk-footer{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:40px 0;border-top:1px solid rgba(255,255,255,0.06);color:#64748b;font-size:12px}
+    .bk-footer>div{display:flex;align-items:center;gap:16px;font-weight:750}
+    .bk-footer .bk-logo{color:#ffffff}
+    
+    @media(max-width:980px){
+      .bk-hero-grid,.bk-faq{grid-template-columns:1fr}
+      .bk-hero-grid{gap:50px;padding-top:56px}
+      .bk-dashboard{transform:none}
+      .bk-feature-grid,.bk-budget-notes,.bk-plan-grid,.bk-metrics,.bk-mini,.bk-tools-grid,.bk-testimonial-grid{grid-template-columns:1fr}
+      .bk-section-head{display:grid;align-items:start}
+    }
+    @media(max-width:740px){
+      .bk-page{padding:0}
+      .bk-canvas{width:100%; border-radius: 0;}
+      .bk-nav,.bk-hero-grid,.bk-section,.bk-budget,.bk-pricing,.bk-faq,.bk-footer,.bk-cta{width:min(100% - 32px,1010px)}
+      .bk-nav nav{display:none}
+      .bk-nav>div:last-child button:first-child{display:none}
+      .bk-hero{min-height:auto}
+      .bk-hero h1{font-size:43px}
+      .bk-window-body{grid-template-columns:1fr}
+      .bk-window aside{display:none}
+      .bk-window main{padding:14px}
+      .bk-tabs{border-radius:18px}
+      .bk-table{overflow-x:auto}
+      .bk-footer{flex-direction:column;align-items:flex-start}
+    }
+
+    /* Redesigned Centered Glassmorphic Auth Modal Styles */
+    .auth-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(4, 7, 20, 0.65);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      opacity: 0;
+      visibility: hidden;
+      transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+      z-index: 9999;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      overflow-y: auto;
+    }
+    .auth-overlay.active {
+      opacity: 1;
+      visibility: visible;
+    }
+
+    .auth-drawer {
+      position: relative;
+      width: 100%;
+      max-width: 480px;
+      background: linear-gradient(145deg, rgba(20, 30, 60, 0.88), rgba(10, 15, 30, 0.96));
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 28px;
+      box-shadow: 
+        0 30px 90px rgba(0, 0, 0, 0.6),
+        inset 0 1px 0 rgba(255, 255, 255, 0.15),
+        inset 0 -1px 0 rgba(255, 255, 255, 0.05);
+      backdrop-filter: blur(24px) saturate(160%);
+      z-index: 10000;
+      transform: scale(0.9) translateY(20px);
+      opacity: 0;
+      transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+      display: flex;
+      flex-direction: column;
+      color: #ffffff;
+      overflow: hidden;
+      font-family: 'Inter', sans-serif;
+    }
+    .auth-drawer.active {
+      transform: scale(1) translateY(0);
+      opacity: 1;
+    }
+
+    .drawer-bg-blob {
+      position: absolute;
+      width: 300px;
+      height: 300px;
+      border-radius: 50%;
+      filter: blur(70px);
+      opacity: 0.15;
+      z-index: -1;
+      pointer-events: none;
+    }
+    .drawer-bg-blob-1 {
+      background: radial-gradient(circle, rgba(255, 139, 69, 0.8) 0%, transparent 70%);
+      top: -10%;
+      right: -10%;
+    }
+    .drawer-bg-blob-2 {
+      background: radial-gradient(circle, rgba(35, 191, 118, 0.8) 0%, transparent 70%);
+      bottom: -10%;
+      left: -10%;
+    }
+
+    .drawer-container {
+      padding: 40px 32px;
+      display: flex;
+      flex-direction: column;
+      min-height: 100%;
+      position: relative;
+      z-index: 1;
+    }
+
+    .drawer-close {
+      position: absolute;
+      top: 24px;
+      right: 24px;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      color: rgba(255, 255, 255, 0.7);
+      display: grid;
+      place-items: center;
+      font-size: 20px;
+      cursor: pointer;
+      transition: all 0.2s ease, transform 0.2s;
+      line-height: 1;
+    }
+    .drawer-close:hover {
+      background: rgba(255, 255, 255, 0.18);
+      color: #fff;
+      transform: rotate(90deg);
+    }
+
+    .drawer-header {
+      margin-top: 10px;
+      margin-bottom: 24px;
+    }
+    .drawer-logo {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      font-size: 15px;
+      color: #ffffff;
+      margin-bottom: 16px;
+      font-weight: 800;
+      font-family: 'Outfit', sans-serif;
+    }
+    .drawer-logo span {
+      display: grid;
+      place-items: center;
+      width: 28px;
+      height: 28px;
+      color: white;
+      background: #ff8b45;
+      border-radius: 9px;
+      box-shadow: 0 10px 20px rgba(255, 139, 69, .25);
+      font-size: 13px;
+      font-weight: 900;
+    }
+    .drawer-title {
+      font-size: 28px;
+      font-weight: 800;
+      color: #fff;
+      margin: 0 0 6px;
+      letter-spacing: -0.02em;
+      font-family: 'Space Grotesk', sans-serif;
+    }
+    .drawer-subtitle {
+      font-size: 13.5px;
+      color: rgba(255, 255, 255, 0.65);
+      margin: 0;
+      line-height: 1.5;
+    }
+
+    .drawer-tabs {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 4px;
+      padding: 4px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 12px;
+      margin-bottom: 24px;
+    }
+    .drawer-tab {
+      padding: 12px;
+      border: 0;
+      background: transparent;
+      color: rgba(255, 255, 255, 0.6);
+      font-size: 13.5px;
+      font-weight: 700;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      text-align: center;
+    }
+    .drawer-tab.active {
+      background: rgba(255, 255, 255, 0.9);
+      color: #060b18;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    }
+
+    .drawer-panel {
+      display: none;
+    }
+    .drawer-panel.active {
+      display: block;
+    }
+    .drawer-field-group {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+    .drawer-input-container {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .drawer-label {
+      font-size: 11px;
+      font-weight: 750;
+      text-transform: uppercase;
+      color: rgba(255, 255, 255, 0.5);
+      letter-spacing: 0.08em;
+    }
+    .drawer-input {
+      width: 100%;
+      height: 48px;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 12px;
+      color: #fff;
+      padding: 0 16px;
+      font-size: 14px;
+      outline: none;
+      transition: all 0.2s;
+    }
+    .drawer-input:focus {
+      background: rgba(255, 255, 255, 0.12);
+      border-color: rgba(255, 139, 69, 0.5);
+      box-shadow: 0 0 0 3px rgba(255, 139, 69, 0.15);
+    }
+    .drawer-input::placeholder {
+      color: rgba(255, 255, 255, 0.35);
+    }
+
+    .drawer-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 24px;
+      font-size: 13px;
+      color: rgba(255, 255, 255, 0.65);
+    }
+    .drawer-checkbox-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .drawer-checkbox-label input {
+      accent-color: #ff8b45;
+      width: 15px;
+      height: 15px;
+    }
+
+    .drawer-submit {
+      width: 100%;
+      height: 50px;
+      border: 0;
+      border-radius: 12px;
+      background: linear-gradient(135deg, #ff8b45 0%, #ff6200 100%);
+      border: 1px solid rgba(255, 255, 255, 0.2) !important;
+      color: #fff;
+      font-size: 14.5px;
+      font-weight: 800;
+      cursor: pointer;
+      box-shadow: 0 8px 24px rgba(255, 107, 0, 0.22);
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    .drawer-submit:hover {
+      transform: translateY(-1.5px);
+      box-shadow: 0 12px 28px rgba(255, 107, 0, 0.32), 0 0 15px rgba(255, 107, 0, 0.15);
+    }
+    .drawer-submit:active {
+      transform: translateY(1px);
+    }
+
+    .drawer-switch {
+      margin-top: 18px;
+      text-align: center;
+      font-size: 13px;
+      color: rgba(255, 255, 255, 0.5);
+    }
+    .drawer-link {
+      color: #ff8b45;
+      background: transparent;
+      border: 0;
+      font-weight: 750;
+      cursor: pointer;
+      padding: 0;
+      transition: color 0.2s;
+    }
+    .drawer-link:hover {
+      color: #ffaa76;
+      text-decoration: underline;
+    }
+
+    .drawer-error-alert {
+      border: 1px solid rgba(239, 68, 68, 0.35);
+      background: rgba(239, 68, 68, 0.12);
+      color: #fca5a5;
+      padding: 12px 14px;
+      border-radius: 12px;
+      font-size: 13px;
+      margin-bottom: 20px;
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      line-height: 1.4;
+    }
+    .drawer-error-icon {
+      flex-shrink: 0;
+      color: #ef4444;
+      font-size: 14px;
+      margin-top: 2px;
+    }
+
+    .spinner {
+      width: 18px;
+      height: 18px;
+      border: 2px solid rgba(255, 255, 255, 0.3);
+      border-top-color: #ffffff;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      display: inline-block;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .drawer-success {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 300px;
+      text-align: center;
+    }
+    .drawer-success-icon {
+      width: 64px;
+      height: 64px;
+      background: rgba(35, 191, 118, 0.15);
+      color: #23bf76;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      font-size: 32px;
+      margin-bottom: 20px;
+      box-shadow: 0 10px 24px rgba(35, 191, 118, 0.1);
+      animation: scaleUp 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+    }
+    @keyframes scaleUp {
+      from { transform: scale(0.6); opacity: 0; }
+      to { transform: scale(1); opacity: 1; }
+    }
+
+    .drawer-footer {
+      margin-top: auto;
+      padding-top: 32px;
+      text-align: center;
+      color: rgba(255, 255, 255, 0.35);
+      font-size: 11px;
+    }
+  </style>
+</head>
+<body>
+  <div class="bk-page">
+    <div class="bk-canvas">
+      <section class="bk-hero">
+        <header class="bk-nav">
+          <a class="bk-logo" href="/"><span>B</span><strong>Buykori AdSync</strong></a>
+          <nav aria-label="Main navigation">
+            <a href="#features">Home</a>
+            <a href="#product">Product</a>
+            <a href="#solution">Solution</a>
+            <a href="#pricing">Pricing</a>
+            <a href="#faq">FAQ</a>
+          </nav>
+          <div><button class="bk-auth-link" type="button" data-auth-mode="login">Sign in</button><button class="bk-dark" type="button" data-auth-mode="signup">Sign up</button></div>
+        </header>
+
+        <div class="bk-hero-grid">
+          <div>
+            <p class="bk-eyebrow">New update <span>|</span> Better server events for paid ads</p>
+            <h1>Optimize Your <mark>Ad</mark> Tracking with Real-Time Data</h1>
+            <p class="bk-sub">Monitor server-side event quality in real time, analyze campaign attribution, and send cleaner WooCommerce signals to Meta, TikTok and GA4.</p>
+            <div class="bk-actions"><button class="bk-orange" type="button" data-auth-mode="signup">Get Started -></button><a class="bk-soft" href="#features">How it Works</a></div>
+          </div>
+          <div class="bk-dashboard" aria-label="Buykori dashboard preview">
+            <div class="bk-window">
+              <div class="bk-window-top"><i></i><i></i><i></i><b></b></div>
+              <div class="bk-window-body">
+                <aside>
+                  <div class="bk-logo"><span>B</span><strong>Buykori</strong></div>
+                  <p class="active">Dashboard</p><p>Events</p><p>Quality</p><p>Reports</p><p>Settings</p>
+                </aside>
+                <main>
+                  <div class="bk-dash-head"><div><small>Overview</small><h3>Campaign dashboard</h3></div><span>Last 24h</span></div>
+                  <div class="bk-metrics"><article><small>Events</small><strong>16,928</strong><em>+12.6%</em></article><article><small>Match Rate</small><strong>92.7%</strong><em>+6.3%</em></article><article><small>Revenue</small><strong>$8.7K</strong><em>+18.1%</em></article></div>
+                  <div class="bk-bars" aria-hidden="true"><span style="height:38%"></span><span style="height:56%"></span><span style="height:42%"></span><span style="height:76%"></span><span style="height:68%"></span><span style="height:92%"></span><span style="height:64%"></span><span style="height:84%"></span><span style="height:58%"></span><span style="height:74%"></span></div>
+                  <div class="bk-mini">
+                    <article><div class="bk-ring">94</div><div><b>Signal Health</b><p>Excellent event quality</p></div></article>
+                    <article><b>Top Events</b><p><span>PageView</span><strong>9,842</strong></p><p><span>ViewContent</span><strong>6,215</strong></p><p><span>Purchase</span><strong>1,010</strong></p></article>
+                  </div>
+                </main>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="bk-intro" id="product"><p>Buykori AdSync is an ads tracking dashboard platform designed to effectively optimize and monitor your advertising campaigns.</p></section>
+
+      <section id="features" class="bk-section">
+        <div class="bk-section-head"><div><p class="bk-kicker">Key features</p><h2>Powerful Ads Management Features</h2></div><div class="bk-tabs"><span>Tracking</span><span>Dashboard</span><span>Ad Spend</span><span>Customisable</span></div></div>
+        <div class="bk-feature-grid">
+          <article><i>01</i><h3>Track Real Engagement</h3><p>Capture PageView, ViewContent, AddToCart, checkout intent and purchases with cleaner attribution.</p><div><strong>+24.8%</strong><div class="bk-spark"><span style="height:30%"></span><span style="height:54%"></span><span style="height:42%"></span><span style="height:80%"></span></div></div></article>
+          <article><i>02</i><h3>Signal Health Doctor</h3><p>Find missing product IDs, weak match quality and platform delivery warnings before campaigns waste budget.</p><div><strong>94/100</strong><div class="bk-spark"><span style="height:64%"></span><span style="height:76%"></span><span style="height:88%"></span><span style="height:70%"></span></div></div></article>
+          <article><i>03</i><h3>Campaign Monitoring</h3><p>See Meta, TikTok and GA4 event delivery status from one lightweight dashboard.</p><div><strong>3x</strong><div class="bk-spark"><span style="height:46%"></span><span style="height:62%"></span><span style="height:72%"></span><span style="height:90%"></span></div></div></article>
+        </div>
+      </section>
+
+      <section id="solution" class="bk-budget">
+        <p class="bk-kicker">Budgeting for ads</p><h2>Manage and Optimize the Advertising Budget for Maximum Results.</h2>
+        <div class="bk-table"><h3>Ad Spend</h3><table><thead><tr><th>Platform</th><th>Campaign Name</th><th>Clicks</th><th>Impressions</th></tr></thead><tbody><tr><td>Meta</td><td>t-shirt_launch_may</td><td>7,148</td><td>92.4K</td></tr><tr><td>TikTok</td><td>summer_offer_cod</td><td>4,502</td><td>61.8K</td></tr><tr><td>GA4</td><td>brand_search_bd</td><td>2,187</td><td>28.9K</td></tr><tr><td>Direct</td><td>retargeting_flow</td><td>1,044</td><td>13.2K</td></tr></tbody></table></div>
+        <div class="bk-budget-notes"><article><span class="dot">A</span><h3>Real-Time Tracking</h3><p>Track ad event delivery as campaigns run and quickly detect missing signals.</p></article><article><span class="dot">B</span><h3>Budget Adjustment</h3><p>Scale spend only when event quality, product IDs and conversion signals look healthy.</p></article><article><span class="dot">C</span><h3>Cost Per Conversion</h3><p>Use clean attribution data to compare Meta, TikTok and Google campaign performance.</p></article></div>
+      </section>
+
+      <section class="bk-integrations">
+        <p class="bk-kicker">Integrations</p><h2>Easy Integration with Your Advertising Platform</h2><p>Connect AdSync with your advertising platforms and tools from one connected workflow.</p>
+        <div class="bk-logo-cloud"><span>Meta CAPI</span><span>TikTok</span><span>GA4</span><span>WooCommerce</span><span>Google Ads</span><span>LinkedIn</span><span>Pinterest</span></div>
+      </section>
+
+      <section class="bk-tools">
+        <p class="bk-kicker">Free tools</p><h2>Helpful tools for better campaign setup.</h2><p>Useful product areas that help visitors understand and improve tracking before they install the plugin.</p>
+        <div class="bk-tools-grid"><article><i>1</i><h3>Tracking Checker</h3><p>Scan a website and show whether Meta, TikTok, GA4 and server events are active.</p></article><article><i>2</i><h3>Event Tester</h3><p>Send test PageView, ViewContent, AddToCart, Checkout and Purchase events.</p></article><article><i>3</i><h3>UTM Builder</h3><p>Create clean campaign links for Facebook, TikTok and Google ads.</p></article><article><i>4</i><h3>Ads Profit Calculator</h3><p>Estimate ROAS, CPA and profit before increasing campaign budget.</p></article><article><i>5</i><h3>Content ID Fix</h3><p>Reduce missing content warnings by checking product IDs and catalog signals.</p></article><article><i>6</i><h3>Deferred Purchase</h3><p>Confirm COD and delayed orders before sending final purchase signals.</p></article></div>
+      </section>
+
+      <section id="pricing" class="bk-pricing">
+        <p class="bk-kicker">Pricing</p><h2>Price is Just a Number, Focus on the Benefits</h2>
+        <div class="bk-plan-grid"><article><h3>Free Plan</h3><strong>$0<span>/month</span></strong><p>For testing one WooCommerce store.</p><button type="button" data-auth-mode="signup">Start for free</button><ul><li>One store setup</li><li>Basic server events</li><li>Campaign URL builder</li></ul></article><article class="featured"><h3>Pro Plan</h3><strong>$19<span>/month</span></strong><p>For growing stores and marketers.</p><button type="button" data-auth-mode="signup">Start 14 Days Trial</button><ul><li>Meta, TikTok and GA4</li><li>Signal Health Doctor</li><li>Deferred Purchase control</li><li>Priority support</li></ul></article><article><h3>Enterprise Plan</h3><strong>Custom</strong><p>For agencies and multi-store teams.</p><button type="button" data-auth-mode="signup">Talk to sales</button><ul><li>Multi-client dashboard</li><li>Custom domains</li><li>Advanced event quality</li></ul></article></div>
+      </section>
+
+      <section class="bk-comparison">
+        <p class="bk-kicker">Why choose us</p><h2>Buykori AdSync vs manual setup.</h2><p>Manual server-side tracking works, but it takes more time to maintain. Buykori packages the common workflow in one product.</p>
+        <div class="bk-comparison-table"><table><thead><tr><th>Area</th><th>Buykori AdSync</th><th>Manual setup</th></tr></thead><tbody><tr><td><strong>Setup</strong></td><td>Plugin, API key and guided platform settings.</td><td>Manual tags, server config and custom debugging.</td></tr><tr><td><strong>Event quality</strong></td><td>Signal doctor, content ID checks and enrichment flow.</td><td>Depends on developer implementation and ongoing review.</td></tr><tr><td><strong>Purchase control</strong></td><td>Deferred purchase and COD confirmation workflow.</td><td>Usually needs custom logic per store.</td></tr><tr><td><strong>Monitoring</strong></td><td>Dashboard, logs, platform status and campaign tools.</td><td>Separate tools and manual platform checks.</td></tr></tbody></table></div>
+      </section>
+
+      <section class="bk-testimonials">
+        <p class="bk-kicker">Customer stories</p><h2>Designed for store owners and media buyers.</h2><p>Use cleaner server-side event data to reduce confusion before scaling ad budget.</p>
+        <div class="bk-testimonial-grid"><article><div class="bk-stars">*****</div><p>"The dashboard makes tracking issues easier to explain before campaigns waste budget."</p><strong>Agency Operator</strong><small>Meta and TikTok ads</small></article><article><div class="bk-stars">*****</div><p>"Deferred purchase tracking is exactly what COD stores need before sending final purchase data."</p><strong>WooCommerce Owner</strong><small>Bangladesh ecommerce</small></article><article><div class="bk-stars">*****</div><p>"Campaign URL Builder plus server events makes source reporting much cleaner across channels."</p><strong>Performance Marketer</strong><small>Multi-platform campaigns</small></article></div>
+      </section>
+
+      <section id="faq" class="bk-faq">
+        <div><p class="bk-kicker">FAQ</p><h2>Got questions about Buykori? We've got answers.</h2><p>Simple answers for campaign tracking, one-page landing pages and event quality.</p></div>
+        <div class="bk-faq-list"><details open><summary>What is Buykori AdSync?</summary><p>A server-side tracking platform that sends cleaner WooCommerce events to Meta CAPI, TikTok Events API and GA4.</p></details><details><summary>Does it support one-page landing pages?</summary><p>Yes. One-page mode can wait for real checkout intent before sending InitiateCheckout.</p></details><details><summary>Can I use only TikTok or only Meta?</summary><p>Yes. Platform toggles can control which destination receives events for each store.</p></details><details><summary>What data improves event match quality?</summary><p>Content IDs, value, currency, click IDs, user agent, IP and hashed customer fields help platforms match events better.</p></details></div>
+      </section>
+
+      <section class="bk-cta"><h2>Ready to Optimize Your Ads and Maximize Your Results?</h2><p>Start using Buykori AdSync today and take control of your ad campaigns with real-time insights.</p><button type="button" data-auth-mode="signup">Get Started for Free -></button></section>
+      <footer class="bk-footer"><a class="bk-logo" href="/"><span>B</span><strong>Buykori AdSync</strong></a><div><span>Meta</span><span>TikTok</span><span>GA4</span></div><a href="#">Privacy Policy</a></footer>
+    </div>
+  </div>
+
+  <!-- Auth Overlay Background -->
+  <div id="auth-overlay" class="auth-overlay">
+    <!-- Centered Glassmorphic Auth Modal -->
+    <div id="auth-drawer" class="auth-drawer">
+      <div class="drawer-bg-blob drawer-bg-blob-1"></div>
+      <div class="drawer-bg-blob drawer-bg-blob-2"></div>
+      
+      <div class="drawer-container">
+        <button id="drawer-close" class="drawer-close" aria-label="Close panel">&times;</button>
+        
+        <div class="drawer-header">
+          <div class="drawer-logo"><span>B</span><strong>Buykori AdSync</strong></div>
+          <h2 id="drawer-title" class="drawer-title">Welcome Back</h2>
+          <p id="drawer-subtitle" class="drawer-subtitle">Log in to manage your server-side event tracking.</p>
+        </div>
+
+        <div class="drawer-tabs" role="tablist">
+          <button id="tab-login" class="drawer-tab active" type="button" role="tab">Login</button>
+          <button id="tab-signup" class="drawer-tab" type="button" role="tab">Signup</button>
+        </div>
+
+        <!-- Live Notification/Error Alert Box -->
+        <div id="drawer-alert" class="drawer-error-alert" style="display: none;">
+          <span class="drawer-error-icon">&#9888;</span>
+          <span id="drawer-alert-text">An error occurred. Please try again.</span>
+        </div>
+
+        <!-- Login Form Panel -->
+        <form id="drawer-login-form" class="drawer-panel active" autocomplete="on">
+          <div class="drawer-field-group">
+            <div class="drawer-input-container">
+              <label class="drawer-label" for="login-email">Email Address</label>
+              <input class="drawer-input" id="login-email" type="email" name="email" placeholder="name@domain.com" autocomplete="email" required>
+            </div>
+            <div class="drawer-input-container">
+              <label class="drawer-label" for="login-password">Password</label>
+              <input class="drawer-input" id="login-password" type="password" name="password" placeholder="••••••••" autocomplete="current-password" required>
+            </div>
+          </div>
+          <div class="drawer-row">
+            <label class="drawer-checkbox-label">
+              <input type="checkbox" name="remember" checked> Remember me
+            </label>
+            <span style="color: #ff8b45; font-weight: 750;">Secure Portal</span>
+          </div>
+          <button class="drawer-submit" type="submit">
+            <span class="btn-text">Login</span>
+            <span class="btn-spinner spinner" style="display: none;"></span>
+          </button>
+          <p class="drawer-switch">Don't have an account? <button class="drawer-link" type="button" id="link-to-signup">Signup</button></p>
+        </form>
+
+        <!-- Signup Form Panel -->
+        <form id="drawer-signup-form" class="drawer-panel" autocomplete="on">
+          <div class="drawer-field-group">
+            <div class="drawer-input-container">
+              <label class="drawer-label" for="signup-fullname">Full Name</label>
+              <input class="drawer-input" id="signup-fullname" type="text" name="full_name" placeholder="John Doe" autocomplete="name" required>
+            </div>
+            <div class="drawer-input-container">
+              <label class="drawer-label" for="signup-bizname">Business Name</label>
+              <input class="drawer-input" id="signup-bizname" type="text" name="business_name" placeholder="Acme Corp" autocomplete="organization" required>
+            </div>
+            <div class="drawer-input-container">
+              <label class="drawer-label" for="signup-email">Email Address</label>
+              <input class="drawer-input" id="signup-email" type="email" name="email" placeholder="name@domain.com" autocomplete="email" required>
+            </div>
+            <div class="drawer-input-container">
+              <label class="drawer-label" for="signup-password">Create Password</label>
+              <input class="drawer-input" id="signup-password" type="password" name="password" placeholder="Min. 8 characters" autocomplete="new-password" minlength="8" required>
+            </div>
+            <div class="drawer-input-container">
+              <label class="drawer-label" for="signup-domain">Website Domain (Optional)</label>
+              <input class="drawer-input" id="signup-domain" type="text" name="domain" placeholder="example.com">
+            </div>
+          </div>
+          <button class="drawer-submit" type="submit">
+            <span class="btn-text">Create Account</span>
+            <span class="btn-spinner spinner" style="display: none;"></span>
+          </button>
+          <p class="drawer-switch">Already have an account? <button class="drawer-link" type="button" id="link-to-login">Login</button></p>
+        </form>
+
+        <!-- Success Screen (Animated) -->
+        <div id="drawer-success-screen" class="drawer-success" style="display: none;">
+          <div class="drawer-success-icon">&#10004;</div>
+          <h2 class="drawer-title" style="font-size: 22px;">Success!</h2>
+          <p class="drawer-subtitle" style="margin-top: 8px;">Synchronizing workspace credentials...</p>
+          <p class="drawer-subtitle" style="font-size: 12px; color: rgba(255, 255, 255, 0.4); margin-top: 6px;">Redirecting you to client dashboard...</p>
+        </div>
+
+        <div class="drawer-footer">Created by Buykori AdSync</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Elements
+    const authOverlay = document.getElementById('auth-overlay');
+    const authDrawer = document.getElementById('auth-drawer');
+    const drawerClose = document.getElementById('drawer-close');
+    const drawerTitle = document.getElementById('drawer-title');
+    const drawerSubtitle = document.getElementById('drawer-subtitle');
+    const tabLogin = document.getElementById('tab-login');
+    const tabSignup = document.getElementById('tab-signup');
+    const loginForm = document.getElementById('drawer-login-form');
+    const signupForm = document.getElementById('drawer-signup-form');
+    const successScreen = document.getElementById('drawer-success-screen');
+    const drawerAlert = document.getElementById('drawer-alert');
+    const drawerAlertText = document.getElementById('drawer-alert-text');
+    const linkToSignup = document.getElementById('link-to-signup');
+    const linkToLogin = document.getElementById('link-to-login');
+
+    // Tab Activation Helper
+    function activateTab(tabName) {
+      if (tabName === 'login') {
+        tabLogin.classList.add('active');
+        tabSignup.classList.remove('active');
+        loginForm.classList.add('active');
+        signupForm.classList.remove('active');
+        successScreen.style.display = 'none';
+        drawerTitle.textContent = 'Welcome Back';
+        drawerSubtitle.textContent = 'Log in to manage your server-side event tracking.';
+      } else {
+        tabLogin.classList.remove('active');
+        tabSignup.classList.add('active');
+        loginForm.classList.remove('active');
+        signupForm.classList.add('active');
+        successScreen.style.display = 'none';
+        drawerTitle.textContent = 'Create Store Account';
+        drawerSubtitle.textContent = 'Start tracking WooCommerce server events in minutes.';
+      }
+      hideAlert();
+    }
+
+    // Toggle Drawer Helper
+    function openDrawer(activeTab = 'login') {
+      // Clear forms
+      loginForm.reset();
+      signupForm.reset();
+      
+      // Clear screens display
+      loginForm.style.display = '';
+      signupForm.style.display = '';
+      document.querySelector('.drawer-tabs').style.display = 'grid';
+      drawerTitle.style.display = 'block';
+      drawerSubtitle.style.display = 'block';
+      successScreen.style.display = 'none';
+      
+      activateTab(activeTab);
+      authOverlay.classList.add('active');
+      authDrawer.classList.add('active');
+      document.body.style.overflow = 'hidden'; // Disable page scrolling
+    }
+
+    function closeDrawer() {
+      authOverlay.classList.remove('active');
+      authDrawer.classList.remove('active');
+      document.body.style.overflow = 'auto'; // Re-enable page scrolling
+      // Clear forms
+      loginForm.reset();
+      signupForm.reset();
+      hideAlert();
+    }
+
+    // Alert Helpers
+    function showAlert(message) {
+      drawerAlertText.textContent = message;
+      drawerAlert.style.display = 'flex';
+    }
+
+    function hideAlert() {
+      drawerAlert.style.display = 'none';
+    }
+
+    // Event Listeners for Open/Close
+    tabLogin.addEventListener('click', () => activateTab('login'));
+    tabSignup.addEventListener('click', () => activateTab('signup'));
+    linkToSignup.addEventListener('click', (e) => { e.preventDefault(); activateTab('signup'); });
+    linkToLogin.addEventListener('click', (e) => { e.preventDefault(); activateTab('login'); });
+    drawerClose.addEventListener('click', closeDrawer);
+    authOverlay.addEventListener('click', closeDrawer);
+    authDrawer.addEventListener('click', (e) => e.stopPropagation());
+
+    // Open the marketing-site auth drawer instead of sending visitors away first.
+    document.addEventListener('click', function(e) {
+      const authTrigger = e.target.closest('[data-auth-mode]');
+      if (authTrigger) {
+        e.preventDefault();
+        openDrawer(authTrigger.getAttribute('data-auth-mode') === 'login' ? 'login' : 'signup');
+        return;
+      }
+
+      const link = e.target.closest('a');
+      if (link && link.getAttribute('href') && link.getAttribute('href').includes('client.buykori.app')) {
+        e.preventDefault();
+        openDrawer('signup');
+      }
+    });
+
+    // Form submission helper
+    async function submitAuthForm(form, endpoint, payloadBuilder) {
+      const submitBtn = form.querySelector('.drawer-submit');
+      const btnText = submitBtn.querySelector('.btn-text');
+      const btnSpinner = submitBtn.querySelector('.btn-spinner');
+
+      // Disable interactions and show spinner
+      submitBtn.disabled = true;
+      btnText.style.opacity = '0.5';
+      btnSpinner.style.display = 'inline-block';
+      hideAlert();
+
+      const payload = payloadBuilder();
+
+      try {
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+          },
+          body: JSON.stringify(payload)
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.detail || 'An unexpected authentication error occurred.');
+        }
+
+        // Authentication Success Workflow
+        loginForm.style.display = 'none';
+        signupForm.style.display = 'none';
+        document.querySelector('.drawer-tabs').style.display = 'none';
+        drawerTitle.style.display = 'none';
+        drawerSubtitle.style.display = 'none';
+        successScreen.style.display = 'flex';
+
+        // Wait for visual confirmation and redirect to client dashboard
+        setTimeout(() => {
+          window.location.assign('https://client.buykori.app');
+        }, 1200);
+
+      } catch (error) {
+        showAlert(error.message);
+        submitBtn.disabled = false;
+        btnText.style.opacity = '1';
+        btnSpinner.style.display = 'none';
+      }
+    }
+
+    // Login Form Handler
+    loginForm.addEventListener('submit', function(e) {
+      e.preventDefault();
+      submitAuthForm(
+        loginForm,
+        '/api/v1/auth/client/login',
+        () => ({
+          email: loginForm.email.value.trim(),
+          password: loginForm.password.value
+        })
+      );
+    });
+
+    // Signup Form Handler
+    signupForm.addEventListener('submit', function(e) {
+      e.preventDefault();
+      submitAuthForm(
+        signupForm,
+        '/api/v1/auth/client/signup',
+        () => ({
+          full_name: signupForm.full_name.value.trim(),
+          business_name: signupForm.business_name.value.trim(),
+          email: signupForm.email.value.trim(),
+          password: signupForm.password.value,
+          domain: signupForm.domain.value.trim() || null
+        })
+      );
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,402 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">System Overview</h1>
+    <p class="page-sub">Real-time overview of your tracking infrastructure and data flow.</p>
+  </div>
+  <div class="header-actions">
+    <button class="btn btn-outline">
+      <svg xmlns="http://www.w3.org/2000/svg" style="width:16px;height:16px" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+      Last 24 Hours
+      <svg xmlns="http://www.w3.org/2000/svg" style="width:14px;height:14px;opacity:0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" /></svg>
+    </button>
+    <button class="btn btn-primary">
+      <svg xmlns="http://www.w3.org/2000/svg" style="width:16px;height:16px" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+      Export Report
+    </button>
+  </div>
+</div>
+
+<div class="metrics-grid">
+  <div class="metric-card">
+    <div class="metric-header">
+      <div class="m-icon bg-blue"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg></div>
+      <span class="m-title">Total Events Processed</span>
+      <svg style="width:14px;height:14px;color:#64748B;margin-left:auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+    </div>
+    <div class="metric-value">1.2M</div>
+    <div class="trend trend-up">
+      <span><svg style="width:12px;height:12px" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18" /></svg> 18.6%</span> vs prev 24h
+    </div>
+    <div style="margin-top:16px;height:24px;">
+       <svg viewBox="0 0 100 20" preserveAspectRatio="none" style="width:100%;height:100%"><polyline fill="none" stroke="#3B82F6" stroke-width="2" points="0,15 10,12 20,18 30,5 40,10 50,2 60,8 70,5 80,14 90,8 100,10"/></svg>
+    </div>
+  </div>
+
+  <div class="metric-card">
+    <div class="metric-header">
+      <div class="m-icon bg-purple"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg></div>
+      <span class="m-title">Match Rate</span>
+      <svg style="width:14px;height:14px;color:#64748B;margin-left:auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+    </div>
+    <div class="metric-value">92.4%</div>
+    <div class="trend trend-up">
+      <span><svg style="width:12px;height:12px" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18" /></svg> 4.3%</span> vs prev 24h
+    </div>
+    <div style="margin-top:16px;height:24px;">
+       <svg viewBox="0 0 100 20" preserveAspectRatio="none" style="width:100%;height:100%"><polyline fill="none" stroke="#A78BFA" stroke-width="2" points="0,18 15,12 30,16 45,8 60,10 75,5 90,8 100,2"/></svg>
+    </div>
+  </div>
+
+  <div class="metric-card">
+    <div class="metric-header">
+      <div class="m-icon bg-red"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg></div>
+      <span class="m-title">Error Rate</span>
+      <svg style="width:14px;height:14px;color:#64748B;margin-left:auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+    </div>
+    <div class="metric-value">0.03%</div>
+    <div class="trend trend-down">
+      <span><svg style="width:12px;height:12px" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3" /></svg> 0.02%</span> vs prev 24h
+    </div>
+    <div style="margin-top:16px;height:24px;">
+       <svg viewBox="0 0 100 20" preserveAspectRatio="none" style="width:100%;height:100%"><polyline fill="none" stroke="#F87171" stroke-width="2" points="0,18 20,18 40,16 60,18 70,5 80,16 90,8 100,18"/></svg>
+    </div>
+  </div>
+
+  <div class="metric-card">
+    <div class="metric-header">
+      <div class="m-icon bg-indigo"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg></div>
+      <span class="m-title">Queued Outbox</span>
+      <svg style="width:14px;height:14px;color:#64748B;margin-left:auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+    </div>
+    <div class="metric-value">{{ queued_events }}</div>
+    <div class="trend">{{ retries }} retrying | {{ dead_outbox }} dead</div>
+    <div style="margin-top:16px;height:24px;">
+       <svg viewBox="0 0 100 20" preserveAspectRatio="none" style="width:100%;height:100%"><polyline fill="none" stroke="#818CF8" stroke-width="2" points="0,12 15,14 30,8 45,10 60,4 75,8 90,5 100,6"/></svg>
+    </div>
+  </div>
+</div>
+
+<div class="grid-layout">
+  <div>
+    {% if clients %}
+    <div class="card">
+      <div class="card-header">
+        <h2 class="card-title">Active Client Integrations</h2>
+        <div style="display:flex;gap:12px;align-items:center;">
+          <svg style="width:16px;height:16px;color:#94A3B8;cursor:pointer" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+          <svg style="width:16px;height:16px;color:#94A3B8;cursor:pointer" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" /></svg>
+          <div style="padding:4px 10px;border:1px solid var(--border);border-radius:4px;font-size:12px;color:#E2E8F0;background:rgba(255,255,255,0.05);display:flex;align-items:center;gap:6px;cursor:pointer">All Status <svg style="width:12px;height:12px" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" /></svg></div>
+          <svg style="width:16px;height:16px;color:#94A3B8;cursor:pointer" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+        </div>
+      </div>
+      <div style="overflow-x:auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Client</th><th>Domain</th><th>Meta CAPI</th><th>TikTok API</th><th>GA4</th><th>Events 24h</th><th>Health</th><th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for c in clients %}
+            <tr>
+              <td>
+                <div class="client-name">{{ c.name }}</div>
+                <div class="client-sub">{{ c.pixel_id }}</div>
+              </td>
+              <td>
+                {% if c.domain %}
+                <a href="{% if c.domain.startswith('http') %}{{ c.domain }}{% else %}https://{{ c.domain }}{% endif %}" target="_blank" class="domain-link">
+                  {{ c.domain }}
+                  <svg style="width:12px;height:12px" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
+                </a>
+                {% else %}
+                No domain set
+                {% endif %}
+              </td>
+              <td>
+                <div class="integration-status">
+                  <svg style="color:#1877F2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.469h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.469h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/></svg>
+                  <div class="dot {% if c.name.lower() == 'loadtest' %}dot-inactive{% else %}dot-active{% endif %}"></div> Active
+                </div>
+              </td>
+              <td>
+                <div class="integration-status">
+                  <svg style="color:#FFF" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M12.525.02c1.31-.02 2.61-.01 3.91-.02.08 1.53.63 3.09 1.75 4.17 1.12 1.11 2.7 1.62 4.24 1.79v4.03c-1.44-.05-2.89-.35-4.2-.97-.57-.26-1.1-.59-1.62-.93v7.2c0 1.63-.51 3.25-1.47 4.55-1.07 1.45-2.71 2.45-4.48 2.82-1.8.38-3.7-.02-5.26-.98-1.55-.95-2.65-2.52-3.1-4.26-.46-1.74-.2-3.64.71-5.18 1.13-1.9 3.09-3.23 5.3-3.5 1.05-.13 2.11-.08 3.14.15V13c-.39-.12-.8-.17-1.22-.17-1.12.03-2.22.45-3.03 1.25-.8.78-1.26 1.87-1.27 2.99 0 1.11.45 2.21 1.25 3.01.81.82 1.96 1.27 3.1 1.25 1.14-.02 2.26-.51 3.05-1.33.82-.84 1.28-1.98 1.3-3.14V.02z"/></svg>
+                  <div class="dot {% if c.is_active %}dot-active{% else %}dot-inactive{% endif %}"></div> Active
+                </div>
+              </td>
+              <td>
+                <div class="integration-status">
+                  <svg style="color:#F9AB00" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M4 18h4V6H4v12zm6 0h4V10h-4v8zm6-12v12h4V6h-4z"/></svg>
+                  <div class="dot {% if c.is_active %}dot-active{% else %}dot-inactive{% endif %}"></div> {% if c.is_active %}Active{% else %}Degraded{% endif %}
+                </div>
+              </td>
+              <td>
+                <span class="text-success" style="font-weight:600">{{ "{:,}".format(client_events_map.get(c.id, 0)) }}</span>
+                <span class="trend trend-up" style="display:inline-block;font-size:10px;margin-left:4px">↑ 12.4%</span>
+              </td>
+              <td>
+                <div class="status-badge {% if c.is_active and c.name.lower() != 'loadtest' %}status-healthy{% else %}status-degraded{% endif %}">
+                  {% if c.is_active and c.name.lower() != 'loadtest' %}Healthy{% else %}Degraded{% endif %}
+                </div>
+              </td>
+              <td>
+                <button class="action-btn" onclick="window.location.href='/api/v1/admin/client/{{ c.id }}/edit'"><svg style="width:16px;height:16px" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h.01M12 12h.01M19 12h.01M6 12a1 1 0 11-2 0 1 1 0 012 0zm7 0a1 1 0 11-2 0 1 1 0 012 0zm7 0a1 1 0 11-2 0 1 1 0 012 0z" /></svg></button>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div style="padding:14px 20px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;">
+         <div style="font-size:12px;color:var(--text-muted);">Showing 1 to {{ clients|length }} of {{ clients|length }} clients</div>
+         <div style="display:flex;gap:4px;">
+           <button style="width:28px;height:28px;background:none;border:none;color:var(--text-muted);cursor:pointer"><svg style="width:16px;height:16px" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" /></svg></button>
+           <button style="width:28px;height:28px;background:var(--primary);border:none;color:white;border-radius:4px;cursor:pointer">1</button>
+           <button style="width:28px;height:28px;background:none;border:none;color:var(--text-muted);cursor:pointer"><svg style="width:16px;height:16px" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" /></svg></button>
+         </div>
+      </div>
+    </div>
+    {% else %}
+    <div class="card">
+      <div class="card-header"><h2 class="card-title">Active Client Integrations</h2></div>
+      <div style="padding: 40px 20px; text-align: center; color: var(--text-muted);">
+        <div style="font-size:32px; margin-bottom:12px;">📭</div>
+        <p>No active client integrations found.</p>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  <div>
+    <div class="card" style="margin-bottom:20px;">
+      <div class="card-header">
+        <h2 class="card-title">Admin Activity Stream</h2>
+        <a href="#" class="view-all">View all</a>
+      </div>
+      <div style="padding:0">
+        <div class="stream-item">
+          <div class="stream-dot success"></div>
+          <div class="stream-content">
+            <div class="stream-title">Client "Buykori Store" updated</div>
+            <div class="stream-desc">Integration settings changed</div>
+          </div>
+          <div class="stream-time">04:51:18</div>
+        </div>
+        <div class="stream-item">
+          <div class="stream-dot info"></div>
+          <div class="stream-content">
+            <div class="stream-title">Events processed</div>
+            <div class="stream-desc">52,341 events processed successfully</div>
+          </div>
+          <div class="stream-time">04:50:02</div>
+        </div>
+        <div class="stream-item">
+          <div class="stream-dot warning"></div>
+          <div class="stream-content">
+            <div class="stream-title">High error rate detected</div>
+            <div class="stream-desc">Metroomaa.com error rate is 1.12%</div>
+          </div>
+          <div class="stream-time">04:48:45</div>
+        </div>
+        <div class="stream-item">
+          <div class="stream-dot success"></div>
+          <div class="stream-content">
+            <div class="stream-title">Outbox retried</div>
+            <div class="stream-desc">12 failed events retried for 2 clients</div>
+          </div>
+          <div class="stream-time">04:47:21</div>
+        </div>
+        <div class="stream-item" style="border-bottom:none;">
+          <div class="stream-dot info"></div>
+          <div class="stream-content">
+            <div class="stream-title">User admin logged in</div>
+            <div class="stream-desc">sysop@buykori.app</div>
+          </div>
+          <div class="stream-time">04:45:10</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2 class="card-title">Signal Alerts</h2>
+        <a href="#" class="view-all">View all</a>
+      </div>
+      <div style="padding:0">
+        <div class="stream-item" style="align-items:center;">
+          <svg style="width:20px;height:20px;color:#EF4444" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+          <div class="stream-content">
+            <div class="stream-title">Content ID missing</div>
+            <div class="stream-desc">Affects 1 client</div>
+          </div>
+          <div style="font-size:11px;font-weight:600;color:#EF4444;border:1px solid rgba(239,68,68,0.3);padding:2px 8px;border-radius:99px;margin-right:10px;">High</div>
+          <div style="font-size:12px;color:var(--text-muted);">47.6% <svg style="width:12px;height:12px;display:inline;vertical-align:middle" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" /></svg></div>
+        </div>
+        <div class="stream-item" style="align-items:center;">
+          <svg style="width:20px;height:20px;color:#F59E0B" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+          <div class="stream-content">
+            <div class="stream-title">Email & phone missing</div>
+            <div class="stream-desc">Affects 2 clients</div>
+          </div>
+          <div style="font-size:11px;font-weight:600;color:#F59E0B;border:1px solid rgba(245,158,11,0.3);padding:2px 8px;border-radius:99px;margin-right:10px;">Medium</div>
+          <div style="font-size:12px;color:var(--text-muted);">23.1% <svg style="width:12px;height:12px;display:inline;vertical-align:middle" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" /></svg></div>
+        </div>
+        <div class="stream-item" style="align-items:center;">
+          <svg style="width:20px;height:20px;color:#F59E0B" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+          <div class="stream-content">
+            <div class="stream-title">Pixel missing funnel events</div>
+            <div class="stream-desc">Affects 1 client</div>
+          </div>
+          <div style="font-size:11px;font-weight:600;color:#F59E0B;border:1px solid rgba(245,158,11,0.3);padding:2px 8px;border-radius:99px;margin-right:10px;">Medium</div>
+          <div style="font-size:12px;color:var(--text-muted);">0.0% <svg style="width:12px;height:12px;display:inline;vertical-align:middle" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" /></svg></div>
+        </div>
+        <div class="stream-item" style="align-items:center;border-bottom:none">
+          <svg style="width:20px;height:20px;color:#3B82F6" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+          <div class="stream-content">
+            <div class="stream-title">Domain validation warning</div>
+            <div class="stream-desc">Affects 1 domain</div>
+          </div>
+          <div style="font-size:11px;font-weight:600;color:#3B82F6;border:1px solid rgba(59,130,246,0.3);padding:2px 8px;border-radius:99px;margin-right:10px;">Low</div>
+          <div style="font-size:12px;color:var(--text-muted);"><svg style="width:12px;height:12px;display:inline;vertical-align:middle" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" /></svg></div>
+        </div>
+
+        <div style="padding:16px 20px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;">
+          <div style="font-size:13px;font-weight:600;color:#E2E8F0">System Status</div>
+          <div style="font-size:12px;color:var(--success);display:flex;align-items:center;gap:6px;"><div style="width:8px;height:8px;border-radius:50%;background:var(--success)"></div> All systems operational</div>
+          <svg style="width:14px;height:14px;color:var(--text-muted);" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" /></svg>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Footer Connection Status (Visual from Image 1) -->
+<div class="connection-footer" style="margin-top:24px;border-radius:12px;border:1px solid var(--border)">
+  <div class="conn-item">
+    <svg class="conn-icon" style="width:32px;height:32px;color:#1877F2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.469h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.469h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/></svg>
+    <div class="conn-info">
+      <div class="conn-title">Meta CAPI</div>
+      <div class="conn-status">Connected &nbsp;<span style="color:#64748B">Events: 432,112</span></div>
+    </div>
+  </div>
+  <div style="width:1px;background:rgba(255,255,255,0.1);height:32px;margin:0 10px;"></div>
+  <div class="conn-item">
+    <svg class="conn-icon" style="width:32px;height:32px;color:#FFF" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M12.525.02c1.31-.02 2.61-.01 3.91-.02.08 1.53.63 3.09 1.75 4.17 1.12 1.11 2.7 1.62 4.24 1.79v4.03c-1.44-.05-2.89-.35-4.2-.97-.57-.26-1.1-.59-1.62-.93v7.2c0 1.63-.51 3.25-1.47 4.55-1.07 1.45-2.71 2.45-4.48 2.82-1.8.38-3.7-.02-5.26-.98-1.55-.95-2.65-2.52-3.1-4.26-.46-1.74-.2-3.64.71-5.18 1.13-1.9 3.09-3.23 5.3-3.5 1.05-.13 2.11-.08 3.14.15V13c-.39-.12-.8-.17-1.22-.17-1.12.03-2.22.45-3.03 1.25-.8.78-1.26 1.87-1.27 2.99 0 1.11.45 2.21 1.25 3.01.81.82 1.96 1.27 3.1 1.25 1.14-.02 2.26-.51 3.05-1.33.82-.84 1.28-1.98 1.3-3.14V.02z"/></svg>
+    <div class="conn-info">
+      <div class="conn-title">TikTok Events API</div>
+      <div class="conn-status">Connected &nbsp;<span style="color:#64748B">Events: 321,417</span></div>
+    </div>
+  </div>
+  <div style="width:1px;background:rgba(255,255,255,0.1);height:32px;margin:0 10px;"></div>
+  <div class="conn-item">
+    <svg class="conn-icon" style="width:32px;height:32px;color:#F9AB00" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M4 18h4V6H4v12zm6 0h4V10h-4v8zm6-12v12h4V6h-4z"/></svg>
+    <div class="conn-info">
+      <div class="conn-title">GA4 Measurement</div>
+      <div class="conn-status">Connected &nbsp;<span style="color:#64748B">Events: 298,771</span></div>
+    </div>
+  </div>
+  <div style="width:1px;background:rgba(255,255,255,0.1);height:32px;margin:0 10px;"></div>
+  <div class="conn-item">
+    <div class="conn-icon" style="width:32px;height:32px;background:#0077B5;border-radius:4px;display:flex;align-items:center;justify-content:center;color:white;font-weight:bold;font-size:18px;">in</div>
+    <div class="conn-info">
+      <div class="conn-title">LinkedIn API</div>
+      <div class="conn-status">Connected &nbsp;<span style="color:#64748B">Events: 54,982</span></div>
+    </div>
+  </div>
+</div>
+
+<div style="margin-top:40px">
+  <div class="card">
+    <div class="card-header"><h2 class="card-title"><span class="icon">➕</span> নতুন ক্লায়েন্ট যোগ করুন</h2></div>
+    <div style="padding: 20px;">
+      <form method="post" action="/api/v1/admin/add-client">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="layout-grid" style="grid-template-columns: 1fr 1fr; gap: 20px; align-items: start;">
+          <div>
+            <div class="form-group">
+              <label>ক্লায়েন্টের নাম</label>
+              <input type="text" name="name" placeholder="যেমন: ABC Ecommerce" required>
+            </div>
+            <div class="form-group">
+              <label>Facebook Pixel ID</label>
+              <input type="text" name="pixel_id" placeholder="1234567890" required>
+              <div class="hint">FB Events Manager → Settings → Pixel ID</div>
+            </div>
+            <div class="form-group">
+              <label>CAPI Access Token</label>
+              <input type="text" name="access_token" placeholder="EAAxxxx..." required>
+              <label style="display:flex;align-items:center;gap:8px;margin-top:10px;color:#fff"><input type="checkbox" name="enable_facebook" value="1" checked> Facebook CAPI delivery ON</label>
+              <div class="hint">Events Manager → Settings → Conversions API → Generate Access Token</div>
+            </div>
+            <div class="form-group">
+              <label>Website URL / Domain (সিকিউরিটির জন্য)</label>
+              <input type="text" name="domain" placeholder="https://www.buykori.app">
+              <div class="hint">🔒 https://, www, বা path দিলেও system clean domain save করবে। খালি রাখলে সব ডোমেইন থেকে কাজ করবে।</div>
+            </div>
+            <div class="form-group">
+              <label>Test Event Code (Optional)</label>
+              <input type="text" name="test_event_code" placeholder="TEST12345">
+              <div class="hint">শুধু টেস্টিং করার সময় দিন, লাইভে খালি রাখুন</div>
+            </div>
+          </div>
+
+          <div>
+            <div style="border-bottom:1px solid var(--border);margin-bottom:16px;padding-bottom:8px">
+              <div style="font-size:13px;color:#9575cd;font-weight:600">🎵 TikTok CAPI (Optional)</div>
+            </div>
+            <div class="form-group">
+              <label>TikTok Pixel ID</label>
+              <input type="text" name="tiktok_pixel_id" placeholder="C1234567890">
+            </div>
+            <div class="form-group">
+              <label>TikTok Access Token</label>
+              <input type="text" name="tiktok_access_token" placeholder="">
+            </div>
+            <div class="form-group">
+              <label>TikTok Test Event Code (Optional)</label>
+              <input type="text" name="tiktok_test_event_code" placeholder="TEST38483">
+              <label style="display:flex;align-items:center;gap:8px;margin-top:10px;color:#fff"><input type="checkbox" name="enable_tiktok" value="1" checked> TikTok CAPI delivery ON</label>
+              <div class="hint">TikTok Events Manager → Test Events থেকে কোড দিন। লাইভে খালি রাখুন।</div>
+            </div>
+
+            <div style="border-bottom:1px solid var(--border);margin-bottom:16px;margin-top:20px;padding-bottom:8px">
+              <div style="font-size:13px;color:#00a1f1;font-weight:600">📊 GA4 Server-Side (Optional)</div>
+            </div>
+            <div class="form-group">
+              <label>GA4 Measurement ID</label>
+              <input type="text" name="ga4_measurement_id" placeholder="G-XXXXXXXXXX">
+            </div>
+            <div class="form-group">
+              <label>GA4 API Secret</label>
+              <input type="text" name="ga4_api_secret" placeholder="">
+              <label style="display:flex;align-items:center;gap:8px;margin-top:10px;color:#fff"><input type="checkbox" name="enable_ga4" value="1" checked> GA4 server-side delivery ON</label>
+            </div>
+
+            <div style="margin-top:20px;">
+              <div class="form-group">
+                <label style="display:flex;align-items:center;gap:10px;cursor:pointer;color:#fff;font-weight:600">
+                  <input type="checkbox" name="deferred_purchase" value="1" style="width:18px;height:18px;accent-color:#7e57c2;cursor:pointer;">
+                  🔄 Deferred Purchase সচল করুন
+                </label>
+                <div class="hint">সচল করলে Purchase event সরাসরি Facebook-এ যাবে না — অর্ডার কনফার্ম হলে তবেই যাবে। COD ব্যবসার জন্য পারফেক্ট!</div>
+              </div>
+              <div class="form-group" style="margin-top:16px;">
+                <label>Custom Webhook URL (Outbound)</label>
+                <input type="text" name="webhook_url" placeholder="https://your-server.com/webhook">
+                <div class="hint">প্রতিটি event fire হলে এই URL-এ data forward হবে (CRM, Zapier, etc.)</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div style="margin-top: 20px; text-align: right; border-top: 1px solid var(--border); padding-top: 20px;">
+          <button type="submit" class="btn btn-primary">✅ ক্লায়েন্ট যোগ করুন</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

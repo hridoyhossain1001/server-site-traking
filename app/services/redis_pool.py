@@ -1,0 +1,45 @@
+"""Shared async Redis client helpers."""
+import logging
+import os
+
+logger = logging.getLogger(__name__)
+
+_redis_client = None
+
+
+def get_redis():
+    """Return a process-local Redis client, or None when Redis is not configured."""
+    global _redis_client
+    if _redis_client is not None:
+        return _redis_client
+
+    redis_url = os.getenv("REDIS_URL")
+    if not redis_url:
+        return None
+
+    try:
+        import redis.asyncio as aioredis
+
+        _redis_client = aioredis.from_url(
+            redis_url,
+            encoding="utf-8",
+            decode_responses=True,
+            socket_connect_timeout=2,
+            socket_timeout=2,
+            max_connections=int(os.getenv("REDIS_MAX_CONNECTIONS", "150")),
+        )
+        return _redis_client
+    except Exception as exc:
+        logger.warning(f"Redis client init failed: {exc}")
+        return None
+
+
+async def close_redis() -> None:
+    """Close the process-local Redis client during graceful shutdown."""
+    global _redis_client
+    if _redis_client is None:
+        return
+    try:
+        await _redis_client.aclose()
+    finally:
+        _redis_client = None

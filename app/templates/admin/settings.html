@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">System Settings</h1>
+    <p class="page-sub">Server configuration, environment status, and admin activity.</p>
+  </div>
+  <div class="header-actions">
+    <button class="btn btn-primary" onclick="alert('Settings saved')">Save Changes</button>
+  </div>
+</div>
+
+<div class="layout-grid" style="margin-bottom:24px">
+  <div class="card">
+    <div class="card-header"><h2 class="card-title">🖥️ System Information</h2></div>
+    <div style="padding:20px">
+      <table style="width:100%">
+        <tr><td style="color:var(--text-muted);padding:8px 0;font-size:13px;width:40%">Python Version</td><td style="padding:8px 0;font-weight:600">{{ python_ver }}</td></tr>
+        <tr><td style="color:var(--text-muted);padding:8px 0;font-size:13px">Admin Username</td><td style="padding:8px 0;font-weight:600">{{ admin_user }}</td></tr>
+        <tr><td style="color:var(--text-muted);padding:8px 0;font-size:13px">Environment</td><td style="padding:8px 0"><span class="env-badge">PRODUCTION</span></td></tr>
+        <tr><td style="color:var(--text-muted);padding:8px 0;font-size:13px">Default Rate Limit</td><td style="padding:8px 0;font-weight:600">5,000 req/min</td></tr>
+        <tr><td style="color:var(--text-muted);padding:8px 0;font-size:13px">Default Daily Quota</td><td style="padding:8px 0;font-weight:600">100,000 events</td></tr>
+        <tr><td style="color:var(--text-muted);padding:8px 0;font-size:13px">Default Monthly Limit</td><td style="padding:8px 0;font-weight:600">50,000 events</td></tr>
+      </table>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-header"><h2 class="card-title">🔐 Environment Variables</h2></div>
+    <div class="table-responsive">
+      <table>
+        <thead><tr><th>Variable</th><th>Status</th></tr></thead>
+        <tbody>
+          {% for var_name, configured in env_checks.items() %}
+          <tr>
+            <td style="font-weight:600">{{ var_name }}</td>
+            <td>
+              {% if configured %}
+                <span class="status-badge status-healthy">Configured</span>
+              {% else %}
+                <span class="status-badge status-degraded">Missing</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+{% if audit_logs %}
+<div class="card">
+  <div class="card-header"><h2 class="card-title">📋 Full Audit Log (Last 50)</h2></div>
+  <div class="table-responsive">
+    <table>
+      <thead><tr>
+        <th>Time</th><th>Actor</th><th>Action</th><th>Client</th><th>IP</th><th>Details</th>
+      </tr></thead>
+      <tbody>
+        {% for log in audit_logs %}
+        <tr>
+          <td class="code-text">{% if log.created_at %}<span class="local-datetime" data-utc="{{ log.created_at.isoformat() }}">{{ log.created_at.strftime('%Y-%m-%d %H:%M') }}</span>{% else %}—{% endif %}</td>
+          <td>{{ log.actor or 'system' }}</td>
+          <td><span style="color:#818cf8">{{ log.action or '—' }}</span></td>
+          <td class="code-text">{{ log.client_id or '—' }}</td>
+          <td class="code-text">{{ log.ip_address or '—' }}</td>
+          <td style="color:var(--text-muted);font-size:12px">{{ (log.details or '—')[:60] }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% else %}
+<div class="card">
+  <div class="card-header"><h2 class="card-title">📋 Audit Log</h2></div>
+  <div style="padding:30px;text-align:center;color:var(--text-muted)">No audit entries yet.</div>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,54 @@
+"""
+Token encryption helpers.
+
+ENCRYPTION_KEY must be a valid Fernet key. Generate one with:
+    python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+"""
+import logging
+import os
+
+from cryptography.fernet import Fernet, InvalidToken
+
+logger = logging.getLogger(__name__)
+
+ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
+ALLOW_LEGACY_PLAINTEXT_TOKENS = os.getenv(
+    "ALLOW_LEGACY_PLAINTEXT_TOKENS",
+    "",
+).lower() in ("true", "1", "yes")
+
+if not ENCRYPTION_KEY:
+    raise RuntimeError("ENCRYPTION_KEY environment variable is required.")
+
+try:
+    _fernet = Fernet(ENCRYPTION_KEY.encode())
+except ValueError as exc:
+    raise RuntimeError("ENCRYPTION_KEY must be a valid Fernet key.") from exc
+
+
+def encrypt_token(plaintext: str) -> str:
+    """Encrypt a token for storage or a signed session cookie."""
+    return _fernet.encrypt(plaintext.encode()).decode()
+
+
+def decrypt_token(encrypted: str, *, allow_legacy_plaintext: bool | None = None) -> str:
+    """Decrypt a token and fail closed unless legacy fallback is explicitly requested."""
+    try:
+        return _fernet.decrypt(encrypted.encode()).decode()
+    except InvalidToken:
+        app_env = (os.getenv("APP_ENV") or os.getenv("ENVIRONMENT") or os.getenv("ENV") or "").lower()
+        is_production = app_env in ("production", "prod") or bool(os.getenv("PRIMARY_DOMAIN"))
+        allow_fallback = bool(allow_legacy_plaintext) and ALLOW_LEGACY_PLAINTEXT_TOKENS
+        if is_production:
+            allow_fallback = False
+
+        if allow_fallback:
+            logger.warning(
+                "Token decryption failed; using legacy plaintext fallback. "
+                "Disable ALLOW_LEGACY_PLAINTEXT_TOKENS after migration."
+            )
+            return encrypted
+        raise
+    except Exception:
+        logger.warning("Token decryption failed because the encrypted value is malformed.")
+        raise
