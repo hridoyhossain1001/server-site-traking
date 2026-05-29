@@ -1023,6 +1023,9 @@
             if (e.target.closest('#place_order, .wc-block-components-checkout-place-order-button, [name="woocommerce_checkout_place_order"]')) {
                 sendInitiateCheckoutWhenReady('place_order_click', true, true);
             }
+            if (e.target.closest('.checkout-button, .wc-forward[href*="checkout"], a[href*="checkout"], [data-buykori-checkout], [data-buykori-checkout-intent], .buykorigw-checkout-intent, .wcf-next-button, .wcf-submit-coupon, .wcf-embed-checkout-form button[type="submit"]')) {
+                sendInitiateCheckoutWhenReady('checkout_button_click', hasCheckoutCartData(), true);
+            }
         }, true);
         document.addEventListener('submit', function(e) {
             if (e.target.matches('form.checkout, form.woocommerce-checkout, .woocommerce-checkout form')) {

@@ -246,22 +246,6 @@ function buykorigw_send_order_initiate_checkout_fallback( $order_or_id ) {
         $browser_event_id = $current_event_id;
     }
 
-    if (
-        ! empty( $browser_event_id )
-        || (
-        function_exists( 'buykorigw_recent_initiate_checkout_marker' )
-        && (
-            buykorigw_recent_initiate_checkout_marker( $browser_ic_sent )
-            || buykorigw_recent_initiate_checkout_marker( $current_ic_sent )
-        )
-        )
-    ) {
-        if ( ! empty( $settings['debug_mode'] ) ) {
-            buykorigw_add_order_note( $order_id, 'InitiateCheckout browser marker found; skipping order-backed fallback to prevent duplicate telemetry.' );
-        }
-        return;
-    }
-
     list( $content_ids, $contents, $num_items ) = buykorigw_order_contents_payload( $order );
     if ( empty( $content_ids ) || empty( $contents ) ) {
         if ( ! empty( $settings['debug_mode'] ) ) {
