@@ -6,7 +6,7 @@
 
 ## প্রয়োজনীয় জিনিস
 
-- DigitalOcean Droplet (Ubuntu 22.04 LTS, ন্যূনতম 2GB RAM)
+- DigitalOcean Droplet (Ubuntu 22.04/24.04 LTS, ন্যূনতম 2GB RAM)
 - একটি Domain (যেমন: `api.buykori.app`) — Droplet IP-তে A record point করা
 - Git repository access
 
@@ -40,7 +40,7 @@ ssh root@YOUR_DROPLET_IP
 git clone https://github.com/YOUR_USERNAME/buykori-adsync.git /var/www/buykori-adsync
 cd /var/www/buykori-adsync
 
-# Setup script চালান (Python, PostgreSQL, Redis, Nginx, Supervisor install করবে)
+# Setup script চালান (Python, PostgreSQL, Redis, Nginx, Supervisor install/configure করবে)
 chmod +x deploy/setup.sh
 sudo bash deploy/setup.sh
 ```
@@ -88,11 +88,14 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 ## ধাপ ৩ — Database Setup
 
 ```bash
+# Manual path only: setup.sh fresh server-এ DB user/database/tables তৈরি করে
+# এবং Alembic head stamp করে। Existing deploy/update হলে শুধু migration চালান।
+
 # PostgreSQL user ও database তৈরি
 sudo -u postgres psql -c "CREATE USER buykori WITH PASSWORD 'YOUR_DB_PASSWORD';"
 sudo -u postgres psql -c "CREATE DATABASE buykori_adsync OWNER buykori;"
 
-# Alembic migration চালান
+# Existing database/update path
 cd /var/www/buykori-adsync
 source venv/bin/activate
 alembic upgrade head
