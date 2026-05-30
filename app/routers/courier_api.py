@@ -305,7 +305,7 @@ async def get_courier_orders(
     offset: int = Query(0, ge=0),
 ):
     result = await db.execute(
-        select(CourierOrder, PendingEvent.products)
+        select(CourierOrder, PendingEvent.raw_order_data)
         .outerjoin(PendingEvent, CourierOrder.pending_event_id == PendingEvent.id)
         .where(CourierOrder.client_id == client.id)
         .order_by(desc(CourierOrder.created_at))
@@ -315,7 +315,11 @@ async def get_courier_orders(
     rows = result.all()
     
     response = []
-    for order, products in rows:
+    for order, raw_order_data in rows:
+        # Extract products from raw_order_data if available
+        products = None
+        if raw_order_data and isinstance(raw_order_data, dict):
+            products = raw_order_data.get("products") or raw_order_data.get("line_items")
         response.append(CourierOrderResponse(
             id=order.id,
             order_id=order.order_id,
