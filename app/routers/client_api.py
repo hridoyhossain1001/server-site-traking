@@ -1102,56 +1102,6 @@ async def get_deferred_purchases(
     else:
         oldest_age_hours = 0.0
 
-    # Masking helper functions to fix PII partial exposure on dashboard
-    def mask_pii_email(value: str | None) -> str:
-        if not value or value == "—":
-            return "—"
-        value = str(value).strip()
-        if "@" not in value:
-            return value
-        parts = value.split("@", 1)
-        username = parts[0]
-        domain = parts[1] if len(parts) > 1 else ""
-        if len(username) <= 2:
-            masked_username = username[0] + "*" if username else "*"
-        else:
-            masked_username = username[0] + "*" * (len(username) - 2) + username[-1]
-        return f"{masked_username}@{domain}" if domain else masked_username
-
-    def mask_pii_phone(value: str | None) -> str:
-        if not value or value == "—":
-            return "—"
-        value = str(value).strip()
-        if len(value) <= 6:
-            return "****"
-        return value[:4] + "*" * (len(value) - 7) + value[-3:]
-
-    def mask_pii_name(name: str | None) -> str:
-        if not name or name == "—":
-            return "—"
-        parts = name.strip().split()
-        if not parts:
-            return "—"
-        masked_parts = []
-        for part in parts:
-            if len(part) <= 2:
-                masked_parts.append(part[0] + "*")
-            else:
-                masked_parts.append(part[0] + "*" * (len(part) - 1))
-        return " ".join(masked_parts)
-
-    def mask_pii_address(address: str | None) -> str:
-        if not address or address == "—":
-            return "—"
-        address = address.strip()
-        if len(address) <= 10:
-            return address[:3] + "..."
-        parts = address.split(",")
-        if len(parts) >= 2:
-            visible = parts[-1].strip()
-            return "... " + visible
-        return address[:6] + "..."
-
     pending_list = []
     for pe in pending_events:
         ed = pe.event_data or {}
@@ -1161,23 +1111,46 @@ async def get_deferred_purchases(
         age_sec = (now_utc - created).total_seconds()
         age_h = round(age_sec / 3600, 1)
 
+        # Real (unmasked) PII — merchants need this to call and verify COD orders
         ud = ed.get("user_data", {}) or {}
-        customer_ph = ud.get("ph", ["—"])
-        customer_em = ud.get("em", ["—"])
+        raw_phone_list = ud.get("ph", [])
+        raw_email_list = ud.get("em", [])
         customer_str = "—"
-        if customer_ph and customer_ph[0] != "—":
-            customer_str = mask_pii_phone(customer_ph[0])
-        elif customer_em and customer_em[0] != "—":
-            customer_str = mask_pii_email(customer_em[0])
+        if raw_phone_list and raw_phone_list[0] and raw_phone_list[0] != "—":
+            customer_str = str(raw_phone_list[0])
+        elif raw_email_list and raw_email_list[0] and raw_email_list[0] != "—":
+            customer_str = str(raw_email_list[0])
+
+        # Parse product list from custom_data.contents
+        contents = custom_data.get("contents", []) or []
+        products = []
+        if isinstance(contents, list):
+            for item in contents:
+                if isinstance(item, dict):
+                    products.append({
+                        "name": str(item.get("title") or item.get("name") or item.get("id") or "Product"),
+                        "quantity": int(item.get("quantity") or item.get("qty") or 1),
+                        "price": float(item.get("item_price") or item.get("price") or 0),
+                    })
+        # Fallback: if no contents but num_items > 0, create a generic entry
+        if not products and custom_data.get("num_items"):
+            products.append({
+                "name": "Product (details not available)",
+                "quantity": int(custom_data.get("num_items", 1)),
+                "price": float(custom_data.get("value", 0)),
+            })
 
         pending_list.append({
             "id": pe.id,
             "orderId": pe.order_id,
             "amount": custom_data.get("value", 0),
             "customer": customer_str,
-            "recipientName": mask_pii_name(raw_order_data.get("recipient_name")),
-            "recipientPhone": mask_pii_phone(raw_order_data.get("recipient_phone")),
-            "recipientAddress": mask_pii_address(raw_order_data.get("recipient_address")),
+            # Real recipient info (unmasked) from raw courier payload
+            "recipientName": raw_order_data.get("recipient_name") or "—",
+            "recipientPhone": raw_order_data.get("recipient_phone") or customer_str,
+            "recipientAddress": raw_order_data.get("recipient_address") or "—",
+            # Product list
+            "products": products,
             "fraudScore": pe.fraud_score or 0,
             "fraudDetails": pe.fraud_details or {},
             "ageHours": age_h,
@@ -1277,3 +1250,138 @@ async def api_cancel_deferred_bulk(
         return {"success": True, "cancelled": res.cancelled, "failed": res.failed, "details": res.details}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+# ─── Multiple Store Management ────────────────────────────────────────────────
+
+class CreateStoreRequest(BaseModel):
+    business_name: str
+    domain: str | None = None
+
+class SwitchStoreRequest(BaseModel):
+    target_client_id: int
+
+
+@router.get("/stores")
+async def list_stores(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """List all stores/workspaces associated with the current user's email."""
+    require_allowed_origin(request)
+    user, current_client, _ = await get_client_user_from_cookie(request, db)
+
+    # Find all ClientUser rows for this email → gives us all their stores
+    all_user_rows_r = await db.execute(
+        select(ClientUser).where(ClientUser.email == user.email, ClientUser.is_active == True)
+    )
+    all_user_rows = all_user_rows_r.scalars().all()
+
+    stores = []
+    for cu in all_user_rows:
+        client_r = await db.execute(select(Client).where(Client.id == cu.client_id, Client.is_active == True))
+        c = client_r.scalar_one_or_none()
+        if c:
+            stores.append({
+                "client_id": c.id,
+                "name": c.name,
+                "domain": c.domain or "",
+                "is_current": c.id == current_client.id,
+            })
+
+    return {"stores": stores, "current_client_id": current_client.id}
+
+
+@router.post("/switch-store")
+async def switch_store(
+    payload: SwitchStoreRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+):
+    """Switch the active session to a different store the user owns."""
+    require_allowed_origin(request)
+    user, current_client, _ = await get_client_user_from_cookie(request, db)
+
+    # Verify the user actually owns the target store
+    target_user_r = await db.execute(
+        select(ClientUser).where(
+            ClientUser.email == user.email,
+            ClientUser.client_id == payload.target_client_id,
+            ClientUser.is_active == True,
+        )
+    )
+    target_user = target_user_r.scalar_one_or_none()
+    if not target_user:
+        raise HTTPException(status_code=403, detail="You don't have access to this store.")
+
+    target_client_r = await db.execute(
+        select(Client).where(Client.id == payload.target_client_id, Client.is_active == True)
+    )
+    target_client = target_client_r.scalar_one_or_none()
+    if not target_client:
+        raise HTTPException(status_code=404, detail="Store not found.")
+
+    # Create a new session for the target user/client
+    from app.routers.client_auth import _create_session, _user_payload
+    await _create_session(db, target_user, response, request)
+    await db.commit()
+
+    return {"success": True, "user": _user_payload(target_user, target_client)}
+
+
+@router.post("/create-store")
+async def create_store(
+    payload: CreateStoreRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a new store workspace for the current user and switch to it."""
+    require_allowed_origin(request)
+    user, current_client, _ = await get_client_user_from_cookie(request, db)
+
+    from app.routers.client_auth import _clean_domain, _user_payload, _create_session
+    business_name = _clean_name(payload.business_name, "Business name")
+    domain = _clean_domain(payload.domain) if payload.domain else None
+
+    # Create a new Client (store)
+    new_client = Client(
+        name=business_name,
+        pixel_id="0",
+        access_token=encrypt_token("pending_setup"),
+        domain=domain,
+        api_key=secrets.token_urlsafe(24),
+        public_key=secrets.token_urlsafe(18),
+        portal_key=secrets.token_urlsafe(18),
+        enable_facebook=False,
+        enable_tiktok=False,
+        enable_ga4=False,
+        monthly_limit=1000,
+        daily_quota=1000,
+        rate_limit=120,
+    )
+    db.add(new_client)
+    await db.flush()
+
+    # Create a ClientUser for the same email in the new store
+    new_user = ClientUser(
+        client_id=new_client.id,
+        email=user.email,
+        password_hash=user.password_hash,   # same password — no re-registration needed
+        full_name=user.full_name,
+        role="owner",
+        is_active=True,
+        email_verified=user.email_verified,
+    )
+    db.add(new_user)
+    await db.flush()
+
+    # Switch the session to the new store
+    await _create_session(db, new_user, response, request)
+    await db.commit()
+    await db.refresh(new_client)
+    await db.refresh(new_user)
+
+    return {"success": True, "user": _user_payload(new_user, new_client)}
+
