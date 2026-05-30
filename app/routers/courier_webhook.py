@@ -6,6 +6,7 @@ import hashlib
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 from fastapi import APIRouter, Depends, Request, HTTPException
+from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -226,6 +227,17 @@ async def steadfast_webhook(request: Request, db: AsyncSession = Depends(get_db)
 async def pathao_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     """
     Pathao Courier Webhook Endpoint.
+
+    Pathao Webhook ভেরিফিকেশন প্রক্রিয়া:
+    1. Pathao Merchant Panel-এ Callback URL সেভ করলে Pathao একটি ভেরিফিকেশন POST পাঠায়:
+       payload: {"event": "webhook_integration"}
+       header: X-PATHAO-Signature: <configured_webhook_secret_verbatim>
+    2. আমাদের সার্ভারকে 202 status এবং response header দিতে হয়:
+       X-Pathao-Merchant-Webhook-Integration-Secret: <configured_webhook_secret_verbatim>
+    3. এরপর থেকে Pathao HMAC-SHA256 signature দিয়ে real status update পাঠায়।
+
+    Note: Pathao X-PATHAO-Signature header-এ configured secret verbatim পাঠায়
+    (hashed HMAC নয়)। তাই আমরা প্রথমে verbatim check করি, তারপর HMAC fallback।
     """
     _verify_courier_webhook_secret(request)
     try:
@@ -234,6 +246,23 @@ async def pathao_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON payload.")
 
+    # ─── ধাপ ১: Pathao Webhook Integration ভেরিফিকেশন হ্যান্ডশেক ───────────────
+    # Pathao প্রথমবার Callback URL সেভ করলে এই event পাঠায়।
+    # সঠিকভাবে respond না করলে webhook save হয় না।
+    event_type = payload.get("event") or payload.get("type") or ""
+    received_sig = request.headers.get("x-pathao-signature") or request.headers.get("x-signature") or ""
+
+    if event_type == "webhook_integration":
+        logger.info("Pathao webhook_integration handshake received — sending verification response")
+        # Pathao expects us to echo back the secret in the response header
+        response = JSONResponse(
+            status_code=202,
+            content={"status": "verified", "message": "Webhook integration verified"}
+        )
+        response.headers["X-Pathao-Merchant-Webhook-Integration-Secret"] = received_sig
+        return response
+
+    # ─── ধাপ ২: Normal status update ────────────────────────────────────────────
     consignment_id = payload.get("consignment_id")
     status = payload.get("status")
     merchant_order_id = payload.get("merchant_order_id")
@@ -254,7 +283,7 @@ async def pathao_webhook(request: Request, db: AsyncSession = Depends(get_db)):
         logger.warning(f"Pathao courier order not found for consignment: {consignment_id}")
         return {"status": "ignored", "reason": "order not found"}
 
-    # Get associated client and decrypt secret key to verify HMAC-SHA256 signature
+    # Get associated client and decrypt secret key
     client_result = await db.execute(select(Client).where(Client.id == courier_order.client_id))
     client = client_result.scalar_one_or_none()
     if not client or not client.pathao_secret_key:
@@ -262,25 +291,37 @@ async def pathao_webhook(request: Request, db: AsyncSession = Depends(get_db)):
 
     try:
         raw_secret = decrypt_token(client.pathao_secret_key, allow_legacy_plaintext=True)
-        # pathao_secret_key format: "client_secret|password" — শুধু client_secret দিয়ে HMAC হবে
+        # pathao_secret_key format: "client_secret|password" — শুধু client_secret দিয়ে verify হবে
         client_secret = raw_secret.split("|", 1)[0] if "|" in raw_secret else raw_secret
     except Exception:
         raise HTTPException(status_code=401, detail="Failed to decrypt client pathao secret key")
 
-    received_sig = request.headers.get("x-pathao-signature") or request.headers.get("x-signature")
     if not received_sig:
         raise HTTPException(status_code=401, detail="Missing signature header")
 
-    computed_sig = hmac.new(
+    # ─── Signature ভেরিফিকেশন ──────────────────────────────────────────────────
+    # Pathao-র actual mechanism: X-PATHAO-Signature header-এ configured secret verbatim থাকে।
+    # তাই আমরা প্রথমে verbatim compare করি।
+    verbatim_match = hmac.compare_digest(
         client_secret.encode("utf-8"),
-        msg=raw_body,
-        digestmod=hashlib.sha256
-    ).hexdigest()
+        received_sig.encode("utf-8")
+    )
 
-    if not hmac.compare_digest(computed_sig, received_sig):
-        raise HTTPException(status_code=401, detail="Invalid signature")
+    if not verbatim_match:
+        # Fallback: কিছু implementation HMAC-SHA256 ব্যবহার করে — সেটিও চেক করি
+        computed_hmac = hmac.new(
+            client_secret.encode("utf-8"),
+            msg=raw_body,
+            digestmod=hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(computed_hmac, received_sig):
+            logger.warning(f"Pathao webhook signature mismatch for consignment {consignment_id}")
+            raise HTTPException(status_code=401, detail="Invalid signature")
 
     await process_courier_status_change(db, courier_order, status)
     await db.commit()
 
-    return {"status": "success"}
+    # Pathao expects the integration secret in response header for every webhook call too
+    response = JSONResponse(status_code=200, content={"status": "success"})
+    response.headers["X-Pathao-Merchant-Webhook-Integration-Secret"] = client_secret
+    return response

@@ -4,9 +4,9 @@ Please follow these guidelines automatically whenever making changes to this cod
 
 ---
 
-## 1. Automated GitHub Pushes (For Vercel CDN Deploys)
-* Whenever you modify files in `client-portal/`, `admin-portal/`, `marketing-site/`, or the backend `app/`, you **MUST** commit and push the changes to GitHub.
-* Pushing to GitHub (branch `main` for `client-portal/`, branch `master` for root) automatically triggers Vite/Vercel CDN builds on Vercel (`client.buykori.app`, `admin.buykori.app`, `buykori.app`).
+## 1. Vercel CDN Deploys (Frontend Portals Only)
+* Whenever you modify files in `client-portal/`, `admin-portal/`, or `marketing-site/`, you **MUST** commit and push the changes to their respective GitHub repositories to trigger Vercel CDN builds (`client.buykori.app`, `admin.buykori.app`, `buykori.app`).
+* Pushing the root repository (`full-project-` / branch `main` or `master`) is **NOT** connected to Vercel and does not trigger any deployment. It is only used as a manual code backup repository.
 
 ---
 
@@ -18,9 +18,10 @@ Please follow these guidelines automatically whenever making changes to this cod
 
 ---
 
-## 3. Server Deployments (DigitalOcean Droplet)
-* To deploy python backend code and static fallback assets to the DigitalOcean Droplet, run:
+## 3. Server Deployments (DigitalOcean Droplet - Backend & Migrations)
+* To deploy python backend code (`app/`), database migrations (`migrations/`), and static assets to the live DigitalOcean Droplet, you **MUST** run:
   ```powershell
   python scratch/deploy_updates.py
   ```
-  from the workspace root. This syncs changes, applies database migrations, and restarts the web/worker services.
+  from the workspace root. This syncs changes, applies PostgreSQL migrations, and restarts the web/worker services. 
+* Do **NOT** assume pushing to the root `full-project-` repository deploys backend changes. Backend deployment is strictly done via this command.

@@ -151,7 +151,28 @@
     eventOnce.memory = {};
 
     function currentPathKey() {
-        return (window.location.pathname || '/').replace(/[^a-zA-Z0-9_-]+/g, '_');
+        return canonicalPagePath().replace(/[^a-zA-Z0-9_-]+/g, '_');
+    }
+
+    function canonicalPagePath() {
+        var path = (window.location.pathname || '/').toLowerCase();
+        var search = (window.location.search || '').toLowerCase();
+        if (path.indexOf('/product/') === 0) {
+            return path.replace(/\/+$/, '/') || '/';
+        }
+        if (path.indexOf('/step/checkout') === 0 || path.indexOf('/checkout') === 0 || path.indexOf('/cart') === 0) {
+            return path.replace(/\/+$/, '/') || '/';
+        }
+        if (path.indexOf('order-received') !== -1 || path.indexOf('thank-you') !== -1 || search.indexOf('wcf-order=') !== -1 || search.indexOf('wcf-key=') !== -1) {
+            return 'thankyou';
+        }
+        return path.replace(/\/+$/, '/') || '/';
+    }
+
+    function shouldSendPageView() {
+        if (isThankYouFlowPage()) return false;
+        if (cfg.page_type === 'checkout') return false;
+        return true;
     }
 
     function getText(selector, root) {
@@ -240,8 +261,11 @@
         }
         var fbclid = getQueryParam('fbclid');
         if (fbclid) {
-            var fbc = 'fb.1.' + Date.now() + '.' + fbclid;
-            setCookieLocal('_fbc', fbc, 90);
+            var currentFbc = getCookie('_fbc');
+            if (!currentFbc || currentFbc.split('.').pop() !== fbclid) {
+                var fbc = 'fb.1.' + Date.now() + '.' + fbclid;
+                setCookieLocal('_fbc', fbc, 90);
+            }
         }
         if (!getCookie('_ttp')) {
             var ttp = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
@@ -397,6 +421,7 @@
             if (eventData.content_type !== undefined) browserParams.content_type = eventData.content_type;
             if (eventData.content_ids !== undefined) browserParams.content_ids = eventData.content_ids;
             if (eventData.contents !== undefined) browserParams.contents = eventData.contents;
+            if (eventData.num_items !== undefined) browserParams.num_items = eventData.num_items;
 
             // 1. Meta Pixel
             if (window.fbq && cfg.fb_pixel_id) {
@@ -470,13 +495,16 @@
         fd.append('event_name', eventName);
         fd.append('event_id', eventId || '');
         fd.append('event_data', JSON.stringify(eventData));
-        fd.append('page_url', window.location.href);
+        fd.append('page_url', eventData.page_location || window.location.href);
         fd.append('page_title', document.title);
         fd.append('fbp', getCookie('_fbp') || '');
         fd.append('fbc', getCookie('_fbc') || '');
         fd.append('ttp', getCookie('_ttp') || '');
         fd.append('ttclid', getTikTokClickId());
+        fd.append('fbclid', getQueryParam('fbclid') || '');
         fd.append('external_id', getExternalId());
+        fd.append('_ga', getCookie('_ga') || '');
+        fd.append('ga_session_id', getGA4SessionId());
         appendCustomerData(fd);
         return fd;
     }
@@ -519,12 +547,33 @@
         }
 
         if (out.contents && Array.isArray(out.contents)) {
-            out.contents = out.contents.filter(function(item) {
+            out.contents = out.contents.map(function(item) {
                 if (!item) return false;
                 var id = item.content_id || item.id;
-                return id && isValidContentId(id);
-            });
+                if (!id || !isValidContentId(id)) return false;
+                item.id = item.id || String(id);
+                item.content_id = item.content_id || String(id);
+                item.content_type = item.content_type || 'product';
+                item.quantity = Math.max(1, parseInt(item.quantity || 1, 10));
+                if (item.item_price === undefined && item.price !== undefined) {
+                    item.item_price = parseFloat(item.price) || 0;
+                }
+                return item;
+            }).filter(Boolean);
             if (!out.contents.length) delete out.contents;
+        }
+
+        if (!out.contents && out.content_ids && out.content_ids.length) {
+            var fallbackPrice = out.content_ids.length === 1 ? (parseFloat(out.value || 0) || 0) : 0;
+            out.contents = out.content_ids.map(function(id) {
+                return {
+                    id: String(id),
+                    content_id: String(id),
+                    content_type: 'product',
+                    quantity: 1,
+                    item_price: fallbackPrice
+                };
+            });
         }
 
         var marketing = getMarketingParams();
@@ -651,7 +700,7 @@
     }
 
     // ─── 1. PageView ───────────────────────────────────────────────────
-    if (cfg.events && cfg.events.pageview && eventOnce('PageView:' + currentPathKey(), 30)) {
+    if (cfg.events && cfg.events.pageview && shouldSendPageView() && eventOnce('PageView:' + currentPathKey(), 600)) {
         sendEvent('PageView', {});
     }
 

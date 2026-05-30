@@ -3,7 +3,7 @@
  * Plugin Name:       Buykori AdSync — Server-Side Tracking
  * Plugin URI:        https://buykori.app/
  * Description:       Server-Side Facebook CAPI, TikTok, and GA4 tracking for WooCommerce with one-page landing support, SHA-256 PII hashing, and deferred purchase control.
- * Version:           1.2.11
+ * Version:           1.2.14
  * Requires at least: 5.8
  * Requires PHP:      7.4
  * Author:            Buykori AdSync
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // ─── Plugin Constants ──────────────────────────────────────────────────────────
-define('BUYKORIGW_VERSION', '1.2.11');
+define('BUYKORIGW_VERSION', '1.2.14');
 
 define('BUYKORIGW_PLUGIN_FILE', __FILE__);
 define('BUYKORIGW_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -652,6 +652,104 @@ function buykorigw_get_cart_event_data()
 }
 
 // ─── REST API Endpoint: /wp-json/buykori/v1/track ───────────────────────────────
+function buykorigw_normalize_event_custom_data($custom_data, $event_name, $settings = null)
+{
+    if (!is_array($custom_data)) {
+        $custom_data = array();
+    }
+
+    if (function_exists('buykorigw_add_marketing_params')) {
+        $custom_data = buykorigw_add_marketing_params($custom_data);
+    }
+
+    if (in_array($event_name, array('AddToCart', 'InitiateCheckout', 'ViewCart', 'AddPaymentInfo'), true)) {
+        $cart_data = buykorigw_get_cart_event_data();
+        if (!empty($cart_data)) {
+            foreach ($cart_data as $key => $value) {
+                $is_empty_array = is_array($custom_data[$key] ?? null) && empty($custom_data[$key]);
+                if (!isset($custom_data[$key]) || $custom_data[$key] === '' || $custom_data[$key] === 0 || $is_empty_array) {
+                    $custom_data[$key] = $value;
+                }
+            }
+        }
+    }
+
+    if (empty($custom_data['content_id']) && !empty($custom_data['content_ids']) && is_array($custom_data['content_ids'])) {
+        $first_content_id = reset($custom_data['content_ids']);
+        if (!empty($first_content_id)) {
+            $custom_data['content_id'] = (string) $first_content_id;
+        }
+    }
+    if (empty($custom_data['content_ids']) && !empty($custom_data['content_id'])) {
+        $custom_data['content_ids'] = is_array($custom_data['content_id'])
+            ? array_values(array_filter(array_map('strval', $custom_data['content_id'])))
+            : array((string) $custom_data['content_id']);
+    }
+
+    if (empty($custom_data['contents']) && !empty($custom_data['content_ids']) && is_array($custom_data['content_ids'])) {
+        $contents = array();
+        $item_price = isset($custom_data['value']) && count($custom_data['content_ids']) === 1 ? (float) $custom_data['value'] : 0;
+        foreach ($custom_data['content_ids'] as $content_id) {
+            $content_id = trim((string) $content_id);
+            if ($content_id === '' || preg_match('/^[A-Z]{3}$/i', $content_id)) {
+                continue;
+            }
+            $contents[] = array(
+                'id'           => $content_id,
+                'content_id'   => $content_id,
+                'content_type' => 'product',
+                'quantity'     => 1,
+                'item_price'   => $item_price,
+            );
+        }
+        if (!empty($contents)) {
+            $custom_data['contents'] = $contents;
+        }
+    }
+
+    if ($settings === null) {
+        $settings = buykorigw_get_settings();
+    }
+    $content_format = isset($settings['content_id_format']) ? $settings['content_id_format'] : 'id';
+    if (function_exists('buykorigw_normalize_content_identifiers')) {
+        buykorigw_normalize_content_identifiers($custom_data, $content_format);
+    }
+
+    if (!empty($custom_data['content_ids']) && is_array($custom_data['content_ids'])) {
+        $custom_data['content_ids'] = array_values(array_filter($custom_data['content_ids'], function ($id) {
+            $id = trim((string) $id);
+            return $id !== '' && !preg_match('/^[A-Z]{3}$/i', $id);
+        }));
+        if (empty($custom_data['content_ids'])) {
+            unset($custom_data['content_ids']);
+        }
+    }
+    if (!empty($custom_data['contents']) && is_array($custom_data['contents'])) {
+        $custom_data['contents'] = array_values(array_filter(array_map(function ($item) {
+            if (!is_array($item)) {
+                return null;
+            }
+            $id = trim((string) ($item['content_id'] ?? ($item['id'] ?? '')));
+            if ($id === '' || preg_match('/^[A-Z]{3}$/i', $id)) {
+                return null;
+            }
+            $item['id'] = isset($item['id']) ? trim((string) $item['id']) : $id;
+            $item['content_id'] = isset($item['content_id']) ? trim((string) $item['content_id']) : $id;
+            $item['content_type'] = $item['content_type'] ?? 'product';
+            $item['quantity'] = max(1, (int) ($item['quantity'] ?? 1));
+            if (!isset($item['item_price']) && isset($item['price'])) {
+                $item['item_price'] = (float) $item['price'];
+            }
+            return $item;
+        }, $custom_data['contents'])));
+        if (empty($custom_data['contents'])) {
+            unset($custom_data['contents']);
+        }
+    }
+
+    return $custom_data;
+}
+
 add_action('rest_api_init', function () {
     register_rest_route('buykori/v1', '/track', array(
         'methods'             => 'POST',
@@ -770,6 +868,7 @@ function buykorigw_rest_track_event(WP_REST_Request $request)
         $fbp = 'fb.1.' . (string) (time() * 1000) . '.' . wp_rand(1000000000, 9999999999);
     }
     setcookie('_fbp', $fbp, $cookie_opts);
+    $_COOKIE['_fbp'] = $fbp;
 
     // _fbc: auto-create from fbclid if present
     if (empty($fbc)) {
@@ -780,6 +879,7 @@ function buykorigw_rest_track_event(WP_REST_Request $request)
     }
     if (!empty($fbc)) {
         setcookie('_fbc', $fbc, $cookie_opts);
+        $_COOKIE['_fbc'] = $fbc;
     }
 
     // _ttp: auto-create if missing
@@ -790,10 +890,12 @@ function buykorigw_rest_track_event(WP_REST_Request $request)
         $ttp = wp_generate_uuid4();
     }
     setcookie('_ttp', $ttp, $cookie_opts);
+    $_COOKIE['_ttp'] = $ttp;
 
     // _ttclid: persist if provided
     if (!empty($ttclid)) {
         setcookie('_ttclid', $ttclid, $cookie_opts);
+        $_COOKIE['_ttclid'] = $ttclid;
     }
 
     // Stable first-party visitor ID for Meta/TikTok external_id matching
@@ -804,6 +906,7 @@ function buykorigw_rest_track_event(WP_REST_Request $request)
         $external_id = 'bk.' . time() . '.' . wp_rand(1000000000, 9999999999);
     }
     setcookie('_buykorigw_vid', $external_id, $cookie_opts);
+    $_COOKIE['_buykorigw_vid'] = $external_id;
 
     // ─── Parse Custom Data ───────────────────────────────────────────────
     $settings    = buykorigw_get_settings();
@@ -820,60 +923,7 @@ function buykorigw_rest_track_event(WP_REST_Request $request)
         $custom_data['session_id'] = $ga_session;
     }
 
-    if (function_exists('buykorigw_add_marketing_params')) {
-        $custom_data = buykorigw_add_marketing_params($custom_data);
-    }
-
-    if (in_array($event_name, array('AddToCart', 'InitiateCheckout', 'ViewCart', 'AddPaymentInfo'), true)) {
-        $cart_data = buykorigw_get_cart_event_data();
-        if (!empty($cart_data)) {
-            foreach ($cart_data as $key => $value) {
-                $is_empty_array = is_array($custom_data[$key] ?? null) && empty($custom_data[$key]);
-                if (!isset($custom_data[$key]) || $custom_data[$key] === '' || $custom_data[$key] === 0 || $is_empty_array) {
-                    $custom_data[$key] = $value;
-                }
-            }
-        }
-    }
-
-    if (empty($custom_data['content_id']) && !empty($custom_data['content_ids']) && is_array($custom_data['content_ids'])) {
-        $first_content_id = reset($custom_data['content_ids']);
-        if (!empty($first_content_id)) {
-            $custom_data['content_id'] = (string) $first_content_id;
-        }
-    }
-    if (empty($custom_data['content_ids']) && !empty($custom_data['content_id'])) {
-        $custom_data['content_ids'] = is_array($custom_data['content_id'])
-            ? array_values(array_filter(array_map('strval', $custom_data['content_id'])))
-            : array((string) $custom_data['content_id']);
-    }
-
-    // Translate IDs to SKUs dynamically if configured
-    $content_format = isset($settings['content_id_format']) ? $settings['content_id_format'] : 'id';
-    if (function_exists('buykorigw_normalize_content_identifiers')) {
-        buykorigw_normalize_content_identifiers($custom_data, $content_format);
-    }
-
-    // Sanitize: remove invalid content_ids (e.g. currency codes like "BDT", "USD")
-    if (!empty($custom_data['content_ids']) && is_array($custom_data['content_ids'])) {
-        $custom_data['content_ids'] = array_values(array_filter($custom_data['content_ids'], function ($id) {
-            $id = trim((string) $id);
-            return $id !== '' && !preg_match('/^[A-Z]{3}$/i', $id);
-        }));
-        if (empty($custom_data['content_ids'])) {
-            unset($custom_data['content_ids']);
-        }
-    }
-    if (!empty($custom_data['contents']) && is_array($custom_data['contents'])) {
-        $custom_data['contents'] = array_values(array_filter($custom_data['contents'], function ($item) {
-            $id = $item['content_id'] ?? ($item['id'] ?? '');
-            $id = trim((string) $id);
-            return $id !== '' && !preg_match('/^[A-Z]{3}$/i', $id);
-        }));
-        if (empty($custom_data['contents'])) {
-            unset($custom_data['contents']);
-        }
-    }
+    $custom_data = buykorigw_normalize_event_custom_data($custom_data, $event_name, $settings);
 
     // ─── Build User Data ─────────────────────────────────────────────────
     $user_data = array(

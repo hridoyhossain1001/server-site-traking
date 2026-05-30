@@ -21,7 +21,7 @@ router = APIRouter(tags=["Plugin"])
 
 # Plugin version এই ফাইলে hardcoded — PLUGIN_VERSION env var দিয়ে override করা যায়।
 # Update করার সময় এখানে version change করুন এবং WP plugin-এও update করুন।
-PLUGIN_VERSION = "1.2.10"
+PLUGIN_VERSION = "1.2.14"
 PLUGIN_SOURCE_DIR = Path(__file__).resolve().parents[2] / "wordpress-plugin" / "buykori-adsync"
 PLUGIN_ZIP_PATH = Path(
     os.getenv(
@@ -137,6 +137,23 @@ def _plugin_update_response(download_url: str, package_sha256: str, signature: s
         "last_updated": "2026-05-29",
         "description": "Official Buykori AdSync WordPress plugin for server-side Facebook CAPI, TikTok, and GA4 tracking with one-page landing support and deferred purchase control.",
         "changelog": (
+            "<h4>v1.2.14</h4><ul>"
+            "<li>Reduced noisy PageView tracking on checkout and thank-you funnel pages</li>"
+            "<li>Tightened PageView deduplication with normalized page paths</li>"
+            "<li>Kept fallback event_source_url aligned with the captured page_location</li>"
+            "</ul>"
+            "<h4>v1.2.13</h4><ul>"
+            "<li>Ensured checkout-created WooCommerce orders send Purchase telemetry even when the WordPress-side COD toggle is not synced yet</li>"
+            "<li>Lets the gateway-side COD Protection setting hold new orders reliably in Order Verification</li>"
+            "</ul>"
+            "<h4>v1.2.12</h4><ul>"
+            "<li>Improved Meta event match quality with stronger fbp/fbc, GA, and visitor ID fallback handling</li>"
+            "<li>Normalized event contents payloads across REST and AJAX fallback tracking paths</li>"
+            "<li>Added richer browser and server event body fields for AddToCart, InitiateCheckout, and cart-style events</li>"
+            "</ul>"
+            "<h4>v1.2.11</h4><ul>"
+            "<li>Improved frontend event-quality payload normalization and matching data capture</li>"
+            "</ul>"
             "<h4>v1.2.10</h4><ul>"
             "<li>Prevented CartFlows thank-you pages from firing a second empty InitiateCheckout event</li>"
             "</ul>"

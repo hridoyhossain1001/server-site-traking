@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Query, status
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -271,22 +272,26 @@ async def receive_events(
     queued_count = 0
     reserved_ids = set()
     try:
-        unique_events, reserved_ids = await reserve_unique_events(db, client, payload.data)
-        if not unique_events:
+        deferred_events = [
+            event for event in payload.data
+            if should_hold and event.event_name == "Purchase"
+        ]
+        queue_candidates = [
+            event for event in payload.data
+            if not (should_hold and event.event_name == "Purchase")
+        ]
+
+        # Held Purchase events are idempotent by pending_events(client_id, order_id).
+        # Reserving their event_id globally before the pending insert can strand COD
+        # orders if a retry already wrote a dedup row but failed before queueing.
+        queue_events, reserved_ids = await reserve_unique_events(db, client, queue_candidates)
+        if not deferred_events and not queue_events:
             await db.commit()
             return EventsResponse(
                 status="accepted",
                 events_received=0,
                 message="All events were already received earlier (deduplicated).",
             )
-
-        deferred_events = []
-        queue_events = []
-        for event in unique_events:
-            if should_hold and event.event_name == "Purchase":
-                deferred_events.append(event)
-            else:
-                queue_events.append(event)
 
         reserved_keys = {}
 
@@ -337,8 +342,52 @@ async def receive_events(
                     await db.flush()  # unique constraint check
                 deferred_count += 1
                 logger.info(f"[{client.name}] Purchase hold: {order_id}")
-            except Exception:
-                logger.warning(f"[{client.name}] Duplicate pending order: {order_id}")
+            except Exception as exc:
+                existing_result = await db.execute(
+                    select(PendingEvent)
+                    .where(
+                        and_(
+                            PendingEvent.client_id == client.id,
+                            PendingEvent.order_id == order_id,
+                        )
+                    )
+                    .order_by(PendingEvent.id.desc())
+                    .limit(1)
+                )
+                existing = existing_result.scalar_one_or_none()
+
+                if existing and existing.status != "pending":
+                    old_status = existing.status
+                    existing.event_data = event_dict
+                    existing.raw_order_data = raw_order_data
+                    existing.status = "pending"
+                    existing.portal_state = None
+                    existing.is_confirmed = False
+                    existing.is_deleted = False
+                    existing.fraud_score = fraud_score_val
+                    existing.fraud_details = fraud_details_val
+                    existing.confirmed_at = None
+                    existing.created_at = datetime.now(timezone.utc)
+                    deferred_count += 1
+                    logger.info(
+                        f"[{client.name}] Revived pending order: {order_id} "
+                        f"(was {old_status})"
+                    )
+                elif existing:
+                    existing.event_data = event_dict
+                    existing.raw_order_data = raw_order_data
+                    existing.fraud_score = fraud_score_val
+                    existing.fraud_details = fraud_details_val
+                    existing.created_at = datetime.now(timezone.utc)
+                    deferred_count += 1
+                    logger.info(
+                        f"[{client.name}] Refreshed duplicate pending order: {order_id}"
+                    )
+                else:
+                    logger.exception(
+                        f"[{client.name}] Pending order insert failed ({order_id}): {exc}"
+                    )
+                    raise
 
         if queue_events:
             events_as_dicts = [
