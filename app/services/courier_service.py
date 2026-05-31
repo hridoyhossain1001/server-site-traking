@@ -521,6 +521,7 @@ class CourierService:
         SteadFast Courier-এ অর্ডার প্লেস করা।
         SteadFast-এ city/zone/area নেই — address free-text।
         """
+        recipient_phone = cls.normalize_bd_phone(recipient_phone)
         url = f"{STEADFAST_BASE_URL}/api/v1/create_order"
         headers = {
             "Api-Key": api_key,
@@ -544,10 +545,10 @@ class CourierService:
                 data = response.json()
                 status = data.get("status")
                 if status == 200:
-                    order_data = data.get("order", {})
+                    order_data = data.get("consignment", {})
                     return {
                         "success": True,
-                        "courier_order_id": str(order_data.get("id")),
+                        "courier_order_id": str(order_data.get("consignment_id")),
                         "tracking_id": str(order_data.get("tracking_code")),
                         "raw_response": data,
                     }
@@ -584,7 +585,7 @@ class CourierService:
             response = await http.get(url, headers=headers)
             if response.status_code == 200:
                 data = response.json()
-                return data.get("status")
+                return data.get("delivery_status")
             return None
         except Exception as e:
             logger.error(f"Failed to check SteadFast status: {e}")
