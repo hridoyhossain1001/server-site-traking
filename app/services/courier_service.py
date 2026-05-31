@@ -925,7 +925,7 @@ class CourierService:
                 return "delivered"
             elif raw_status in ("returned", "agent-returning", "partial-return"):
                 return "returned"
-            elif raw_status == "cancelled":
+            elif raw_status in ("cancelled", "rejected"):
                 return "cancelled"
             elif raw_status in ("ready-for-delivery", "delivery-in-progress"):
                 return "in_transit"

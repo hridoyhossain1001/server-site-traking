@@ -126,3 +126,4 @@ def test_map_redx_statuses():
     assert CourierService.map_status("redx", "delivery-in-progress") == "in_transit"
     assert CourierService.map_status("redx", "delivered") == "delivered"
     assert CourierService.map_status("redx", "agent-returning") == "returned"
+    assert CourierService.map_status("redx", "rejected") == "cancelled"
