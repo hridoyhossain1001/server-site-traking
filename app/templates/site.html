@@ -993,28 +993,22 @@
         width:min(100% - 32px,420px);
         margin:2px auto 24px;
         padding:10px;
-        gap:0;
+        display:grid;
+        grid-template-columns:repeat(2,minmax(0,1fr));
+        gap:8px;
         border-radius:20px;
       }
       .bk-workflow-strip i { display:none; }
       .bk-workflow-strip div {
-        position:relative;
-        width:100%;
+        width:auto;
         gap:12px;
-        min-height:48px;
-        padding:7px 10px;
+        min-height:58px;
+        padding:9px;
         border-radius:13px;
+        border:1px solid rgba(var(--primary-rgb),0.12);
+        background:rgba(var(--primary-rgb),0.045);
       }
-      .bk-workflow-strip div:not(:last-of-type)::after {
-        content:"";
-        position:absolute;
-        left:22px;
-        top:39px;
-        width:2px;
-        height:18px;
-        border-radius:2px;
-        background:rgba(var(--primary-rgb),0.2);
-      }
+      .bk-workflow-strip div:last-of-type { grid-column:1 / -1; min-height:48px; }
       .bk-workflow-strip strong { width:26px; height:26px; }
       .bk-workflow-strip span { font-size:12px; line-height:1.35; }
       .bk-audience-grid { grid-template-columns:1fr; }
