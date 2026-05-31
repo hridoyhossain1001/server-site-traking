@@ -1,14 +1,16 @@
 import hmac
+import html
 import logging
 import os
 import json
 import hashlib
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional
+from urllib.parse import quote
 from fastapi import APIRouter, Depends, Request, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from app.security import decrypt_token
 
@@ -30,6 +32,95 @@ router = APIRouter()
 
 REQUIRE_COURIER_WEBHOOK_SECRET = os.getenv("REQUIRE_COURIER_WEBHOOK_SECRET", "true").lower() in ("1", "true", "yes")
 COURIER_WEBHOOK_SECRET = os.getenv("COURIER_WEBHOOK_SECRET", "")
+
+
+def _official_tracking_url(provider: str, tracking_code: str) -> Optional[str]:
+    safe_tracking_code = quote(tracking_code, safe="")
+    if provider == "steadfast":
+        return f"https://portal.steadfast.com.bd/tracking/{safe_tracking_code}"
+    if provider == "pathao":
+        return "https://pathao.com/courier/tracking"
+    return None
+
+
+@router.get("/track/{tracking_code}", response_class=HTMLResponse, include_in_schema=False)
+async def public_courier_tracking(
+    tracking_code: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Privacy-safe landing page for invoice QR scans.
+
+    The QR contains the courier-issued unique ID. Public scans intentionally do
+    not expose recipient contact details or the delivery address.
+    """
+    result = await db.execute(
+        select(CourierOrder).where(
+            or_(
+                CourierOrder.courier_tracking_id == tracking_code,
+                CourierOrder.courier_order_id == tracking_code,
+            )
+        )
+    )
+    courier_order = result.scalar_one_or_none()
+
+    if not courier_order:
+        return HTMLResponse(
+            """
+            <!doctype html>
+            <html lang="en">
+              <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Courier tracking</title></head>
+              <body style="font-family:Arial,sans-serif;background:#f8fafc;color:#0f172a;padding:32px">
+                <main style="max-width:560px;margin:auto;background:white;border:1px solid #e2e8f0;border-radius:16px;padding:24px">
+                  <h1 style="margin-top:0">Tracking reference not found</h1>
+                  <p>Please check the consignment ID printed on the invoice.</p>
+                </main>
+              </body>
+            </html>
+            """,
+            status_code=404,
+        )
+
+    provider = html.escape((courier_order.courier_provider or "courier").title())
+    raw_reference = (
+        courier_order.courier_tracking_id
+        or courier_order.courier_order_id
+        or tracking_code
+    )
+    reference = html.escape(raw_reference)
+    order_id = html.escape(courier_order.order_id or "N/A")
+    status = html.escape((courier_order.courier_status or "pending").replace("_", " ").title())
+    official_url = _official_tracking_url(courier_order.courier_provider, raw_reference)
+    official_link = ""
+    if official_url:
+        safe_url = html.escape(official_url, quote=True)
+        official_link = f"""
+          <a href="{safe_url}" target="_blank" rel="noopener noreferrer"
+             style="display:inline-block;margin-top:18px;padding:12px 18px;border-radius:10px;background:#4f46e5;color:white;text-decoration:none;font-weight:700">
+            Open {provider} tracking
+          </a>
+        """
+
+    return HTMLResponse(
+        f"""
+        <!doctype html>
+        <html lang="en">
+          <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Courier tracking #{reference}</title></head>
+          <body style="font-family:Arial,sans-serif;background:#f8fafc;color:#0f172a;padding:24px">
+            <main style="max-width:560px;margin:auto;background:white;border:1px solid #e2e8f0;border-radius:16px;padding:24px;box-shadow:0 12px 32px rgba(15,23,42,.08)">
+              <p style="margin:0 0 8px;color:#4f46e5;font-weight:700">Buykori AdSync Courier Tracking</p>
+              <h1 style="margin:0 0 20px">Consignment #{reference}</h1>
+              <dl style="display:grid;grid-template-columns:140px 1fr;gap:12px;margin:0">
+                <dt style="color:#64748b">Courier</dt><dd style="margin:0;font-weight:700">{provider}</dd>
+                <dt style="color:#64748b">Order reference</dt><dd style="margin:0;font-weight:700">#{order_id}</dd>
+                <dt style="color:#64748b">Current status</dt><dd style="margin:0;font-weight:700">{status}</dd>
+              </dl>
+              {official_link}
+            </main>
+          </body>
+        </html>
+        """
+    )
 
 
 def _verify_courier_webhook_secret(request: Request) -> None:
