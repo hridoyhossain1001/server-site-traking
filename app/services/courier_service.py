@@ -7,7 +7,7 @@ from app.services.capi_service import get_http_client
 logger = logging.getLogger(__name__)
 
 PATHAO_BASE_URL = "https://api-hermes.pathao.com"
-STEADFAST_BASE_URL = "https://portal.steadfast.com.bd"
+STEADFAST_BASE_URL = "https://portal.packzy.com"
 
 # ─── Pathao Token Cache ────────────────────────────────────────────────────────
 # Pathao OAuth2 tokens সাধারণত 1 ঘণ্টা valid থাকে। প্রতি request-এ নতুন token

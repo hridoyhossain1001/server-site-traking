@@ -37,7 +37,7 @@ COURIER_WEBHOOK_SECRET = os.getenv("COURIER_WEBHOOK_SECRET", "")
 def _official_tracking_url(provider: str, tracking_code: str) -> Optional[str]:
     safe_tracking_code = quote(tracking_code, safe="")
     if provider == "steadfast":
-        return f"https://portal.steadfast.com.bd/tracking/{safe_tracking_code}"
+        return f"https://portal.packzy.com/tracking/{safe_tracking_code}"
     if provider == "pathao":
         return "https://pathao.com/courier/tracking"
     return None
