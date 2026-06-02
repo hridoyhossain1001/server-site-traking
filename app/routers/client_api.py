@@ -12,6 +12,7 @@ from app.models.courier_order import CourierOrder
 from app.models.event_log import EventLog
 from app.models.event_outbox import EventOutbox
 from app.models.pending_event import PendingEvent
+from app.models.incomplete_checkout import IncompleteCheckout
 from app.models.usage_counter import UsageCounter
 from app.routers.client_portal import get_client_from_portal_session
 from app.security import encrypt_token, decrypt_token
@@ -26,6 +27,15 @@ from app.routers.client_auth import (
     require_allowed_origin,
 )
 from app.services.auth_service import hash_password, verify_password
+from app.services.plan_service import (
+    apply_expired_trial_downgrade,
+    effective_plan_tier,
+    has_growth_access,
+    plan_summary,
+    record_trial_identity,
+    require_growth_access,
+    require_trial_available,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -36,6 +46,10 @@ async def get_current_portal_client(request: Request, db: AsyncSession = Depends
     client = await get_client_from_portal_session(request, db)
     if not client or not client.is_active:
         raise HTTPException(status_code=401, detail="Unauthorized session. Please login.")
+    if apply_expired_trial_downgrade(client):
+        await db.commit()
+        from app.dependencies import clear_client_cache
+        clear_client_cache(client.api_key)
     return client
 
 # ─── Schemas ─────────────────────────────────────────────────────────────────
@@ -72,6 +86,9 @@ class PasswordUpdateRequest(BaseModel):
 class SidebarSeenRequest(BaseModel):
     section: str
 
+class IncompleteCheckoutStatusRequest(BaseModel):
+    status: str
+
 
 ALLOWED_RULE_EVENTS = {
     "PageView",
@@ -96,6 +113,7 @@ SIDEBAR_SEEN_KEYS = {
 }
 
 ACTIVE_COURIER_STATUSES = ["pending", "picked", "in_transit", "processing", "booked", "shipped"]
+INCOMPLETE_CHECKOUT_STATUSES = {"active", "incomplete", "contacted", "recovered", "ignored", "expired"}
 
 
 def _parse_seen_at(value: str | None) -> datetime:
@@ -129,6 +147,106 @@ def _validate_rules(rules: list[dict]) -> list[dict]:
             "ga4Enabled": bool(rule.get("ga4Enabled")),
         })
     return cleaned
+
+
+async def _refresh_incomplete_checkout_states(db: AsyncSession, client_id: int) -> None:
+    now = datetime.now(timezone.utc)
+    inactive_before = now - timedelta(minutes=20)
+    expire_before = now - timedelta(days=30)
+    await db.execute(
+        update(IncompleteCheckout)
+        .where(
+            IncompleteCheckout.client_id == client_id,
+            IncompleteCheckout.status == "active",
+            IncompleteCheckout.last_activity_at < inactive_before,
+        )
+        .values(status="incomplete")
+    )
+    await db.execute(
+        update(IncompleteCheckout)
+        .where(
+            IncompleteCheckout.client_id == client_id,
+            IncompleteCheckout.status.in_(["active", "incomplete", "contacted", "ignored"]),
+            IncompleteCheckout.last_activity_at < expire_before,
+        )
+        .values(status="expired")
+    )
+    await db.commit()
+
+
+def _incomplete_checkout_json(row: IncompleteCheckout) -> dict:
+    return {
+        "id": row.id,
+        "phone": row.phone,
+        "customerName": row.customer_name or "—",
+        "email": row.email or "—",
+        "address": row.address or "—",
+        "products": row.products or [],
+        "amount": float(row.amount or 0),
+        "currency": row.currency,
+        "pageUrl": row.page_url or "",
+        "campaignData": row.campaign_data or {},
+        "status": row.status,
+        "orderId": row.order_id,
+        "lastActivityAt": row.last_activity_at.isoformat(),
+        "createdAt": row.created_at.isoformat(),
+        "convertedAt": row.converted_at.isoformat() if row.converted_at else None,
+    }
+
+
+@router.get("/incomplete-checkouts")
+async def list_incomplete_checkouts(
+    status: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=250),
+    client: Client = Depends(get_current_portal_client),
+    db: AsyncSession = Depends(get_db),
+):
+    require_growth_access(client, "Incomplete checkout recovery")
+    await _refresh_incomplete_checkout_states(db, client.id)
+    stmt = select(IncompleteCheckout).where(IncompleteCheckout.client_id == client.id)
+    if status:
+        if status not in INCOMPLETE_CHECKOUT_STATUSES:
+            raise HTTPException(status_code=400, detail="Invalid incomplete checkout status.")
+        stmt = stmt.where(IncompleteCheckout.status == status)
+    else:
+        stmt = stmt.where(IncompleteCheckout.status.in_(["active", "incomplete", "contacted", "recovered"]))
+    result = await db.execute(stmt.order_by(desc(IncompleteCheckout.last_activity_at)).limit(limit))
+    items = [_incomplete_checkout_json(row) for row in result.scalars().all()]
+    counts_result = await db.execute(
+        select(IncompleteCheckout.status, func.count(IncompleteCheckout.id))
+        .where(IncompleteCheckout.client_id == client.id)
+        .group_by(IncompleteCheckout.status)
+    )
+    counts = {str(row_status): int(count or 0) for row_status, count in counts_result.all()}
+    return {"items": items, "counts": counts}
+
+
+@router.post("/incomplete-checkouts/{checkout_id}/status")
+async def update_incomplete_checkout_status(
+    checkout_id: int,
+    payload: IncompleteCheckoutStatusRequest,
+    client: Client = Depends(get_current_portal_client),
+    db: AsyncSession = Depends(get_db),
+):
+    require_growth_access(client, "Incomplete checkout recovery")
+    allowed = {"contacted", "ignored", "incomplete"}
+    if payload.status not in allowed:
+        raise HTTPException(status_code=400, detail="Invalid manual recovery status.")
+    result = await db.execute(
+        select(IncompleteCheckout).where(
+            IncompleteCheckout.id == checkout_id,
+            IncompleteCheckout.client_id == client.id,
+        )
+    )
+    draft = result.scalar_one_or_none()
+    if not draft:
+        raise HTTPException(status_code=404, detail="Incomplete checkout not found.")
+    if draft.status in {"recovered", "expired"}:
+        raise HTTPException(status_code=409, detail="This incomplete checkout can no longer be changed.")
+    draft.status = payload.status
+    draft.last_activity_at = datetime.now(timezone.utc)
+    await db.commit()
+    return {"success": True, "item": _incomplete_checkout_json(draft)}
 
 # --- Sidebar Notification State ---
 @router.get("/sidebar/status")
@@ -231,13 +349,8 @@ async def get_profile(
 
     # Use the higher of DB or Redis — whichever is more up-to-date
     events_used = max(db_events_used, redis_events_used)
-    events_quota = client.monthly_limit or 50000
-
-    plan_name = "Enterprise Plan"
-    if events_quota <= 50000:
-        plan_name = "Trial Plan"
-    elif events_quota <= 250000:
-        plan_name = "Scale Plan"
+    plan = plan_summary(client, now)
+    events_quota = plan["eventsQuota"]
 
     try:
         user, _, _ = await get_client_user_from_cookie(request, db)
@@ -249,11 +362,19 @@ async def get_profile(
 
     last_day = calendar.monthrange(now.year, now.month)[1]
     renewal_date = now.replace(day=last_day).strftime("%B %d, %Y")
+    if plan["isTrial"] and plan["trialEndsAt"]:
+        renewal_date = datetime.fromisoformat(plan["trialEndsAt"]).strftime("%B %d, %Y")
 
     return {
         "name": client.name,
         "email": email,
-        "plan": plan_name,
+        "plan": plan["name"],
+        "planTier": plan["tier"],
+        "isTrial": plan["isTrial"],
+        "trialEndsAt": plan["trialEndsAt"],
+        "trialDaysRemaining": plan["trialDaysRemaining"],
+        "growthFeaturesEnabled": plan["growthFeaturesEnabled"],
+        "ordersQuota": plan["ordersQuota"],
         "renewalDate": renewal_date,
         "eventsUsed": events_used,
         "eventsQuota": events_quota
@@ -301,21 +422,24 @@ async def update_profile(
         )
     )
     events_used = result.scalar() or 0
-    events_quota = client.monthly_limit or 50000
-
-    plan_name = "Enterprise Plan"
-    if events_quota <= 50000:
-        plan_name = "Trial Plan"
-    elif events_quota <= 250000:
-        plan_name = "Scale Plan"
+    plan = plan_summary(client, now)
+    events_quota = plan["eventsQuota"]
 
     last_day = calendar.monthrange(now.year, now.month)[1]
     renewal_date = now.replace(day=last_day).strftime("%B %d, %Y")
+    if plan["isTrial"] and plan["trialEndsAt"]:
+        renewal_date = datetime.fromisoformat(plan["trialEndsAt"]).strftime("%B %d, %Y")
 
     return {"success": True, "profile": {
         "name": client.name,
         "email": user.email,
-        "plan": plan_name,
+        "plan": plan["name"],
+        "planTier": plan["tier"],
+        "isTrial": plan["isTrial"],
+        "trialEndsAt": plan["trialEndsAt"],
+        "trialDaysRemaining": plan["trialDaysRemaining"],
+        "growthFeaturesEnabled": plan["growthFeaturesEnabled"],
+        "ordersQuota": plan["ordersQuota"],
         "renewalDate": renewal_date,
         "eventsUsed": events_used,
         "eventsQuota": events_quota
@@ -415,6 +539,7 @@ async def revoke_wp_token(
 # ─── Platform Credentials ────────────────────────────────────────────────────
 @router.get("/credentials")
 async def get_credentials(client: Client = Depends(get_current_portal_client)):
+    growth_enabled = has_growth_access(client)
     return {
         "Meta CAPI": {
             "enabled": client.enable_facebook,
@@ -424,14 +549,14 @@ async def get_credentials(client: Client = Depends(get_current_portal_client)):
             "testEventCode": client.test_event_code or ""
         },
         "TikTok Events API": {
-            "enabled": client.enable_tiktok,
+            "enabled": growth_enabled and client.enable_tiktok,
             "pixelIdOrMeasurementId": client.tiktok_pixel_id or "",
             "accessToken": "tt_ac" + "*" * 12 if client.tiktok_access_token else "",
             "status": "Valid" if client.tiktok_pixel_id and client.tiktok_access_token else "Untested",
             "testEventCode": client.tiktok_test_event_code or ""
         },
         "GA4": {
-            "enabled": client.enable_ga4,
+            "enabled": growth_enabled and client.enable_ga4,
             "pixelIdOrMeasurementId": client.ga4_measurement_id or "",
             "accessToken": "secret" + "*" * 12 if client.ga4_api_secret else "",
             "status": "Valid" if client.ga4_measurement_id and client.ga4_api_secret else "Untested"
@@ -448,6 +573,7 @@ async def update_credentials(
     val = payload.pixelIdOrMeasurementId
     token = payload.accessToken
     test_code = payload.testEventCode
+    growth_enabled = has_growth_access(client)
 
     if p == "Meta CAPI":
         if payload.enabled is not None:
@@ -462,8 +588,10 @@ async def update_credentials(
         if test_code is not None:
             client.test_event_code = test_code.strip() if test_code.strip() else None
     elif p == "TikTok Events API":
+        if not growth_enabled and (payload.enabled is not False or val or token or test_code):
+            require_growth_access(client, "TikTok Events API")
         if payload.enabled is not None:
-            client.enable_tiktok = payload.enabled
+            client.enable_tiktok = growth_enabled and payload.enabled
         if val is not None:
             clean_val = val.strip()
             if clean_val and not clean_val.isalnum():
@@ -474,8 +602,10 @@ async def update_credentials(
         if test_code is not None:
             client.tiktok_test_event_code = test_code.strip() if test_code.strip() else None
     elif p == "GA4":
+        if not growth_enabled and (payload.enabled is not False or val or token):
+            require_growth_access(client, "GA4 server-side delivery")
         if payload.enabled is not None:
-            client.enable_ga4 = payload.enabled
+            client.enable_ga4 = growth_enabled and payload.enabled
         if val is not None:
             clean_val = val.strip()
             if clean_val and not clean_val.startswith("G-"):
@@ -485,6 +615,10 @@ async def update_credentials(
             client.ga4_api_secret = encrypt_token(token.strip())
     else:
         raise HTTPException(status_code=400, detail="Unknown platform.")
+
+    if p == "Meta CAPI" and getattr(client, "trial_started_at", None):
+        await require_trial_available(db, domain=client.domain, pixel_id=client.pixel_id, exclude_client_id=client.id)
+        await record_trial_identity(db, client, source="credentials")
 
     await db.commit()
     from app.dependencies import clear_client_cache
@@ -505,14 +639,14 @@ async def update_credentials(
                 "testEventCode": client.test_event_code or ""
             },
             "TikTok Events API": {
-                "enabled": client.enable_tiktok,
+                "enabled": growth_enabled and client.enable_tiktok,
                 "pixelIdOrMeasurementId": client.tiktok_pixel_id or "",
                 "accessToken": "tt_ac" + "*" * 12 if client.tiktok_access_token else "",
                 "status": tiktok_status,
                 "testEventCode": client.tiktok_test_event_code or ""
             },
             "GA4": {
-                "enabled": client.enable_ga4,
+                "enabled": growth_enabled and client.enable_ga4,
                 "pixelIdOrMeasurementId": client.ga4_measurement_id or "",
                 "accessToken": "secret" + "*" * 12 if client.ga4_api_secret else "",
                 "status": ga4_status
@@ -525,13 +659,14 @@ async def update_credentials(
 # If not set, we default based on client's globally enabled platforms.
 @router.get("/rules")
 async def get_rules(client: Client = Depends(get_current_portal_client)):
+    growth_enabled = has_growth_access(client)
     if client.event_rules and isinstance(client.event_rules, list):
         return client.event_rules
     return [
-        { "eventName": "PageView", "metaEnabled": client.enable_facebook, "tiktokEnabled": client.enable_tiktok, "ga4Enabled": client.enable_ga4 },
-        { "eventName": "AddToCart", "metaEnabled": client.enable_facebook, "tiktokEnabled": client.enable_tiktok, "ga4Enabled": client.enable_ga4 },
-        { "eventName": "InitiateCheckout", "metaEnabled": client.enable_facebook, "tiktokEnabled": client.enable_tiktok, "ga4Enabled": client.enable_ga4 },
-        { "eventName": "Purchase", "metaEnabled": client.enable_facebook, "tiktokEnabled": client.enable_tiktok, "ga4Enabled": client.enable_ga4 }
+        { "eventName": "PageView", "metaEnabled": client.enable_facebook, "tiktokEnabled": growth_enabled and client.enable_tiktok, "ga4Enabled": growth_enabled and client.enable_ga4 },
+        { "eventName": "AddToCart", "metaEnabled": client.enable_facebook, "tiktokEnabled": growth_enabled and client.enable_tiktok, "ga4Enabled": growth_enabled and client.enable_ga4 },
+        { "eventName": "InitiateCheckout", "metaEnabled": client.enable_facebook, "tiktokEnabled": growth_enabled and client.enable_tiktok, "ga4Enabled": growth_enabled and client.enable_ga4 },
+        { "eventName": "Purchase", "metaEnabled": client.enable_facebook, "tiktokEnabled": growth_enabled and client.enable_tiktok, "ga4Enabled": growth_enabled and client.enable_ga4 }
     ]
 
 @router.post("/rules")
@@ -655,6 +790,101 @@ async def get_events(
         "events": events_list,
         "totalCount": total_count
     }
+
+@router.get("/events/trend")
+async def get_events_trend(
+    client: Client = Depends(get_current_portal_client),
+    db: AsyncSession = Depends(get_db),
+    days: int = Query(7, ge=1, le=90)
+):
+    now_utc = datetime.now(timezone.utc)
+    start_date = now_utc - timedelta(days=days)
+    
+    result = await db.execute(
+        select(EventLog.created_at, EventLog.event_name, EventLog.event_count)
+        .where(
+            and_(
+                EventLog.client_id == client.id,
+                EventLog.created_at >= start_date,
+                EventLog.status == "success"
+            )
+        )
+    )
+    logs = result.all()
+    
+    # Pre-populate date range
+    dates_list = []
+    date_data = {}
+    for i in range(days - 1, -1, -1):
+        d = now_utc - timedelta(days=i)
+        iso_key = d.strftime("%Y-%m-%d")
+        dates_list.append(iso_key)
+        date_data[iso_key] = {"total": 0, "meta": 0, "tiktok": 0, "ga4": 0}
+        
+    for log_created_at, log_event_name, log_count in logs:
+        if not log_created_at:
+            continue
+        if log_created_at.tzinfo:
+            log_utc = log_created_at.astimezone(timezone.utc)
+        else:
+            log_utc = log_created_at.replace(tzinfo=timezone.utc)
+        iso_key = log_utc.strftime("%Y-%m-%d")
+        
+        if iso_key not in date_data:
+            continue
+            
+        count = log_count or 1
+        log_platform = "Meta CAPI"
+        raw_event_name = log_event_name or ""
+        
+        if ":" in raw_event_name:
+            parts = raw_event_name.split(":", 1)
+            channel = parts[0].lower()
+            if channel == "tiktok":
+                log_platform = "TikTok Events API"
+            elif channel == "ga4":
+                log_platform = "GA4"
+            elif channel in ("facebook", "capi", "meta"):
+                log_platform = "Meta CAPI"
+        else:
+            if getattr(client, "enable_facebook", True) and client.pixel_id and client.access_token:
+                log_platform = "Meta CAPI"
+            elif getattr(client, "enable_tiktok", True) and client.tiktok_pixel_id and client.tiktok_access_token:
+                log_platform = "TikTok Events API"
+            elif getattr(client, "enable_ga4", True) and client.ga4_measurement_id and client.ga4_api_secret:
+                log_platform = "GA4"
+                
+        date_data[iso_key]["total"] += count
+        if log_platform == "Meta CAPI":
+            date_data[iso_key]["meta"] += count
+        elif log_platform == "TikTok Events API":
+            date_data[iso_key]["tiktok"] += count
+        elif log_platform == "GA4":
+            date_data[iso_key]["ga4"] += count
+
+    trend = []
+    for iso_key in dates_list:
+        counts = date_data[iso_key]
+        try:
+            parsed_date = datetime.strptime(iso_key, "%Y-%m-%d")
+            display_name = parsed_date.strftime("%b %d")
+            if display_name:
+                parts = display_name.split()
+                if len(parts) == 2:
+                    month, day = parts[0], parts[1].lstrip("0")
+                    display_name = f"{month} {day}"
+        except Exception:
+            display_name = iso_key
+            
+        trend.append({
+            "name": display_name,
+            "Meta CAPI": counts["meta"],
+            "TikTok Events": counts["tiktok"],
+            "GA4": counts["ga4"],
+            "Total": counts["total"]
+        })
+        
+    return {"trend": trend}
 
 @router.get("/api-logs")
 async def get_api_logs(
@@ -1178,6 +1408,7 @@ async def get_deferred_purchases(
         pending_list.append({
             "id": pe.id,
             "orderId": pe.order_id,
+            "operationsOnly": pe.portal_state == "operations_only",
             "amount": custom_data.get("value", 0),
             "customer": customer_str,
             # Real recipient info (unmasked) from raw courier payload
@@ -1192,6 +1423,13 @@ async def get_deferred_purchases(
             "timestamp": pe.created_at.isoformat()
         })
 
+    deferred_pending_list = [item for item in pending_list if not item["operationsOnly"]]
+    deferred_pending_value = sum(float(item["amount"] or 0) for item in deferred_pending_list)
+    deferred_oldest_age_hours = max(
+        (float(item["ageHours"]) for item in deferred_pending_list),
+        default=0.0,
+    )
+
     return {
         "deferredEnabled": bool(client.deferred_purchase),
         "autoConfirmDays": min(max(0, getattr(client, "auto_confirm_days", 0)), 7),
@@ -1203,7 +1441,11 @@ async def get_deferred_purchases(
         "expiredTotal": expired_total,
         "confirmedToday": confirmed_today,
         "oldestPending": f"{oldest_age_hours}h" if oldest_age_hours else "—",
-        "pendingList": pending_list
+        "pendingList": pending_list,
+        "deferredPendingCount": len(deferred_pending_list),
+        "deferredPendingValue": f"৳{deferred_pending_value:,.0f}" if deferred_pending_value else "৳0",
+        "deferredOldestPending": f"{deferred_oldest_age_hours}h" if deferred_oldest_age_hours else "—",
+        "deferredPendingList": deferred_pending_list,
     }
 
 @router.post("/deferred/settings")
@@ -1212,8 +1454,11 @@ async def save_deferred_settings(
     client: Client = Depends(get_current_portal_client),
     db: AsyncSession = Depends(get_db)
 ):
-    client.deferred_purchase = payload.deferredEnabled
-    client.auto_confirm_days = min(max(0, payload.autoConfirmDays), 7)
+    if payload.deferredEnabled or payload.autoConfirmDays:
+        require_growth_access(client, "Deferred Purchase control")
+    growth_enabled = has_growth_access(client)
+    client.deferred_purchase = growth_enabled and payload.deferredEnabled
+    client.auto_confirm_days = min(max(0, payload.autoConfirmDays), 7) if growth_enabled else 0
     client.auto_confirm_status = payload.autoConfirmStatus.strip() or "completed"
 
     await db.commit()
@@ -1251,6 +1496,7 @@ async def api_confirm_deferred_bulk(
     client: Client = Depends(get_current_portal_client),
     db: AsyncSession = Depends(get_db)
 ):
+    require_growth_access(client, "Bulk Purchase confirmation")
     from app.routers.deferred_events import bulk_confirm_events, BulkConfirmRequest
     try:
         res = await bulk_confirm_events(BulkConfirmRequest(order_ids=payload.order_ids), client=client, db=db)
@@ -1279,6 +1525,7 @@ async def api_cancel_deferred_bulk(
     client: Client = Depends(get_current_portal_client),
     db: AsyncSession = Depends(get_db)
 ):
+    require_growth_access(client, "Bulk Purchase cancellation")
     from app.routers.deferred_events import bulk_cancel_events, BulkCancelRequest
     try:
         res = await bulk_cancel_events(BulkCancelRequest(order_ids=payload.order_ids), client=client, db=db)
@@ -1375,6 +1622,19 @@ async def create_store(
     """Create a new store workspace for the current user and switch to it."""
     require_allowed_origin(request)
     user, current_client, _ = await get_client_user_from_cookie(request, db)
+    tier = effective_plan_tier(current_client)
+    if tier not in {"scale", "agency"}:
+        raise HTTPException(status_code=403, detail="Additional stores require a Scale or Agency plan.")
+
+    existing_stores_r = await db.execute(
+        select(func.count(ClientUser.id)).where(
+            ClientUser.email == user.email,
+            ClientUser.is_active == True,
+        )
+    )
+    existing_store_count = int(existing_stores_r.scalar() or 0)
+    if tier == "scale" and existing_store_count >= 3:
+        raise HTTPException(status_code=403, detail="Scale plan supports up to 3 stores.")
 
     from app.routers.client_auth import _clean_domain, _user_payload, _create_session
     business_name = _clean_name(payload.business_name, "Business name")
@@ -1392,9 +1652,12 @@ async def create_store(
         enable_facebook=False,
         enable_tiktok=False,
         enable_ga4=False,
-        monthly_limit=1000,
+        monthly_limit=current_client.monthly_limit,
         daily_quota=1000,
         rate_limit=120,
+        plan_tier=current_client.plan_tier,
+        trial_started_at=current_client.trial_started_at,
+        trial_ends_at=current_client.trial_ends_at,
     )
     db.add(new_client)
     await db.flush()
@@ -1419,4 +1682,3 @@ async def create_store(
     await db.refresh(new_user)
 
     return {"success": True, "user": _user_payload(new_user, new_client)}
-
