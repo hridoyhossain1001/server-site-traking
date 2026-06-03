@@ -3,7 +3,7 @@
  * Plugin Name:       Buykori AdSync — Server-Side Tracking
  * Plugin URI:        https://buykori.app/
  * Description:       Server-Side Facebook CAPI, TikTok, and GA4 tracking for WooCommerce with one-page landing support, SHA-256 PII hashing, and deferred purchase control.
- * Version:           1.2.32
+ * Version:           1.2.33
  * Requires at least: 5.8
  * Requires PHP:      7.4
  * Author:            Buykori AdSync
@@ -20,7 +20,8 @@ if (!defined('ABSPATH')) {
 }
 
 // ─── Plugin Constants ──────────────────────────────────────────────────────────
-define('BUYKORIGW_VERSION', '1.2.32');
+define('BUYKORIGW_VERSION', '1.2.33');
+define('BUYKORIGW_OPTIONAL_EVENTS_POLICY_VERSION', '1.2.33');
 
 define('BUYKORIGW_PLUGIN_FILE', __FILE__);
 define('BUYKORIGW_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -84,6 +85,35 @@ function buykorigw_activate()
         );
         update_option(BUYKORIGW_OPTION_KEY, $defaults);
     }
+}
+
+add_action('plugins_loaded', 'buykorigw_apply_optional_event_defaults');
+
+function buykorigw_apply_optional_event_defaults()
+{
+    $applied_version = get_option('buykorigw_optional_events_policy_version', '');
+    if (version_compare((string) $applied_version, BUYKORIGW_OPTIONAL_EVENTS_POLICY_VERSION, '>=')) {
+        return;
+    }
+
+    $settings = get_option(BUYKORIGW_OPTION_KEY, array());
+    if (!is_array($settings) || empty($settings)) {
+        update_option('buykorigw_optional_events_policy_version', BUYKORIGW_OPTIONAL_EVENTS_POLICY_VERSION);
+        return;
+    }
+
+    foreach (array(
+        'enable_lead',
+        'enable_search',
+        'enable_viewcart',
+        'enable_removefromcart',
+        'enable_addpaymentinfo',
+    ) as $event_key) {
+        $settings[$event_key] = 0;
+    }
+
+    update_option(BUYKORIGW_OPTION_KEY, $settings);
+    update_option('buykorigw_optional_events_policy_version', BUYKORIGW_OPTIONAL_EVENTS_POLICY_VERSION);
 }
 
 // ─── Deactivation Hook ─────────────────────────────────────────────────────────

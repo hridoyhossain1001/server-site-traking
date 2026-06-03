@@ -1325,11 +1325,12 @@ function buykorigw_settings_page() {
                 </div>
 
                 <div class="buykorigw-card">
-                    <h2>Plugin Update</h2>
-                    <p>WordPress update notice না দেখালে এখান থেকে local update cache clear করে আবার check করতে পারবেন।</p>
+                    <h2>Plugin Update Status</h2>
+                    <p>WordPress normally checks for plugin updates automatically. Use this only when the latest Buykori AdSync version is not appearing on the Plugins page.</p>
                     <button type="button" class="buykorigw-btn buykorigw-btn-secondary" id="buykorigw-update-btn" onclick="buykorigwCheckUpdateNow()">
-                        Check Update Now
+                        Refresh Update Status
                     </button>
+                    <p class="description" style="margin-top:10px;">After refreshing, open WordPress Plugins or Dashboard Updates and click the normal Update now link if a new version is available.</p>
                     <div id="buykorigw-update-status" class="buykorigw-status"></div>
                 </div>
 
