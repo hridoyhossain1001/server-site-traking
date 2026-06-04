@@ -96,8 +96,19 @@
 
     function isExplicitCheckoutPage() {
         var path = (window.location && window.location.pathname ? window.location.pathname : '').toLowerCase();
+        if (trackingMode === 'one_page') return false;
+        if (hasProductLandingSurface()) return false;
         if (cfg.page_type === 'checkout' || !!pageContext.has_checkout || bodyHasClass('woocommerce-checkout')) return true;
         return !!(path.match(/checkout|checkouts|order-pay|\/step\/checkout/) && !path.match(/order-received|thank-you/));
+    }
+
+    function hasProductLandingSurface() {
+        return !!(
+            pageContext.has_product ||
+            pageContext.has_product_listing ||
+            hasProductDetailSurface() ||
+            hasProductListSurface()
+        );
     }
 
     function hasProductDetailSurface() {
