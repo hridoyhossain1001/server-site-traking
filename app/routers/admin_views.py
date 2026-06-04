@@ -21,9 +21,20 @@ from app.models.event_log import EventLog
 from app.models.event_outbox import EventOutbox
 from app.models.failed_event import FailedEvent
 from app.models.pending_event import PendingEvent
+from app.models.site_binding import SiteBinding
 from app.models.usage_counter import UsageCounter
 from app.security import encrypt_token
+from app.services.auth_service import verify_admin_password
 from app.services.webhook_service import _webhook_url_allowed
+from app.services.plan_service import (
+    assign_paid_plan,
+    normalize_billing_status,
+    normalize_plan_tier,
+    plan_summary,
+    record_trial_identity,
+    require_trial_available,
+    start_growth_trial,
+)
 from app.limiter import limiter, _get_real_ip
 from app.utils.display import normalize_domain_input, display_domain_url, mask_secret
 
@@ -46,13 +57,7 @@ def verify_admin(credentials: HTTPBasicCredentials = Depends(security)):
         )
     is_user_ok = secrets.compare_digest(credentials.username, ADMIN_USERNAME)
 
-    is_pass_ok = False
-    if ADMIN_PASSWORD.startswith("sha256:"):
-        expected_hash = ADMIN_PASSWORD[7:]
-        input_hash = hashlib.sha256(credentials.password.encode("utf-8")).hexdigest()
-        is_pass_ok = hmac.compare_digest(input_hash, expected_hash)
-    else:
-        is_pass_ok = secrets.compare_digest(credentials.password, ADMIN_PASSWORD)
+    is_pass_ok = verify_admin_password(credentials.password, ADMIN_PASSWORD)
 
     if not (is_user_ok and is_pass_ok):
         raise HTTPException(
@@ -98,8 +103,14 @@ def admin_redirect(msg: str, msg_type: str = "success") -> RedirectResponse:
     query = urlencode({"msg": msg, "msg_type": msg_type})
     return RedirectResponse(url=f"/api/v1/admin?{query}", status_code=303)
 
+
+def admin_clients_redirect(msg: str, msg_type: str = "success") -> RedirectResponse:
+    query = urlencode({"msg": msg, "msg_type": msg_type})
+    return RedirectResponse(url=f"/api/v1/admin/clients?{query}", status_code=303)
+
 templates.env.globals["mask_secret"] = mask_secret
 templates.env.globals["display_domain_url"] = display_domain_url
+templates.env.globals["plan_summary"] = plan_summary
 
 def request_ip(request: Request) -> str | None:
     return _get_real_ip(request)
@@ -486,6 +497,7 @@ async def delete_client(
     await db.execute(sql_delete(EventDedup).where(EventDedup.client_id == client_id))
     await db.execute(sql_delete(UsageCounter).where(UsageCounter.client_id == client_id))
     await db.execute(sql_delete(EventLog).where(EventLog.client_id == client_id))
+    await db.execute(sql_delete(SiteBinding).where(SiteBinding.client_id == client_id))
 
     # Delete client sessions and users to avoid foreign key constraint violations
     from app.models.client_session import ClientSession
@@ -718,6 +730,63 @@ async def update_monthly_limit(
 
     query = urlencode({"msg": f"Monthly limit updated to {monthly_limit:,} events", "msg_type": "success"})
     return RedirectResponse(url=f"/api/v1/admin/clients?{query}", status_code=303)
+
+@router.post("/admin/client/{client_id}/plan", include_in_schema=False)
+async def update_client_plan(
+    client_id: int,
+    request: Request,
+    username: str = Depends(verify_admin),
+    csrf_token: str = Form(...),
+    action: str = Form(...),
+    plan_tier: str = Form("growth"),
+    monthly_limit: int = Form(-1),
+    billing_status: str = Form("paid"),
+    db: AsyncSession = Depends(get_db),
+):
+    verify_admin_csrf_token(csrf_token, username)
+
+    result = await db.execute(select(Client).where(Client.id == client_id))
+    client = result.scalar_one_or_none()
+    if not client:
+        return admin_clients_redirect("Client not found", "error")
+
+    action = action.strip().lower()
+    try:
+        if action == "start_trial":
+            await require_trial_available(db, domain=client.domain, pixel_id=client.pixel_id, exclude_client_id=client.id)
+            start_growth_trial(client)
+            await record_trial_identity(db, client, source="admin")
+            msg = f"Growth trial started for {client.name}."
+            audit_action = "client.plan_trial_started"
+        elif action == "confirm":
+            clean_tier = plan_tier.strip().lower()
+            normalized_tier = normalize_plan_tier(clean_tier)
+            if clean_tier != normalized_tier or normalized_tier == "free":
+                return admin_clients_redirect("Confirmed plan must be Growth, Scale, or Agency.", "error")
+            assign_paid_plan(
+                client,
+                clean_tier,
+                monthly_limit if monthly_limit >= 0 else None,
+                normalize_billing_status(billing_status),
+            )
+            msg = f"{clean_tier.title()} plan confirmed for {client.name}."
+            audit_action = "client.plan_confirmed"
+        elif action == "cancel":
+            assign_paid_plan(client, "free")
+            msg = f"{client.name} moved to Free plan."
+            audit_action = "client.plan_cancelled"
+        else:
+            return admin_clients_redirect("Invalid plan action.", "error")
+    except HTTPException as exc:
+        return admin_clients_redirect(str(exc.detail), "error")
+
+    await log_admin_action(db, request, username, audit_action, client.id, msg)
+    await db.commit()
+
+    from app.dependencies import clear_client_cache
+    clear_client_cache(client.api_key)
+
+    return admin_clients_redirect(msg)
 
 @router.get("/admin/logs", response_class=HTMLResponse, include_in_schema=False)
 @limiter.limit("10/minute")

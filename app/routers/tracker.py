@@ -23,14 +23,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.dependencies import get_current_client, CachedClient, _client_cache, _snapshot, CACHE_TTL, set_in_client_cache
 from app.models.client import Client
-from app.services.dedup_service import reserve_unique_event_ids, _reserve_via_redis
+from app.services.dedup_service import reserve_unique_event_ids
+from app.services.fast_ingest_service import dedup_reserve_usage_and_enqueue_stream
 from app.schemas.event import EventData, UserData, CustomData
 from app.services.bot_detector import is_bot
 from app.services.event_quality import boost_event_quality
 from app.services.geoip_service import get_location_data
 from app.services.event_worker import enqueue_events
 from app.services.tracker_sdk import generate_tracker_js
-from app.services.usage_service import check_and_reserve_usage, check_rate_limit_only
+from app.services.usage_service import check_and_reserve_usage
 from app.limiter import _get_real_ip
 
 from sqlalchemy import select
@@ -40,6 +41,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 TRACKER_COOKIE_DOMAIN = os.getenv("TRACKER_COOKIE_DOMAIN", "").strip() or None
 EVENT_INGEST_MODE = os.getenv("EVENT_INGEST_MODE", "db").strip().lower()
+TRACKER_ENRICH_IN_REQUEST = os.getenv("TRACKER_ENRICH_IN_REQUEST", "false").lower() in ("true", "1", "yes")
 
 
 def _fast_stream_ingest_enabled() -> bool:
@@ -273,7 +275,7 @@ async def collect_event(
                 ud_raw["client_user_agent"] = user_agent
 
             # ─── GeoIP Enrichment ──────────────────────────────────────────
-            if not fast_stream and ud_raw.get("client_ip_address"):
+            if TRACKER_ENRICH_IN_REQUEST and not fast_stream and ud_raw.get("client_ip_address"):
                 loc_data = get_location_data(ud_raw["client_ip_address"])
                 if loc_data:
                     if loc_data.get("ct") and not ud_raw.get("ct"):
@@ -293,7 +295,7 @@ async def collect_event(
                 custom_data_dict = {}
 
             # ─── User-Agent Parsing ────────────────────────────────────────
-            if not fast_stream and ud_raw.get("client_user_agent"):
+            if TRACKER_ENRICH_IN_REQUEST and not fast_stream and ud_raw.get("client_user_agent"):
                 ua = parse_ua(ud_raw["client_user_agent"])
                 custom_data_dict["device_type"] = "Mobile" if ua.is_mobile else "Tablet" if ua.is_tablet else "PC"
                 custom_data_dict["os_name"] = ua.os.family
@@ -351,44 +353,28 @@ async def collect_event(
             seen_ids.add(event.event_id)
             candidate_ids.append(event.event_id)
 
+        request_context = {
+            "ip_address": client_ip,
+            "user_agent": user_agent,
+            "cookies": {
+                key: value
+                for key, value in request.cookies.items()
+                if key in {"_ga", "_fbp", "_fbc", "_ttp", "_ttclid"}
+            },
+        }
         if fast_stream:
-            redis_reserved = await _reserve_via_redis(client.id, candidate_ids)
-            if redis_reserved is not None:
-                accepted_ids: set[str] = set()
-                for event in parsed_events:
-                    if not event.event_id:
-                        continue
-                    if event.event_id in redis_reserved and event.event_id not in accepted_ids:
-                        accepted_ids.add(event.event_id)
-                        unique_events.append(event)
-                unique_events.extend(no_id_events)
-
-                if not unique_events:
-                    response_data = {"status": "ok", "events_received": 0, "message": "deduplicated"}
-                    resp = JSONResponse(content=response_data)
-                else:
-                    await check_rate_limit_only(client, len(unique_events))
-                    events_as_dicts = [event.model_dump(exclude_none=True) for event in unique_events]
-                    outbox = await enqueue_events(
-                        db,
-                        client_id=client.id,
-                        events_data=events_as_dicts,
-                        request_context={
-                            "ip_address": client_ip,
-                            "user_agent": user_agent,
-                            "cookies": {
-                                key: value
-                                for key, value in request.cookies.items()
-                                if key in {"_ga", "_fbp", "_fbc", "_ttp", "_ttclid"}
-                            },
-                        },
-                        usage_reserved={},
-                    )
-                    if outbox is not None:
-                        await db.commit()
-                    response_data = {"status": "ok", "events_received": len(unique_events), "message": "queued"}
-                    resp = JSONResponse(content=response_data)
-                return _attach_tracker_cookies(resp, body, request)
+            fast_enqueued, accepted_count = await dedup_reserve_usage_and_enqueue_stream(
+                client,
+                events_data=[event.model_dump(exclude_none=True) for event in parsed_events],
+                request_context=request_context,
+            )
+            if fast_enqueued:
+                response_data = {
+                    "status": "ok",
+                    "events_received": accepted_count,
+                    "message": "queued" if accepted_count else "deduplicated",
+                }
+                return _attach_tracker_cookies(JSONResponse(content=response_data), body, request)
 
         reserved_ids = await reserve_unique_event_ids(db, client.id, candidate_ids)
         accepted_ids: set[str] = set()
@@ -412,15 +398,7 @@ async def collect_event(
                 db,
                 client_id=client.id,
                 events_data=events_as_dicts,
-                request_context={
-                    "ip_address": client_ip,
-                    "user_agent": user_agent,
-                    "cookies": {
-                        key: value
-                        for key, value in request.cookies.items()
-                        if key in {"_ga", "_fbp", "_fbc", "_ttp", "_ttclid"}
-                    },
-                },
+                request_context=request_context,
                 usage_reserved=reserved_keys,
             )
             await db.commit()

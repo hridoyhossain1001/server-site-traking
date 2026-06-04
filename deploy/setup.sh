@@ -13,6 +13,8 @@ PROJECT_DIR="/var/www/buykori-adsync"
 APP_USER="buykori"
 DB_NAME="buykori_adsync"
 DB_USER="buykori"
+GENERATED_ADMIN_PASSWORD=""
+GENERATED_ADMIN_API_KEY=""
 
 # Output helpers
 info() { echo -e "\e[34m[INFO]\e[0m $1"; }
@@ -123,8 +125,14 @@ if [ -z "$ADMIN_PASSWORD" ]; then
     read -p "Enter Admin Password [auto-generate]: " ADMIN_PASSWORD
     if [ -z "$ADMIN_PASSWORD" ]; then
         ADMIN_PASSWORD=$(openssl rand -hex 12)
-        info "Generated Admin Password: $ADMIN_PASSWORD"
+        GENERATED_ADMIN_PASSWORD="$ADMIN_PASSWORD"
+        info "Generated Admin Password (not printed to logs)."
     fi
+fi
+
+if [[ "$ADMIN_PASSWORD" != pbkdf2_sha256\$* ]]; then
+    info "Hashing Admin Password with PBKDF2 before writing .env..."
+    ADMIN_PASSWORD=$(cd "$PROJECT_DIR" && ADMIN_PASSWORD_INPUT="$ADMIN_PASSWORD" python3 scripts/keys/hash_admin_password.py | sed 's/^ADMIN_PASSWORD=//')
 fi
 
 # 4. Admin API Key
@@ -132,8 +140,22 @@ if [ -z "$ADMIN_API_KEY" ]; then
     read -p "Enter Admin API Key [auto-generate]: " ADMIN_API_KEY
     if [ -z "$ADMIN_API_KEY" ]; then
         ADMIN_API_KEY=$(openssl rand -hex 24)
-        info "Generated Admin API Key: $ADMIN_API_KEY"
+        GENERATED_ADMIN_API_KEY="$ADMIN_API_KEY"
+        info "Generated Admin API Key (not printed to logs)."
     fi
+fi
+
+if [ -n "$GENERATED_ADMIN_PASSWORD" ] || [ -n "$GENERATED_ADMIN_API_KEY" ]; then
+    INITIAL_CREDS_FILE="$PROJECT_DIR/.initial-credentials"
+    {
+        echo "Buykori AdSync generated setup credentials"
+        echo "Created: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        echo "Remove this file after saving the values in a password manager."
+        [ -n "$GENERATED_ADMIN_PASSWORD" ] && echo "Admin Password: $GENERATED_ADMIN_PASSWORD"
+        [ -n "$GENERATED_ADMIN_API_KEY" ] && echo "Admin API Key: $GENERATED_ADMIN_API_KEY"
+    } > "$INITIAL_CREDS_FILE"
+    chmod 600 "$INITIAL_CREDS_FILE"
+    info "Generated credentials were written to $INITIAL_CREDS_FILE (chmod 600). Remove it after saving."
 fi
 
 # 5. Encryption Key using python Fernet
@@ -200,7 +222,6 @@ success "Permissions configured."
 info "Initializing database schema..."
 cd "$PROJECT_DIR"
 sudo -u "$APP_USER" ./venv/bin/python deploy/init_db.py
-sudo -u "$APP_USER" ./venv/bin/alembic stamp head
 success "Database schema initialized and stamped with Alembic head."
 
 # Step 7: Configure Nginx
@@ -293,9 +314,9 @@ echo "📝 Credentials Summary:"
 echo "----------------------------------------------------------------------"
 echo "Primary Domain:   http://$PRIMARY_DOMAIN (SSL will be active after Certbot)"
 echo "Admin Username:   $ADMIN_USERNAME"
-echo "Admin Password:   $ADMIN_PASSWORD"
-echo "Admin API Key:    $ADMIN_API_KEY"
-echo "Database Pass:    $DB_PASS"
+echo "Admin Password:   stored as PBKDF2 hash in $ENV_FILE"
+echo "Admin API Key:    [hidden]"
+echo "Database Pass:    [hidden]"
 echo "----------------------------------------------------------------------"
 echo "⚠️  PLEASE COPY AND SAVE THESE CREDENTIALS IN A SECURE PLACE!"
 echo "----------------------------------------------------------------------"

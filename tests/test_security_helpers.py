@@ -3,16 +3,23 @@ import hmac
 import os
 from datetime import datetime, timezone
 
-os.environ.setdefault("ADMIN_PASSWORD", "test-admin-password")
+os.environ.setdefault(
+    "ADMIN_PASSWORD",
+    "pbkdf2_sha256$210000$dGVzdC1hZG1pbi1zYWx0LTE=$9gwSQUsI_uzxaNpdvx_cOcpF4opgO7Ma_Hcmq3z4kSU=",
+)
 os.environ.setdefault("ADMIN_API_KEY", "test-admin-api-key")
 os.environ.setdefault("DATABASE_URL", "postgresql://user:pass@localhost:5432/testdb")
 os.environ.setdefault("ENCRYPTION_KEY", "ZFhnf1szwemka8kBbH9jPTC7oKBRTEv0EqWt1J8AD0M=")
 
 from app.routers.admin import create_admin_csrf_token, mask_secret, verify_admin_csrf_token
 from app.routers.events import _is_domain_allowed, _verify_capi_signature
+from app.routers.webhook import _client_api_key_from_request
 from app.main import _is_tracker_path
+from app.services.auth_service import verify_admin_password
 from app import limiter as limiter_module
 from starlette.requests import Request
+from fastapi.testclient import TestClient
+from app.main import app
 
 
 def test_admin_csrf_token_round_trip():
@@ -45,6 +52,83 @@ def test_tracker_path_matching_does_not_include_client_routes():
     assert _is_tracker_path("/t.js")
     assert not _is_tracker_path("/client")
     assert not _is_tracker_path("/custom")
+
+
+def test_tracking_body_limit_rejects_large_request():
+    client = TestClient(app)
+    response = client.post(
+        "/c",
+        content=b"x" * (262144 + 1),
+        headers={"content-type": "application/json"},
+    )
+    assert response.status_code == 413
+
+
+def test_security_headers_are_added_to_html_responses():
+    client = TestClient(app)
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["x-frame-options"] == "DENY"
+    assert response.headers["referrer-policy"] == "strict-origin-when-cross-origin"
+    assert "object-src 'none'" in response.headers["content-security-policy"]
+    assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
+    assert "camera=()" in response.headers["permissions-policy"]
+    assert response.headers["strict-transport-security"].startswith("max-age=31536000")
+
+
+def test_admin_preflight_allows_csrf_header():
+    client = TestClient(app)
+    response = client.options(
+        "/api/v1/admin/api/clients",
+        headers={
+            "Origin": "https://admin.buykori.app",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "X-Admin-CSRF-Token, Content-Type",
+        },
+    )
+
+    assert response.status_code == 204
+    assert response.headers["access-control-allow-origin"] == "https://admin.buykori.app"
+    assert response.headers["access-control-allow-credentials"] == "true"
+    assert "X-Admin-CSRF-Token" in response.headers["access-control-allow-headers"]
+
+
+def test_legacy_admin_password_is_blocked_in_production(monkeypatch):
+    monkeypatch.setenv("PRIMARY_DOMAIN", "api.buykori.app")
+    monkeypatch.setenv("ALLOW_LEGACY_ADMIN_PASSWORD", "true")
+    assert not verify_admin_password("test-admin-password", "test-admin-password")
+
+
+def _security_request(*, headers=None, query_string=b""):
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/",
+            "headers": headers or [],
+            "query_string": query_string,
+            "client": ("127.0.0.1", 1234),
+            "scheme": "https",
+            "server": ("testserver", 443),
+        }
+    )
+
+
+def test_webhook_api_key_prefers_header_over_query():
+    request = _security_request(
+        headers=[(b"x-api-key", b"header-key")],
+        query_string=b"key=query-key",
+    )
+    assert _client_api_key_from_request(request, provider="Shopify") == "header-key"
+
+
+def test_webhook_query_api_key_logs_legacy_warning(caplog):
+    caplog.set_level("WARNING", logger="app.routers.webhook")
+    request = _security_request(query_string=b"key=query-key")
+    assert _client_api_key_from_request(request, provider="Shopify") == "query-key"
+    assert "legacy query key" in caplog.text
 
 
 def test_proxy_ip_headers_are_ignored_unless_trusted(monkeypatch):

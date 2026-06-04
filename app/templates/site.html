@@ -1485,25 +1485,29 @@
         <h3>Free Plan</h3>
         <div class="bk-plan-price">$0<span>/month</span></div>
         <div class="bk-plan-desc">For testing tracking on one WooCommerce store.</div>
-        <button class="bk-plan-btn" type="button" data-auth-mode="signup">Start for free</button>
+        <button class="bk-plan-btn" type="button" data-auth-mode="signup" data-signup-plan="free">Continue with Free</button>
         <ul>
           <li>One store setup</li>
-          <li>Basic server events</li>
+          <li>Meta Pixel + basic server events</li>
+          <li>100 orders or 5K events / month</li>
           <li>Campaign URL builder</li>
-          <li>Order management preview</li>
+          <li>Manual order management</li>
+          <li>Manual Steadfast, Pathao & RedX booking</li>
         </ul>
       </div>
       <div class="bk-card bk-plan featured">
-        <h3>Pro Plan</h3>
-        <div class="bk-plan-price">$19<span>/month</span></div>
-        <div class="bk-plan-desc">For growing stores and marketers.</div>
-        <button class="bk-plan-btn" type="button" data-auth-mode="signup">Start 14 Days Trial</button>
+        <h3>Growth Plan</h3>
+        <div class="bk-plan-price">৳899<span>/month</span></div>
+        <div class="bk-plan-desc">Start with a 14-day full-feature trial: 300 orders or 25K events.</div>
+        <button class="bk-plan-btn" type="button" data-auth-mode="signup" data-signup-plan="growth_trial">Start 14-day free trial</button>
         <ul>
+          <li>Paid plan: 2K orders or 500K events / month</li>
           <li>Meta, TikTok and GA4</li>
           <li>Signal Health Doctor</li>
           <li>Deferred Purchase control</li>
-          <li>Steadfast & Pathao booking</li>
+          <li>Bulk Steadfast, Pathao & RedX booking</li>
           <li>COD delivery status sync</li>
+          <li>Incomplete checkout recovery</li>
           <li>Priority support</li>
         </ul>
       </div>
@@ -1679,6 +1683,10 @@
             <input class="auth-input" id="signup-email" type="email" placeholder="name@domain.com" autocomplete="email" required>
           </div>
           <div class="auth-field">
+            <label class="auth-label" for="signup-phone">Phone Number</label>
+            <input class="auth-input" id="signup-phone" type="tel" placeholder="+8801XXXXXXXXX" autocomplete="tel" required>
+          </div>
+          <div class="auth-field">
             <label class="auth-label" for="signup-password">Create Password</label>
             <input class="auth-input" id="signup-password" type="password" placeholder="Min. 8 characters" autocomplete="new-password" minlength="8" required>
           </div>
@@ -1740,6 +1748,7 @@
     const linkToSignup = document.getElementById('link-to-signup');
     const linkToLogin = document.getElementById('link-to-login');
     const modalClose = document.getElementById('modal-close');
+    let selectedSignupPlan = 'growth_trial';
 
     function showAlert(msg) { authAlertText.textContent = msg; authAlert.style.display = 'flex'; }
     function hideAlert() { authAlert.style.display = 'none'; }
@@ -1756,8 +1765,9 @@
       hideAlert();
     }
 
-    function openModal(tab = 'login') {
+    function openModal(tab = 'login', signupPlan = 'growth_trial') {
       panelLogin.reset(); panelSignup.reset();
+      selectedSignupPlan = signupPlan;
       authSuccess.style.display = 'none';
       activateTab(tab);
       overlay.classList.add('active');
@@ -1783,7 +1793,13 @@
 
     document.addEventListener('click', function(e) {
       const trigger = e.target.closest('[data-auth-mode]');
-      if (trigger) { e.preventDefault(); openModal(trigger.dataset.authMode === 'login' ? 'login' : 'signup'); }
+      if (trigger) {
+        e.preventDefault();
+        openModal(
+          trigger.dataset.authMode === 'login' ? 'login' : 'signup',
+          trigger.dataset.signupPlan || 'growth_trial'
+        );
+      }
     });
 
     async function submitForm(form, endpoint, payloadFn) {
@@ -1827,8 +1843,10 @@
         full_name: document.getElementById('signup-fullname').value.trim(),
         business_name: document.getElementById('signup-bizname').value.trim(),
         email: document.getElementById('signup-email').value.trim(),
+        phone_number: document.getElementById('signup-phone').value.trim(),
         password: password,
-        domain: document.getElementById('signup-domain').value.trim() || null
+        domain: document.getElementById('signup-domain').value.trim() || null,
+        selected_plan: selectedSignupPlan
       }));
     });
   </script>

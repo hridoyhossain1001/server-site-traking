@@ -1,13 +1,28 @@
 (function() {
     'use strict';
 
-    var cfg = window.buykorigw_config || {};
+    var cfg = readTrackerConfig();
     if (!cfg.ajax_url && !cfg.rest_url) return;
-    var trackingMode = cfg.tracking_mode || 'standard';
+    var trackingMode = cfg.tracking_mode || 'auto';
+    var pageContext = cfg.page_context || {};
+    var resolvedContext = '';
+    var pageInstanceId = String(Date.now()) + '_' + Math.floor(Math.random() * 1000000);
     persistMarketingParams();
     persistTikTokClickId();
     ensureFirstPartyCookies();
     initializeHybridPixels();
+    setTimeout(flushQueuedEvents, 100);
+    setTimeout(function() { syncAtcReceipts(null, 0); }, 250);
+
+    function readTrackerConfig() {
+        var node = document.getElementById('buykorigw-tracker-config');
+        if (node) {
+            try {
+                return JSON.parse(node.getAttribute('data-config') || '{}');
+            } catch (e) {}
+        }
+        return window.buykorigw_config || {};
+    }
 
     function initializeHybridPixels() {
         if (!cfg.enable_hybrid) return;
@@ -69,7 +84,58 @@
     }
 
     function isOnePageMode() {
-        return trackingMode === 'one_page';
+        if (trackingMode === 'one_page') return true;
+        if (trackingMode === 'standard') return false;
+        return resolvePageContext() === 'embedded_one_page_checkout';
+    }
+
+    function bodyHasClass(name) {
+        return !!(document.body && document.body.classList && document.body.classList.contains(name));
+    }
+
+    function hasProductDetailSurface() {
+        return !!document.querySelector(
+            'body.single-product, form.cart, .single_add_to_cart_button, [name="add-to-cart"], ' +
+            '[name="product_id"], .product_title, .summary.entry-summary, [itemtype*="schema.org/Product"]'
+        );
+    }
+
+    function hasProductListSurface() {
+        return !!document.querySelector(
+            '.products .product, ul.products li.product, .wc-block-grid__product, ' +
+            '.wp-block-woocommerce-product-template .product, .wp-block-woocommerce-all-products, ' +
+            '[class*="product-grid"], [data-product_id], [data-product-id], .add_to_cart_button'
+        );
+    }
+
+    function resolvePageContext() {
+        var hasEmbeddedCheckout = !!document.querySelector(
+            '.wcf-embed-checkout-form, .cartflows-checkout, .cartflows-container, ' +
+            '[data-block-name="woocommerce/checkout"], .wp-block-woocommerce-checkout, .wc-block-checkout'
+        );
+        var hasCheckout = !!pageContext.has_checkout || !!document.querySelector(
+            'form.checkout, form.woocommerce-checkout, .woocommerce-checkout, .wc-block-checkout, ' +
+            '[data-block-name="woocommerce/checkout"], #customer_details, #order_review, #place_order, ' +
+            '.wc-block-components-checkout-place-order-button, .wcf-embed-checkout-form, .cartflows-checkout, ' +
+            '.wp-block-woocommerce-checkout, .wc-block-checkout__form, form[name="checkout"]'
+        );
+        var hasProduct = !!pageContext.has_product || hasProductDetailSurface();
+        var hasProductList = !!pageContext.has_product_listing || hasProductListSurface();
+
+        if (pageContext.is_thankyou || isThankYouFlowPage()) return 'thank_you';
+        if (hasCheckout && (hasEmbeddedCheckout || hasProduct || hasProductList || !!cfg.product)) {
+            return 'embedded_one_page_checkout';
+        }
+        if (hasCheckout) return pageContext.has_checkout ? 'standard_checkout' : 'embedded_one_page_checkout';
+        if (hasProduct || pageContext.has_product) return 'native_product';
+        if (hasProductList) return 'product_listing';
+        if (pageContext.has_cart) return 'cart';
+        return 'generic_page';
+    }
+
+    function refreshResolvedContext() {
+        resolvedContext = resolvePageContext();
+        return resolvedContext;
     }
 
     function getSelectedVariationInfo() {
@@ -154,6 +220,34 @@
         return canonicalPagePath().replace(/[^a-zA-Z0-9_-]+/g, '_');
     }
 
+    function simpleHash(value) {
+        var hash = 0;
+        var input = String(value || '');
+        for (var i = 0; i < input.length; i++) {
+            hash = ((hash << 5) - hash) + input.charCodeAt(i);
+            hash |= 0;
+        }
+        return Math.abs(hash).toString(36);
+    }
+
+    function eventFingerprint(eventName, eventData) {
+        var ids = eventData && eventData.content_ids ? eventData.content_ids.join('_') : '';
+        if (eventName === 'PageView') return pageInstanceId;
+        if (eventName === 'ViewContent') return pageInstanceId + '_' + ids;
+        if (eventName === 'InitiateCheckout') {
+            return simpleHash(JSON.stringify((eventData && eventData.contents) || []) + ':' + ((eventData && eventData.value) || 0));
+        }
+        if (eventName === 'AddToCart') {
+            var revision = 1;
+            try {
+                revision = parseInt(sessionStorage.getItem('buykorigw_cart_revision') || '0', 10) + 1;
+                sessionStorage.setItem('buykorigw_cart_revision', String(revision));
+            } catch(e) {}
+            return ids + '_' + revision;
+        }
+        return pageInstanceId + '_' + Math.floor(Math.random() * 1000000);
+    }
+
     function canonicalPagePath() {
         var path = (window.location.pathname || '/').toLowerCase();
         var search = (window.location.search || '').toLowerCase();
@@ -170,8 +264,6 @@
     }
 
     function shouldSendPageView() {
-        if (isThankYouFlowPage()) return false;
-        if (cfg.page_type === 'checkout') return false;
         return true;
     }
 
@@ -199,6 +291,10 @@
             : el.querySelector('.add_to_cart_button, .single_add_to_cart_button, [data-product_id], [data-product-id]');
         if (!productId && addButton) {
             productId = addButton.getAttribute('data-product_id') || addButton.getAttribute('data-product-id') || '';
+        }
+        if (!productId && el.querySelector) {
+            var productInput = el.querySelector('[name="product_id"], [name="add-to-cart"]');
+            productId = productInput ? (productInput.value || productInput.getAttribute('value') || '') : '';
         }
         if (!productId && cfg.product && cfg.product.id) {
             productId = String(cfg.product.id);
@@ -251,6 +347,77 @@
             value: productData.price || 0,
             currency: productData.currency || 'BDT'
         };
+    }
+
+    var cartSnapshot = {};
+    (cfg.cart && cfg.cart.contents ? cfg.cart.contents : []).forEach(function(item) {
+        var id = String(item.content_id || item.id || '');
+        if (id) cartSnapshot[id] = parseInt(item.quantity || 0, 10);
+    });
+
+    function storeCartItemData(item) {
+        if (!item) return null;
+        var rawId = String(item.variation && item.variation.length && item.id ? item.id : (item.id || ''));
+        if (!rawId) return null;
+        var id = (cfg.content_id_format === 'sku' && item.sku) ? item.sku : rawId;
+        var minorUnit = item.prices && item.prices.currency_minor_unit !== undefined
+            ? parseInt(item.prices.currency_minor_unit, 10) : 2;
+        var divisor = Math.pow(10, minorUnit);
+        var price = item.prices && item.prices.price !== undefined ? parseFloat(item.prices.price) / divisor : 0;
+        return {
+            id: String(id),
+            raw_id: rawId,
+            name: item.name || '',
+            price: price || 0,
+            currency: (item.prices && item.prices.currency_code) || cfg.currency || 'BDT',
+            category: ''
+        };
+    }
+
+    function reconcileBlocksCart() {
+        if (!cfg.store_cart_url || !window.fetch) return;
+        fetch(cfg.store_cart_url, { credentials: 'same-origin' })
+            .then(function(response) { return response.ok ? response.json() : null; })
+            .then(function(cart) {
+                if (!cart || !Array.isArray(cart.items)) return;
+                var selected = null;
+                var nextSnapshot = {};
+                cart.items.forEach(function(item) {
+                    var data = storeCartItemData(item);
+                    if (!data) return;
+                    var quantity = parseInt(item.quantity || 0, 10);
+                    nextSnapshot[data.id] = quantity;
+                    if (!selected && quantity > (cartSnapshot[data.id] || 0)) selected = data;
+                });
+                cartSnapshot = nextSnapshot;
+                if (!selected) return;
+                var payload = productPayloadFromData(selected);
+                if (!payload) return;
+                payload.trigger_reason = 'wc_blocks_cart_reconcile';
+                clearCheckoutMarkers();
+                syncAtcReceipts(payload, 0);
+            }).catch(function() {});
+    }
+
+    function discoverLandingProduct() {
+        if (cfg.product && cfg.product.id) return cfg.product;
+        var surface = document.querySelector(
+            '[data-buykori-product], form.cart, .single_add_to_cart_button, ' +
+            '[name="product_id"], [name="add-to-cart"], .products .product, ul.products li.product, ' +
+            '.wc-block-grid__product, .wp-block-woocommerce-product-template .product, [data-product_id], [data-product-id]'
+        );
+        var data = getProductDataFromElement(surface);
+        if (!data || !data.raw_id) return null;
+        cfg.product = {
+            id: data.raw_id,
+            sku: data.id !== data.raw_id ? data.id : '',
+            name: data.name,
+            price: data.price,
+            currency: data.currency,
+            category: data.category,
+            source: 'dom_discovery'
+        };
+        return cfg.product;
     }
 
     // ─── First-Party Cookie Helpers ──────────────────────────────────────
@@ -315,6 +482,19 @@
         setCookieLocal('_buykorigw_ic_event_id', '', -1);
     }
 
+    var lastAddToCartIntentAt = 0;
+
+    function markAddToCartIntent() {
+        lastAddToCartIntentAt = Math.floor(Date.now() / 1000);
+        setCookieLocal('_buykorigw_atc_intent', String(Math.floor(Date.now() / 1000)), 0.0014); // About 2 minutes
+    }
+
+    function hasRecentAddToCartIntent() {
+        var timestamp = parseInt(getCookie('_buykorigw_atc_intent') || '0', 10);
+        timestamp = Math.max(timestamp, lastAddToCartIntentAt);
+        return !!timestamp && (Math.floor(Date.now() / 1000) - timestamp) <= 120;
+    }
+
     function getCookieDomain() {
         var domain = "";
         try {
@@ -377,6 +557,40 @@
     }
 
     // ─── Helper: Send event via REST API (primary) or AJAX (fallback) ────
+    var cachedDeviceContext = null;
+    function getDeviceContext() {
+        if (cachedDeviceContext) return cachedDeviceContext;
+        var ua = navigator.userAgent || '';
+        var lower = ua.toLowerCase();
+        var browser = 'Unknown';
+        if (lower.indexOf('edg/') !== -1 || lower.indexOf('edgios') !== -1) browser = 'Edge';
+        else if (lower.indexOf('opr/') !== -1 || lower.indexOf('opera') !== -1) browser = 'Opera';
+        else if (lower.indexOf('samsungbrowser') !== -1) browser = 'Samsung Internet';
+        else if (lower.indexOf('firefox') !== -1 || lower.indexOf('fxios') !== -1) browser = 'Firefox';
+        else if (lower.indexOf('crios') !== -1 || lower.indexOf('chrome') !== -1) browser = 'Chrome';
+        else if (lower.indexOf('safari') !== -1) browser = 'Safari';
+
+        var os = 'Unknown';
+        if (lower.indexOf('android') !== -1) os = 'Android';
+        else if (/iphone|ipad|ipod/.test(lower)) os = 'iOS';
+        else if (lower.indexOf('windows') !== -1) os = 'Windows';
+        else if (lower.indexOf('mac os') !== -1 || lower.indexOf('macintosh') !== -1) os = 'macOS';
+        else if (lower.indexOf('linux') !== -1) os = 'Linux';
+
+        var type = 'desktop';
+        if (lower.indexOf('ipad') !== -1 || lower.indexOf('tablet') !== -1) type = 'tablet';
+        else if (lower.indexOf('mobile') !== -1 || lower.indexOf('iphone') !== -1 || (lower.indexOf('android') !== -1 && lower.indexOf('mobile') !== -1)) type = 'mobile';
+
+        cachedDeviceContext = {
+            _bk_device_type: type,
+            _bk_device_os: os,
+            _bk_device_browser: browser,
+            _bk_screen_width: window.screen && window.screen.width ? window.screen.width : window.innerWidth,
+            _bk_screen_height: window.screen && window.screen.height ? window.screen.height : window.innerHeight
+        };
+        return cachedDeviceContext;
+    }
+
     function sendEvent(eventName, eventData, synchronous) {
         eventData = normalizeEventData(eventData || {});
 
@@ -386,14 +600,22 @@
         if (ga4SessionId) eventData['ga_session_id'] = ga4SessionId;
         if (!eventData.page_location) eventData.page_location = window.location.href;
         if (!eventData.page_path) eventData.page_path = window.location.pathname + window.location.search;
+        var deviceContext = getDeviceContext();
+        Object.keys(deviceContext).forEach(function(key) {
+            if (eventData[key] === undefined || eventData[key] === null || eventData[key] === '') {
+                eventData[key] = deviceContext[key];
+            }
+        });
 
         var eventId = '';
         if (eventName === 'InitiateCheckout') {
-            var ic_marker_id = getCookie('_buykorigw_ic_event_id');
-            eventId = ic_marker_id || ('wp_' + eventName + '_' + Math.floor(Date.now() / 1000) + '_' + Math.floor(Math.random() * 9000 + 1000));
+            // A new customer intent gets a fresh event ID. The cookie stores the
+            // latest ID only so the later order-created fallback can deduplicate
+            // against this browser event.
+            eventId = 'wp_' + eventName + '_' + eventFingerprint(eventName, eventData) + '_' + pageInstanceId;
             markInitiateCheckoutSent(eventId);
         } else {
-            eventId = 'wp_' + eventName + '_' + Math.floor(Date.now() / 1000) + '_' + Math.floor(Math.random() * 9000 + 1000);
+            eventId = 'wp_' + eventName + '_' + eventFingerprint(eventName, eventData);
         }
 
         var payload = {
@@ -412,26 +634,7 @@
             ga_session_id: ga4SessionId
         };
 
-        // Parallel Client-side Pixel Trigger (with identical eventId for perfect deduplication)
-        if (cfg.enable_hybrid && eventName !== 'Identify') {
-            var browserParams = {};
-            if (eventData.value !== undefined) browserParams.value = parseFloat(eventData.value);
-            if (eventData.currency !== undefined) browserParams.currency = eventData.currency;
-            if (eventData.content_name !== undefined) browserParams.content_name = eventData.content_name;
-            if (eventData.content_type !== undefined) browserParams.content_type = eventData.content_type;
-            if (eventData.content_ids !== undefined) browserParams.content_ids = eventData.content_ids;
-            if (eventData.contents !== undefined) browserParams.contents = eventData.contents;
-            if (eventData.num_items !== undefined) browserParams.num_items = eventData.num_items;
-
-            // 1. Meta Pixel
-            if (window.fbq && cfg.fb_pixel_id) {
-                fbq('track', eventName, browserParams, { eventID: eventId });
-            }
-            // 2. TikTok Pixel
-            if (window.ttq && cfg.tt_pixel_id) {
-                ttq.track(eventName, browserParams, { event_id: eventId });
-            }
-        }
+        triggerHybridPixel(eventName, eventData, eventId);
 
         var piiSelectors = {
             em: ['#billing_email', 'input[name="billing_email"]', 'input[type="email"]', 'input[id^="email"]', 'input[autocomplete="email"]', '#email'],
@@ -467,25 +670,160 @@
         }
 
         if (cfg.rest_url && window.fetch) {
-            var headers = {'Content-Type': 'application/json'};
-            if (cfg.rest_nonce) {
-                headers['X-WP-Nonce'] = cfg.rest_nonce;
-            }
-            fetch(cfg.rest_url, {
-                method: 'POST',
-                headers: headers,
-                body: jsonBody,
-                keepalive: true
-            }).then(function(response) {
-                if (!response || !response.ok) {
-                    sendViaAjax(eventName, eventData, eventId);
-                }
-            }).catch(function() {
-                sendViaAjax(eventName, eventData, eventId);
-            });
+            sendViaRestWithRetry(jsonBody, eventName, eventData, eventId, 0);
         } else {
             sendViaAjax(eventName, eventData, eventId);
         }
+    }
+
+    function triggerHybridPixel(eventName, eventData, eventId) {
+        if (!cfg.enable_hybrid || eventName === 'Identify') return;
+        var browserParams = {};
+        if (eventData.value !== undefined) browserParams.value = parseFloat(eventData.value);
+        if (eventData.currency !== undefined) browserParams.currency = eventData.currency;
+        if (eventData.content_name !== undefined) browserParams.content_name = eventData.content_name;
+        if (eventData.content_type !== undefined) browserParams.content_type = eventData.content_type;
+        if (eventData.content_ids !== undefined) browserParams.content_ids = eventData.content_ids;
+        if (eventData.contents !== undefined) browserParams.contents = eventData.contents;
+        if (eventData.num_items !== undefined) browserParams.num_items = eventData.num_items;
+
+        if (window.fbq && cfg.fb_pixel_id) {
+            fbq('track', eventName, browserParams, { eventID: eventId });
+        }
+        if (window.ttq && cfg.tt_pixel_id) {
+            ttq.track(eventName, browserParams, { event_id: eventId });
+        }
+    }
+
+    function acknowledgeAtcReceipts(eventIds) {
+        if (!cfg.atc_receipts_url || !window.fetch || !eventIds.length) return;
+        fetch(cfg.atc_receipts_url, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ event_ids: eventIds }),
+            keepalive: true
+        }).catch(function() {});
+    }
+
+    var atcReceiptSyncInFlight = false;
+    function syncAtcReceipts(fallbackPayload, attempt) {
+        attempt = attempt || 0;
+        if (!cfg.atc_receipts_url || !window.fetch) {
+            if (fallbackPayload) sendEvent('AddToCart', fallbackPayload);
+            return;
+        }
+        if (atcReceiptSyncInFlight) {
+            if (fallbackPayload && attempt < 2) {
+                setTimeout(function() { syncAtcReceipts(fallbackPayload, attempt + 1); }, 350);
+            }
+            return;
+        }
+        atcReceiptSyncInFlight = true;
+        fetch(cfg.atc_receipts_url, { credentials: 'same-origin' })
+            .then(function(response) { return response.ok ? response.json() : null; })
+            .then(function(data) {
+                atcReceiptSyncInFlight = false;
+                var receipts = data && Array.isArray(data.receipts) ? data.receipts : [];
+                if (receipts.length) {
+                    var ids = [];
+                    receipts.forEach(function(receipt) {
+                        if (!receipt || !receipt.event_id || !receipt.event_data) return;
+                        ids.push(receipt.event_id);
+                        clearCheckoutMarkers();
+                        triggerHybridPixel('AddToCart', normalizeEventData(receipt.event_data), receipt.event_id);
+                    });
+                    acknowledgeAtcReceipts(ids);
+                    return;
+                }
+                if (fallbackPayload && attempt < 2) {
+                    setTimeout(function() { syncAtcReceipts(fallbackPayload, attempt + 1); }, (attempt + 1) * 450);
+                } else if (fallbackPayload) {
+                    sendEvent('AddToCart', fallbackPayload);
+                }
+            }).catch(function() {
+                atcReceiptSyncInFlight = false;
+                if (fallbackPayload && attempt < 2) {
+                    setTimeout(function() { syncAtcReceipts(fallbackPayload, attempt + 1); }, (attempt + 1) * 450);
+                } else if (fallbackPayload) {
+                    sendEvent('AddToCart', fallbackPayload);
+                }
+            });
+    }
+
+    function sendViaRestWithRetry(jsonBody, eventName, eventData, eventId, attempt) {
+        queueRestEvent(jsonBody);
+        var headers = {'Content-Type': 'application/json'};
+        if (cfg.rest_nonce) headers['X-WP-Nonce'] = cfg.rest_nonce;
+        fetch(cfg.rest_url, {
+            method: 'POST',
+            headers: headers,
+            body: jsonBody,
+            keepalive: true
+        }).then(function(response) {
+            if (response && response.ok) {
+                removeQueuedEvent(eventId);
+                return;
+            }
+            if (attempt < 2) {
+                setTimeout(function() {
+                    sendViaRestWithRetry(jsonBody, eventName, eventData, eventId, attempt + 1);
+                }, (attempt + 1) * 700);
+                return;
+            }
+            sendViaAjax(eventName, eventData, eventId);
+        }).catch(function() {
+            if (attempt < 2) {
+                setTimeout(function() {
+                    sendViaRestWithRetry(jsonBody, eventName, eventData, eventId, attempt + 1);
+                }, (attempt + 1) * 700);
+                return;
+            }
+            sendViaAjax(eventName, eventData, eventId);
+        });
+    }
+
+    function getQueuedEvents() {
+        try {
+            return JSON.parse(localStorage.getItem('buykorigw_event_queue') || '[]');
+        } catch(e) {
+            return [];
+        }
+    }
+
+    function queueRestEvent(jsonBody) {
+        try {
+            var payload = JSON.parse(jsonBody);
+            if (!payload || !payload.event_id) return;
+            var queue = getQueuedEvents().filter(function(item) {
+                return item && item.event_id !== payload.event_id;
+            });
+            queue.push({ event_id: payload.event_id, body: jsonBody, queued_at: Date.now() });
+            localStorage.setItem('buykorigw_event_queue', JSON.stringify(queue.slice(-20)));
+        } catch(e) {}
+    }
+
+    function removeQueuedEvent(eventId) {
+        try {
+            var queue = getQueuedEvents().filter(function(item) {
+                return item && item.event_id !== eventId;
+            });
+            localStorage.setItem('buykorigw_event_queue', JSON.stringify(queue));
+        } catch(e) {}
+    }
+
+    function flushQueuedEvents() {
+        if (!cfg.rest_url || !window.fetch) return;
+        getQueuedEvents().forEach(function(item) {
+            if (!item || !item.body || !item.event_id) return;
+            if (item.queued_at && Date.now() - item.queued_at > 24 * 60 * 60 * 1000) {
+                removeQueuedEvent(item.event_id);
+                return;
+            }
+            var payload;
+            try { payload = JSON.parse(item.body); } catch(e) { return; }
+            sendViaRestWithRetry(item.body, payload.event_name || '', payload.event_data || {}, item.event_id, 0);
+        });
     }
 
     function buildAjaxFormData(eventName, eventData, eventId) {
@@ -615,7 +953,7 @@
 
     function hasStrongCustomerData() {
         var data = getCustomerData();
-        return !!(data.em && data.ph);
+        return !!normalizeRecoveryPhone(data.ph || '');
     }
 
     function appendCustomerData(formData) {
@@ -628,6 +966,15 @@
     function getQueryParam(name) {
         try {
             return new URLSearchParams(window.location.search).get(name) || '';
+        } catch(e) {
+            return '';
+        }
+    }
+
+    function getQueryParamFromUrl(url, name) {
+        if (!url) return '';
+        try {
+            return new URL(url, window.location.href).searchParams.get(name) || '';
         } catch(e) {
             return '';
         }
@@ -700,13 +1047,16 @@
     }
 
     // ─── 1. PageView ───────────────────────────────────────────────────
-    if (cfg.events && cfg.events.pageview && shouldSendPageView() && eventOnce('PageView:' + currentPathKey(), 600)) {
+    if (cfg.events && cfg.events.pageview && shouldSendPageView()) {
         sendEvent('PageView', {});
     }
 
     // ─── 2. ViewContent (Product Page) ─────────────────────────────────
     function sendViewContentOnce() {
-        if (!cfg.events || !cfg.events.viewcontent || cfg.page_type !== 'product' || !cfg.product) return;
+        refreshResolvedContext();
+        if (!cfg.events || !cfg.events.viewcontent) return;
+        if (resolvedContext !== 'native_product' && resolvedContext !== 'embedded_one_page_checkout') return;
+        if (!discoverLandingProduct()) return;
         if (!eventOnce('ViewContent:' + String(cfg.product.id || '') + ':' + currentPathKey(), 1800)) return;
 
         var contentIdFormat = cfg.content_id_format || 'id';
@@ -748,8 +1098,9 @@
         });
     }
 
-    if (cfg.events && cfg.events.viewcontent && cfg.page_type === 'product' && cfg.product) {
-        if (isOnePageMode() && typeof IntersectionObserver !== 'undefined') {
+    refreshResolvedContext();
+    if (cfg.events && cfg.events.viewcontent && (cfg.product || discoverLandingProduct())) {
+        if (typeof IntersectionObserver !== 'undefined') {
             var productSurface = document.querySelector('.product, .summary, form.cart, [data-product_id]');
             if (productSurface) {
                 var productViewTimer = null;
@@ -767,7 +1118,7 @@
                     });
                 }, { threshold: [0, 0.5, 0.75] });
                 viewObserver.observe(productSurface);
-            } else {
+            } else if (!isOnePageMode()) {
                 setTimeout(sendViewContentOnce, 1200);
             }
         } else {
@@ -827,6 +1178,10 @@
             '[data-buykori-product]',
             '[data-product_id]',
             '[data-product-id]',
+            'form.cart',
+            '.single_add_to_cart_button',
+            '.woocommerce-checkout-review-order-table',
+            '.wc-block-components-order-summary',
             '.products .product',
             '.wc-block-grid__product',
             '.wp-block-woocommerce-product-template .product'
@@ -863,18 +1218,52 @@
     }
 
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', observeLandingProductCards);
+        document.addEventListener('DOMContentLoaded', function() {
+            refreshResolvedContext();
+            observeLandingProductCards();
+            sendViewContentOnce();
+        });
     } else {
         observeLandingProductCards();
+        sendViewContentOnce();
+    }
+
+    if (typeof MutationObserver !== 'undefined') {
+        var smartContextTimer;
+        var smartContextObserver = new MutationObserver(function() {
+            clearTimeout(smartContextTimer);
+            smartContextTimer = setTimeout(function() {
+                var previousContext = resolvedContext;
+                refreshResolvedContext();
+                if (resolvedContext !== previousContext || resolvedContext === 'embedded_one_page_checkout') {
+                    observeLandingProductCards();
+                }
+            }, 350);
+        });
+        smartContextObserver.observe(document.body || document.documentElement, { childList: true, subtree: true });
     }
 
     // ─── 3. AddToCart ──────────────────────────────────────────────────
     if (cfg.events && cfg.events.addtocart) {
         var addToCartFiredViaAjax = false;
 
+        // Mark real user intent before WooCommerce or a landing builder starts
+        // its cart request. Automatic cart hydration must not count as AddToCart.
+        document.addEventListener('click', function(e) {
+            if (!e.isTrusted) return;
+            var btn = e.target.closest(
+                '.add_to_cart_button, .single_add_to_cart_button, [name="add-to-cart"], ' +
+                '[data-buykori-addtocart], [data-buykori-atc], .buykorigw-addtocart-intent, ' +
+                '.wc-block-components-product-button__button, a[href*="add-to-cart="], ' +
+                'button[value][name="add-to-cart"], input[value][name="add-to-cart"]'
+            );
+            if (btn) markAddToCartIntent();
+        }, true);
+
         // jQuery AJAX event — most reliable (fires AFTER WooCommerce confirms add)
         if (typeof jQuery !== 'undefined') {
             jQuery(document.body).on('added_to_cart', function(e, fragments, hash, $btn) {
+                if (!hasRecentAddToCartIntent()) return;
                 addToCartFiredViaAjax = true;
                 var pid = ($btn ? $btn.attr('data-product_id') : '') || '';
                 var pname = ($btn ? $btn.attr('data-product_name') : '') || '';
@@ -936,20 +1325,30 @@
 
                 if (!eventOnce('AddToCart:' + String(pid) + ':' + currentPathKey(), 2)) return;
                 clearCheckoutMarkers();
-                sendEvent('AddToCart', {
+                syncAtcReceipts({
                     content_ids: [String(pid)],
                     contents: [item],
                     content_name: pname || (cfg.product ? cfg.product.name : ''),
                     content_type: 'product',
                     value: pprice,
                     currency: (cfg.product ? cfg.product.currency : 'BDT')
-                });
+                }, 0);
             });
         }
 
+        document.body.addEventListener('wc-blocks_added_to_cart', function() {
+            if (!hasRecentAddToCartIntent()) return;
+            addToCartFiredViaAjax = true;
+            syncAtcReceipts(null, 0);
+            reconcileBlocksCart();
+        });
+
         // Click fallback 
         document.addEventListener('click', function(e) {
-            var btn = e.target.closest('.add_to_cart_button, .single_add_to_cart_button');
+            var btn = e.target.closest(
+                '.add_to_cart_button, .single_add_to_cart_button, [name="add-to-cart"], ' +
+                '.wc-block-components-product-button__button, a[href*="add-to-cart="]'
+            );
             if (!btn) return;
 
             // AJAX-enabled button
@@ -978,7 +1377,11 @@
                 productPrice = cfg.product.price;
                 productName = cfg.product.name;
             } else {
-                var pid = btn.getAttribute('data-product_id') || '';
+                var pid = btn.getAttribute('data-product_id') ||
+                    btn.getAttribute('data-product-id') ||
+                    btn.getAttribute('value') ||
+                    getQueryParamFromUrl(btn.getAttribute('href') || '', 'add-to-cart') ||
+                    '';
                 productId = pid;
                 if (cfg.content_id_format === 'sku' && btn.getAttribute('data-product_sku')) {
                     productId = btn.getAttribute('data-product_sku');
@@ -1005,15 +1408,9 @@
 
             if (!eventOnce('AddToCart:' + String(productId) + ':' + currentPathKey(), 2)) return;
             clearCheckoutMarkers();
-            sendEvent('AddToCart', {
-                content_ids: [String(productId)],
-                contents: [item],
-                content_name: productName,
-                content_type: 'product',
-                content_category: (cfg.product ? cfg.product.category : '') || '',
-                value: productPrice,
-                currency: cfg.product ? cfg.product.currency : 'BDT'
-            });
+            // A normal form submission navigates away before success is known.
+            // The server receipt is consumed after the response or next page load.
+            setTimeout(function() { syncAtcReceipts(null, 0); }, 700);
         });
 
         document.addEventListener('click', function(e) {
@@ -1029,7 +1426,7 @@
             var payload = productPayloadFromData(data);
             if (payload) {
                 payload.trigger_reason = 'landing_cta_click';
-                sendEvent('AddToCart', payload);
+                syncAtcReceipts(payload, 0);
             }
         }, true);
     }
@@ -1081,6 +1478,59 @@
         };
     }
 
+    function normalizeRecoveryPhone(phone) {
+        var digits = String(phone || '').replace(/[^0-9]/g, '');
+        if (digits.length === 11 && digits.indexOf('01') === 0) return '88' + digits;
+        if (digits.length === 10 && digits.indexOf('1') === 0) return '880' + digits;
+        if (digits.length === 13 && digits.indexOf('8801') === 0) return digits;
+        return '';
+    }
+
+    var incompleteCheckoutTimer = null;
+    function scheduleIncompleteCheckoutCapture() {
+        if (!cfg.incomplete_checkout_url || !window.fetch || isThankYouFlowPage()) return;
+        clearTimeout(incompleteCheckoutTimer);
+        incompleteCheckoutTimer = setTimeout(captureIncompleteCheckout, 1200);
+    }
+
+    function captureIncompleteCheckout() {
+        var customer = getCustomerData();
+        var phone = normalizeRecoveryPhone(customer.ph || '');
+        if (!phone) return;
+        var checkout = checkoutPayload('incomplete_checkout_capture');
+        var campaignData = {};
+        ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term'].forEach(function(key) {
+            var value = getQueryParam(key);
+            if (value) campaignData[key] = value;
+        });
+        var addressParts = [
+            getFieldValue(['#billing_address_1', 'input[name="billing_address_1"]']),
+            getFieldValue(['#billing_address_2', 'input[name="billing_address_2"]']),
+            getFieldValue(['#billing_city', 'input[name="billing_city"]']),
+            getFieldValue(['#billing_state', 'select[name="billing_state"], input[name="billing_state"]'])
+        ].filter(Boolean);
+        fetch(cfg.incomplete_checkout_url, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-WP-Nonce': cfg.rest_nonce || ''
+            },
+            body: JSON.stringify({
+                visitor_id: getExternalId(),
+                phone: phone,
+                customer_name: [customer.fn || '', customer.ln || ''].join(' ').trim(),
+                email: customer.em || '',
+                address: addressParts.join(', '),
+                products: checkout.contents || [],
+                amount: checkout.value || 0,
+                currency: checkout.currency || 'BDT',
+                page_url: window.location.href,
+                campaign_data: campaignData
+            })
+        }).catch(function() {});
+    }
+
     var initiateCheckoutSent = false;
     function sendInitiateCheckoutOnce(reason, synchronous) {
         if (!cfg.events || !cfg.events.checkout) return;
@@ -1125,7 +1575,7 @@
 
     function hasCheckoutSurface() {
         return !!(
-            document.querySelector('form.checkout, form.woocommerce-checkout, .woocommerce-checkout, .wc-block-checkout, #customer_details, #order_review, #place_order')
+            document.querySelector('body.woocommerce-checkout, form.checkout, form.woocommerce-checkout, form[name="checkout"], .woocommerce-checkout, .wc-block-checkout, #customer_details, #order_review, #place_order, .wcf-embed-checkout-form, .cartflows-checkout, [data-block-name="woocommerce/checkout"], .wp-block-woocommerce-checkout, .wc-block-checkout__form')
             || document.querySelector('#billing_email, #billing_phone, input[name="billing_email"], input[name="billing_phone"]')
         );
     }
@@ -1148,46 +1598,45 @@
             '.woocommerce-checkout input',
             '.woocommerce-checkout select',
             '.wc-block-checkout input',
-            '.wc-block-checkout select'
+            '.wc-block-checkout select',
+            '.wcf-embed-checkout-form input',
+            '.wcf-embed-checkout-form select',
+            '.cartflows-checkout input',
+            '.cartflows-checkout select'
         ].join(', ');
 
         function maybeFireFromField(e) {
+            if (!e.isTrusted) return;
             var target = e.target;
             if (!target || !target.matches || !target.matches(intentSelector)) return;
             if (target.type === 'hidden' || target.type === 'checkbox' || target.type === 'radio') return;
-            sendInitiateCheckoutWhenReady('checkout_field_input', hasCheckoutCartData());
+            sendInitiateCheckoutWhenReady('checkout_field_input', false);
+            scheduleIncompleteCheckoutCapture();
         }
 
         document.addEventListener('input', maybeFireFromField, true);
         document.addEventListener('change', maybeFireFromField, true);
-        document.addEventListener('focusin', maybeFireFromField, true);
         document.addEventListener('click', function(e) {
+            if (!e.isTrusted) return;
             if (e.target.closest('#place_order, .wc-block-components-checkout-place-order-button, [name="woocommerce_checkout_place_order"]')) {
                 sendInitiateCheckoutWhenReady('place_order_click', true, true);
             }
-            if (e.target.closest('.checkout-button, .wc-forward[href*="checkout"], a[href*="checkout"], [data-buykori-checkout], [data-buykori-checkout-intent], .buykorigw-checkout-intent, .wcf-next-button, .wcf-submit-coupon, .wcf-embed-checkout-form button[type="submit"]')) {
+            if (e.target.closest('.checkout-button, .wc-forward[href*="checkout"], a[href*="checkout"], [data-buykori-checkout], [data-buykori-checkout-intent], .buykorigw-checkout-intent, .wcf-next-button, .wcf-embed-checkout-form button[type="submit"]')) {
                 sendInitiateCheckoutWhenReady('checkout_button_click', hasCheckoutCartData(), true);
             }
         }, true);
         document.addEventListener('submit', function(e) {
+            if (!e.isTrusted) return;
             if (e.target.matches('form.checkout, form.woocommerce-checkout, .woocommerce-checkout form')) {
                 sendInitiateCheckoutWhenReady('checkout_submit', true, true);
             }
         }, true);
 
-        if (window.jQuery && window.jQuery(document.body).on) {
-            window.jQuery(document.body).on('init_checkout updated_checkout checkout_place_order', function(e) {
-                if (isOnePageMode() && (!e || e.type !== 'checkout_place_order')) return;
-                sendInitiateCheckoutWhenReady(e && e.type ? e.type : 'woocommerce_checkout_event', true);
-            });
-        }
-
         function validateEmail(email) {
             return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
         }
         function validatePhone(phone) {
-            var clean = String(phone).replace(/[^0-9]/g, '');
-            return clean.length >= 8;
+            return !!normalizeRecoveryPhone(phone);
         }
 
         document.addEventListener('blur', function(e) {
@@ -1201,6 +1650,7 @@
                     sendEvent('Identify', { em: val });
                 } else if (isPhone && validatePhone(val)) {
                     sendEvent('Identify', { ph: val });
+                    scheduleIncompleteCheckoutCapture();
                 }
             }
         }, true);
@@ -1208,24 +1658,24 @@
 
     function isCheckoutFlowPage() {
         if (isThankYouFlowPage()) return false;
-        if (cfg.page_type === 'checkout') return true;
+        if (cfg.page_type === 'checkout' || !!pageContext.has_checkout || bodyHasClass('woocommerce-checkout')) return true;
         var path = (window.location && window.location.pathname ? window.location.pathname : '').toLowerCase();
-        if (path.indexOf('checkout') !== -1 && !path.match(/order-received|order-pay|thank-you/)) return true;
+        if (path.match(/checkout|checkouts|order-pay/) && !path.match(/order-received|thank-you/)) return true;
         return hasCheckoutSurface();
     }
 
     if (cfg.events && cfg.events.checkout) {
         bindCheckoutIntentTracking();
-        if (!isOnePageMode()) scheduleCheckoutSurfaceChecks('checkout');
+        scheduleCheckoutSurfaceChecks('checkout');
 
         document.addEventListener('DOMContentLoaded', function() {
             bindCheckoutIntentTracking();
-            if (!isOnePageMode()) scheduleCheckoutSurfaceChecks('checkout');
+            scheduleCheckoutSurfaceChecks('checkout_dom_ready');
         });
 
         setTimeout(function() {
             bindCheckoutIntentTracking();
-            if (!isOnePageMode()) scheduleCheckoutSurfaceChecks('checkout');
+            scheduleCheckoutSurfaceChecks('checkout_late_bind');
         }, 1200);
 
         if (typeof MutationObserver !== 'undefined') {
@@ -1239,7 +1689,6 @@
                 checkoutObserverTimeout = setTimeout(function() {
                     if (isCheckoutFlowPage()) {
                         bindCheckoutIntentTracking();
-                        if (!isOnePageMode()) sendInitiateCheckoutOnSurface('checkout_surface_ready');
                         if (initiateCheckoutSent && checkoutIntentBound) {
                             checkoutObserver.disconnect();
                         }
@@ -1306,11 +1755,52 @@
     }
 
     // ─── 7. AddPaymentInfo ─────────────────────────────────────────────
-    if (cfg.events && cfg.events.addpaymentinfo && cfg.page_type === 'checkout') {
+    if (cfg.events && cfg.events.addpaymentinfo && isCheckoutFlowPage()) {
         var paymentFired = false;
+        var lastPaymentIntentAt = 0;
+        var paymentIntentWindowMs = 3000;
 
-        function fireAddPaymentInfo(method) {
+        function getPaymentControl(target) {
+            if (!target || !target.closest) return null;
+
+            var control = target.closest(
+                'input[name="payment_method"], ' +
+                'input[name="radio-control-wc-payment-method-options"], ' +
+                '.wc-block-components-radio-control__input'
+            );
+            if (control) return control;
+
+            var label = target.closest('label[for]');
+            if (label) {
+                var labelledControl = document.getElementById(label.getAttribute('for'));
+                if (labelledControl && labelledControl.matches && labelledControl.matches(
+                    'input[name="payment_method"], input[name="radio-control-wc-payment-method-options"], .wc-block-components-radio-control__input'
+                )) {
+                    return labelledControl;
+                }
+            }
+
+            var option = target.closest('.wc-block-components-radio-control__option');
+            if (option) {
+                return option.querySelector(
+                    'input[name="payment_method"], input[name="radio-control-wc-payment-method-options"], .wc-block-components-radio-control__input'
+                );
+            }
+
+            return null;
+        }
+
+        function markPaymentIntent() {
+            lastPaymentIntentAt = Date.now();
+        }
+
+        function hasRecentPaymentIntent() {
+            return Date.now() - lastPaymentIntentAt <= paymentIntentWindowMs;
+        }
+
+        function fireAddPaymentInfo(method, reason) {
             if (paymentFired) return;
+            if (!eventOnce('AddPaymentInfo:' + currentPathKey(), 1800)) return;
             paymentFired = true;
             var paymentData = cfg.cart || {};
             sendEvent('AddPaymentInfo', {
@@ -1320,35 +1810,40 @@
                 content_type: 'product',
                 value: paymentData.value || 0,
                 currency: paymentData.currency || 'BDT',
-                num_items: paymentData.num_items || 0
+                num_items: paymentData.num_items || 0,
+                trigger_reason: reason || 'payment_method_intent'
             });
         }
 
-        document.addEventListener('change', function(e) {
-            if (e.target.name === 'payment_method') {
-                fireAddPaymentInfo(e.target.value);
-            }
-        });
+        function handlePaymentIntent(e) {
+            if (!e.isTrusted) return;
+            var control = getPaymentControl(e.target);
+            if (!control) return;
+            markPaymentIntent();
+            fireAddPaymentInfo(control.value || '', e.type === 'change' ? 'payment_method_change' : 'payment_method_click');
+        }
+
+        document.addEventListener('click', handlePaymentIntent, true);
+        document.addEventListener('change', handlePaymentIntent, true);
+        document.addEventListener('keydown', function(e) {
+            if (!e.isTrusted) return;
+            if (e.key !== 'Enter' && e.key !== ' ') return;
+            var control = getPaymentControl(e.target);
+            if (!control) return;
+            markPaymentIntent();
+            fireAddPaymentInfo(control.value || '', 'payment_method_keyboard');
+        }, true);
 
         if (typeof jQuery !== 'undefined') {
             jQuery(document.body).on('payment_method_selected', function() {
-                var sel = document.querySelector('.wc-block-components-radio-control__input:checked');
-                fireAddPaymentInfo(sel ? sel.value : '');
-            });
-        }
-
-        if (typeof MutationObserver !== 'undefined') {
-            var payObserver = new MutationObserver(function() {
-                var checked = document.querySelector(
+                if (!hasRecentPaymentIntent()) return;
+                var sel = document.querySelector(
+                    'input[name="payment_method"]:checked, ' +
                     '.wc-block-components-radio-control__input:checked, ' +
                     'input[name="radio-control-wc-payment-method-options"]:checked'
                 );
-                if (checked) fireAddPaymentInfo(checked.value);
+                fireAddPaymentInfo(sel ? sel.value : '', 'payment_method_selected');
             });
-            var payContainer = document.querySelector('.wc-block-checkout, #payment');
-            if (payContainer) {
-                payObserver.observe(payContainer, { subtree: true, attributes: true, childList: true });
-            }
         }
     }
 

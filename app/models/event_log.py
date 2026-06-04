@@ -16,6 +16,16 @@ class EventLog(Base):
     fb_response = Column(Text, nullable=True)                # Facebook-এর response JSON
     error_message = Column(Text, nullable=True)              # Error হলে message
     ip_address = Column(String, nullable=True)               # রিকোয়েস্টের IP
+    visitor_key = Column(String(80), nullable=True, index=True)
+    geo_country = Column(String(8), nullable=True, index=True)
+    geo_region = Column(String(80), nullable=True)
+    geo_city = Column(String(80), nullable=True)
+    geo_district = Column(String(80), nullable=True)
+    device_type = Column(String(24), nullable=True)
+    device_os = Column(String(40), nullable=True)
+    device_browser = Column(String(40), nullable=True)
+    screen_width = Column(Integer, nullable=True)
+    screen_height = Column(Integer, nullable=True)
     emq_score = Column(Float, nullable=True)                 # Event Match Quality Score (0-10)
     value = Column(Float, nullable=True)
     currency = Column(String, nullable=True)
@@ -40,4 +50,7 @@ class EventLog(Base):
     __table_args__ = (
         Index("ix_event_logs_analytics", "client_id", "event_name", "created_at"),
         Index("ix_event_logs_campaign", "client_id", "utm_source", "utm_campaign", "created_at"),
+        Index("ix_event_logs_geo_district", "client_id", "geo_district", "created_at"),
+        Index("ix_event_logs_visitor_funnel", "client_id", "geo_district", "event_name", "visitor_key", "created_at"),
+        Index("ix_event_logs_device_type", "client_id", "device_type", "created_at"),
     )

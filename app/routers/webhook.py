@@ -39,6 +39,33 @@ router = APIRouter()
 REQUIRE_WC_WEBHOOK_SIGNATURE = os.getenv("REQUIRE_WC_WEBHOOK_SIGNATURE", "true").lower() in ("1", "true", "yes")
 
 
+def _bearer_token(request: Request) -> str:
+    authorization = request.headers.get("authorization") or ""
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() == "bearer" and token:
+        return token.strip()
+    return ""
+
+
+def _client_api_key_from_request(request: Request, *, provider: str) -> str:
+    api_key = (
+        request.headers.get("x-api-key")
+        or request.headers.get("x-buykori-api-key")
+        or _bearer_token(request)
+        or ""
+    ).strip()
+    if api_key:
+        return api_key
+
+    legacy_key = (request.query_params.get("key") or "").strip()
+    if legacy_key:
+        logger.warning(
+            "%s webhook authenticated with legacy query key. Move the secret to X-API-Key or Authorization header.",
+            provider,
+        )
+    return legacy_key
+
+
 def _verify_wc_signature(raw_body: bytes, signature: str, secret: str) -> bool:
     """Verify WooCommerce X-WC-Webhook-Signature (base64 HMAC-SHA256)."""
     if not signature or not secret:
@@ -151,7 +178,7 @@ async def woocommerce_webhook(
                 and_(
                     PendingEvent.client_id == client.id,
                     PendingEvent.order_id.in_(possible_ids),
-                    PendingEvent.status.in_(["confirmed", "courier_booked"]),
+                    PendingEvent.status.in_(["confirmed", "courier_booking_queued", "courier_booked"]),
                 )
             )
         )
@@ -166,12 +193,16 @@ async def woocommerce_webhook(
             "message": f"No pending Purchase event found for order #{order_id}",
         }
 
+    if pending.portal_state == "operations_only":
+        return {
+            "status": "ignored",
+            "order_id": str(order_id),
+            "message": "Purchase event was already queued. Order remains available for manual courier booking.",
+        }
+
     booking = await _auto_book_courier_for_pending(client.id, pending, db)
-    if booking["mode"] in {"booked", "already_booked"}:
-        pending.status = "courier_booked"
-        pending.portal_state = "processing"
-        pending.is_confirmed = True
-        message = "Order booked with courier. Purchase event will fire after delivery."
+    if booking["mode"] in {"queued", "already_booked"}:
+        message = booking["message"]
     elif booking["mode"] == "not_configured":
         try:
             await _queue_confirmed_event(client, pending, db)
@@ -183,7 +214,7 @@ async def woocommerce_webhook(
             logger.error(f"[{client.name}] Webhook confirm queue failed (order #{order_id}): {e}")
             raise HTTPException(
                 status_code=500,
-                detail=f"Purchase event queue failed: {e}",
+                detail="Purchase event queue failed.",
             ) from None
         pending.status = "confirmed"
         pending.portal_state = "confirmed"
@@ -201,7 +232,7 @@ async def woocommerce_webhook(
         logger.error(f"[{client.name}] WooCommerce webhook commit failed (order #{order_id}): {e}")
         raise HTTPException(
             status_code=500,
-            detail=f"Database commit failed: {e}",
+            detail="Webhook confirmation could not be saved.",
         )
 
     logger.info(f"[{client.name}] Webhook confirmed order #{order_id}: {message}")
@@ -229,7 +260,7 @@ async def shopify_webhook(
     Header: X-Shopify-Topic: orders/create or orders/paid
     """
     # ─── API Key Authentication ───────────────────────────────────────
-    api_key = request.query_params.get("key") or request.headers.get("x-api-key", "")
+    api_key = _client_api_key_from_request(request, provider="Shopify")
     if not api_key:
         raise HTTPException(status_code=401, detail="API Key missing")
 
@@ -285,7 +316,7 @@ async def shopify_webhook(
                 and_(
                     PendingEvent.client_id == client.id,
                     PendingEvent.order_id.in_(possible_ids),
-                    PendingEvent.status.in_(["confirmed", "courier_booked"]),
+                    PendingEvent.status.in_(["confirmed", "courier_booking_queued", "courier_booked"]),
                 )
             )
         )
@@ -297,13 +328,16 @@ async def shopify_webhook(
             }
 
     if pending:
+        if pending.portal_state == "operations_only":
+            return {
+                "status": "ignored",
+                "order_id": str(order_id),
+                "message": "Purchase event was already queued. Order remains available for manual courier booking.",
+            }
         # Confirm pending event
         booking = await _auto_book_courier_for_pending(client.id, pending, db)
-        if booking["mode"] in {"booked", "already_booked"}:
-            pending.status = "courier_booked"
-            pending.portal_state = "processing"
-            pending.is_confirmed = True
-            message = "Order booked with courier. Purchase event will fire after delivery."
+        if booking["mode"] in {"queued", "already_booked"}:
+            message = booking["message"]
         elif booking["mode"] == "not_configured":
             try:
                 await _queue_confirmed_event(client, pending, db)
@@ -315,7 +349,7 @@ async def shopify_webhook(
                 logger.error(f"[{client.name}] Shopify confirm queue failed (order #{order_id}): {e}")
                 raise HTTPException(
                     status_code=500,
-                    detail=f"Purchase event queue failed: {e}",
+                    detail="Purchase event queue failed.",
                 ) from None
             pending.status = "confirmed"
             pending.portal_state = "confirmed"
@@ -333,7 +367,7 @@ async def shopify_webhook(
             logger.error(f"[{client.name}] Shopify webhook commit failed (order #{order_id}): {e}")
             raise HTTPException(
                 status_code=500,
-                detail=f"Database commit failed: {e}",
+                detail="Webhook confirmation could not be saved.",
             )
         return {
             "status": "success",

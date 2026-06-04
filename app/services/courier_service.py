@@ -1,4 +1,5 @@
 import logging
+import os
 import re
 import time
 from typing import Dict, Any, Optional, Tuple
@@ -6,7 +7,8 @@ from app.services.capi_service import get_http_client
 
 logger = logging.getLogger(__name__)
 
-PATHAO_BASE_URL = "https://api-hermes.pathao.com"
+PATHAO_BASE_URL = os.getenv("PATHAO_BASE_URL", "https://api-hermes.pathao.com").rstrip("/")
+PATHAO_SANDBOX_BASE_URL = "https://courier-api-sandbox.pathao.com"
 STEADFAST_BASE_URL = "https://portal.packzy.com"
 REDX_BASE_URL = "https://openapi.redx.com.bd/v1.0.0-beta"
 
@@ -107,6 +109,16 @@ class CourierServiceException(Exception):
 class CourierService:
 
     @staticmethod
+    def pathao_base_url(environment: str | None = None) -> str:
+        if str(environment or "").strip().lower() == "sandbox":
+            return PATHAO_SANDBOX_BASE_URL
+        return PATHAO_BASE_URL
+
+    @staticmethod
+    def pathao_is_sandbox(base_url: str) -> bool:
+        return base_url.rstrip("/") == PATHAO_SANDBOX_BASE_URL.rstrip("/")
+
+    @staticmethod
     def normalize_bd_phone(phone: str) -> str:
         """Normalize Bangladeshi phone numbers to Pathao's local 01XXXXXXXXX format."""
         digits = re.sub(r"\D+", "", str(phone or ""))
@@ -122,10 +134,12 @@ class CourierService:
 
     @staticmethod
     async def get_pathao_token(
-        client_id: str, client_secret: str, store_owner_email: str, password: str
+        client_id: str, client_secret: str, store_owner_email: str, password: str,
+        base_url: str | None = None,
     ) -> Optional[str]:
         """Pathao API Token সংগ্রহ করার জন্য OAuth2 Call। 50-minute TTL cache সহ।"""
-        cache_key = f"{client_id}:{store_owner_email}"
+        base_url = CourierService.pathao_base_url() if not base_url else base_url.rstrip("/")
+        cache_key = f"{base_url}:{client_id}:{store_owner_email}"
         now = time.monotonic()
 
         if cache_key in _pathao_token_cache:
@@ -133,7 +147,7 @@ class CourierService:
             if now < expires_at:
                 return cached_token
 
-        url = f"{PATHAO_BASE_URL}/aladdin/api/v1/issue-token"
+        url = f"{base_url}/aladdin/api/v1/issue-token"
         payload = {
             "client_id": client_id,
             "client_secret": client_secret,
@@ -165,7 +179,7 @@ class CourierService:
     # ─── Pathao Location APIs (City / Zone / Area) ────────────────────────────
 
     @staticmethod
-    async def _get_pathao_cities(token: str) -> list:
+    async def _get_pathao_cities(token: str, base_url: str | None = None) -> list:
         """
         Pathao-র সব City (= District) fetch করে। 6-ঘণ্টা TTL cache-এ রাখে।
         Return: [{"city_id": 1, "city_name": "Dhaka"}, ...]
@@ -177,7 +191,9 @@ class CourierService:
             if now < expires_at:
                 return cities
 
-        url = f"{PATHAO_BASE_URL}/aladdin/api/v1/countries/city-list"
+        base_url = CourierService.pathao_base_url() if not base_url else base_url.rstrip("/")
+        city_list_path = "countries/1/city-list" if CourierService.pathao_is_sandbox(base_url) else "city-list"
+        url = f"{base_url}/aladdin/api/v1/{city_list_path}"
         headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
         http = await get_http_client()
         try:
@@ -196,7 +212,7 @@ class CourierService:
             return []
 
     @staticmethod
-    async def _get_pathao_zones(token: str, city_id: int) -> list:
+    async def _get_pathao_zones(token: str, city_id: int, base_url: str | None = None) -> list:
         """
         একটি city-র সব Zone fetch করে। cache সহ।
         Return: [{"zone_id": 1, "zone_name": "Mirpur"}, ...]
@@ -208,7 +224,8 @@ class CourierService:
             if now < expires_at:
                 return zones
 
-        url = f"{PATHAO_BASE_URL}/aladdin/api/v1/countries/zone-list?city_id={city_id}"
+        base_url = CourierService.pathao_base_url() if not base_url else base_url.rstrip("/")
+        url = f"{base_url}/aladdin/api/v1/cities/{city_id}/zone-list"
         headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
         http = await get_http_client()
         try:
@@ -226,12 +243,13 @@ class CourierService:
             return []
 
     @staticmethod
-    async def _get_pathao_areas(token: str, zone_id: int) -> list:
+    async def _get_pathao_areas(token: str, zone_id: int, base_url: str | None = None) -> list:
         """
         একটি zone-র সব Area fetch করে।
         Return: [{"area_id": 1, "area_name": "Mirpur-1"}, ...]
         """
-        url = f"{PATHAO_BASE_URL}/aladdin/api/v1/countries/area-list?zone_id={zone_id}"
+        base_url = CourierService.pathao_base_url() if not base_url else base_url.rstrip("/")
+        url = f"{base_url}/aladdin/api/v1/zones/{zone_id}/area-list"
         headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
         http = await get_http_client()
         try:
@@ -313,6 +331,7 @@ class CourierService:
         cls,
         token: str,
         recipient_address: str,
+        base_url: str | None = None,
     ) -> Tuple[int, int, int]:
         """
         Address থেকে Pathao city_id / zone_id / area_id resolve করে।
@@ -337,7 +356,7 @@ class CourierService:
             return DHAKA_FALLBACK
 
         # ── Step 1: City match ────────────────────────────────────────────────
-        cities = await cls._get_pathao_cities(token)
+        cities = await cls._get_pathao_cities(token, base_url=base_url)
         if not cities:
             logger.warning("Pathao city list empty — falling back to Dhaka")
             return DHAKA_FALLBACK
@@ -357,7 +376,7 @@ class CourierService:
         )
 
         # ── Step 2: Zone — city-র প্রথম zone নাও ────────────────────────────
-        zones = await cls._get_pathao_zones(token, city_id)
+        zones = await cls._get_pathao_zones(token, city_id, base_url=base_url)
         if not zones:
             logger.warning(f"No zones for Pathao city_id={city_id} — using zone_id=1")
             return (city_id, 1, 1)
@@ -365,7 +384,7 @@ class CourierService:
         zone_id = int(zones[0]["zone_id"])
 
         # ── Step 3: Area — zone-র প্রথম area নাও ────────────────────────────
-        areas = await cls._get_pathao_areas(token, zone_id)
+        areas = await cls._get_pathao_areas(token, zone_id, base_url=base_url)
         if not areas:
             logger.warning(f"No areas for Pathao zone_id={zone_id} — using area_id=1")
             return (city_id, zone_id, 1)
@@ -386,17 +405,19 @@ class CourierService:
         client_secret: str,
         email: str,
         password: str,
+        base_url: str | None = None,
     ) -> list:
         """
         Pathao Merchant-এর সব registered store fetch করে।
         API: GET /aladdin/api/v1/stores
         """
-        token = await cls.get_pathao_token(client_id, client_secret, email, password)
+        base_url = cls.pathao_base_url() if not base_url else base_url.rstrip("/")
+        token = await cls.get_pathao_token(client_id, client_secret, email, password, base_url=base_url)
         if not token:
             logger.error("Failed to authenticate with Pathao API for store fetching.")
             return []
 
-        url = f"{PATHAO_BASE_URL}/aladdin/api/v1/stores"
+        url = f"{base_url}/aladdin/api/v1/stores"
         headers = {
             "Authorization": f"Bearer {token}",
             "Accept": "application/json",
@@ -435,22 +456,20 @@ class CourierService:
         item_quantity: int = 1,
         item_weight: float = 0.5,
         item_description: Optional[str] = None,
+        base_url: str | None = None,
     ) -> Dict[str, Any]:
         """
         Pathao Courier-এ অর্ডার প্লেস করা।
         Address থেকে city/zone/area dynamically resolve করে — সারা বাংলাদেশ support।
         """
         recipient_phone = cls.normalize_bd_phone(recipient_phone)
-        token = await cls.get_pathao_token(client_id, client_secret, email, password)
+        base_url = cls.pathao_base_url() if not base_url else base_url.rstrip("/")
+        token = await cls.get_pathao_token(client_id, client_secret, email, password, base_url=base_url)
         if not token:
             raise CourierServiceException("Failed to authenticate with Pathao API.")
 
         # ── Dynamic location resolution ───────────────────────────────────────
-        city_id, zone_id, area_id = await cls.resolve_pathao_location(
-            token, recipient_address
-        )
-
-        url = f"{PATHAO_BASE_URL}/aladdin/api/v1/orders"
+        url = f"{base_url}/aladdin/api/v1/orders"
         headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
@@ -468,9 +487,6 @@ class CourierService:
             "recipient_name": recipient_name,
             "recipient_phone": recipient_phone,
             "recipient_address": recipient_address,
-            "recipient_city": city_id,
-            "recipient_zone": zone_id,
-            "recipient_area": area_id,
             "delivery_type": 48,  # Normal Delivery (48 Hours)
             "item_type": 2,       # Parcel
             "item_quantity": item_quantity,
@@ -479,9 +495,23 @@ class CourierService:
             "item_description": desc_to_use,
         }
 
+        if cls.pathao_is_sandbox(base_url):
+            # Sandbox currently expects explicit IDs. Live Pathao documents
+            # them as optional and resolves them from recipient_address.
+            city_id, zone_id, area_id = await cls.resolve_pathao_location(
+                token, recipient_address, base_url=base_url
+            )
+            payload.update(
+                recipient_city=city_id,
+                recipient_zone=zone_id,
+                recipient_area=area_id,
+            )
+
         logger.info(
-            f"Pathao order payload: order={merchant_order_id}, "
-            f"city_id={city_id}, zone_id={zone_id}, area_id={area_id}"
+            "Pathao order payload: order=%s environment=%s explicit_location_ids=%s",
+            merchant_order_id,
+            "sandbox" if cls.pathao_is_sandbox(base_url) else "live",
+            cls.pathao_is_sandbox(base_url),
         )
 
         http = await get_http_client()
@@ -490,10 +520,18 @@ class CourierService:
             if response.status_code in (200, 201):
                 data = response.json()
                 order_data = data.get("data", {})
+                consignment_id = order_data.get("consignment_id")
+                if not consignment_id:
+                    logger.error(f"Pathao order placement returned no consignment ID: {data}")
+                    return {
+                        "success": False,
+                        "error": "Pathao response did not include a consignment ID",
+                        "raw_response": data,
+                    }
                 return {
                     "success": True,
-                    "courier_order_id": str(order_data.get("consignment_id")),
-                    "tracking_id": str(order_data.get("consignment_id")),
+                    "courier_order_id": str(consignment_id),
+                    "tracking_id": str(consignment_id),
                     "raw_response": data,
                 }
             else:
@@ -547,10 +585,19 @@ class CourierService:
                 status = data.get("status")
                 if status == 200:
                     order_data = data.get("consignment", {})
+                    consignment_id = order_data.get("consignment_id")
+                    tracking_code = order_data.get("tracking_code")
+                    if not consignment_id or not tracking_code:
+                        logger.error(f"SteadFast order placement returned incomplete IDs: {data}")
+                        return {
+                            "success": False,
+                            "error": "SteadFast response did not include consignment and tracking IDs",
+                            "raw_response": data,
+                        }
                     return {
                         "success": True,
-                        "courier_order_id": str(order_data.get("consignment_id")),
-                        "tracking_id": str(order_data.get("tracking_code")),
+                        "courier_order_id": str(consignment_id),
+                        "tracking_id": str(tracking_code),
                         "raw_response": data,
                     }
                 else:
@@ -602,13 +649,15 @@ class CourierService:
         email: str,
         password: str,
         consignment_id: str,
+        base_url: str | None = None,
     ) -> Optional[str]:
         """Pathao Consignment ID দিয়ে স্ট্যাটাস চেক করা।"""
-        token = await cls.get_pathao_token(client_id, client_secret, email, password)
+        base_url = cls.pathao_base_url() if not base_url else base_url.rstrip("/")
+        token = await cls.get_pathao_token(client_id, client_secret, email, password, base_url=base_url)
         if not token:
             return None
 
-        url = f"{PATHAO_BASE_URL}/aladdin/api/v1/orders/{consignment_id}/info"
+        url = f"{base_url}/aladdin/api/v1/orders/{consignment_id}/info"
         headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
 
         http = await get_http_client()
@@ -617,7 +666,11 @@ class CourierService:
             if response.status_code == 200:
                 data = response.json()
                 order_data = data.get("data", {})
-                return order_data.get("status")
+                return (
+                    order_data.get("order_status_slug")
+                    or order_data.get("order_status")
+                    or order_data.get("status")
+                )
             return None
         except Exception as e:
             logger.error(f"Failed to check Pathao status: {e}")
@@ -745,6 +798,7 @@ class CourierService:
         email: str,
         password: str,
         consignment_id: str,
+        base_url: str | None = None,
     ) -> Dict[str, Any]:
         """
         Pathao-তে Pending/Pickable অর্ডার cancel করা।
@@ -755,7 +809,8 @@ class CourierService:
         গুরুত্বপূর্ণ: Pathao কখনো HTTP 200 দিলেও body-তে error থাকতে পারে।
         body-র 'code' field চেক করতে হয়।
         """
-        token = await cls.get_pathao_token(client_id, client_secret, email, password)
+        base_url = cls.pathao_base_url() if not base_url else base_url.rstrip("/")
+        token = await cls.get_pathao_token(client_id, client_secret, email, password, base_url=base_url)
         if not token:
             return {
                 "success": True,
@@ -763,7 +818,7 @@ class CourierService:
                 "message": "Pathao authentication failed. Order marked cancelled locally. Please cancel manually from Pathao merchant panel.",
             }
 
-        url = f"{PATHAO_BASE_URL}/aladdin/api/v1/orders/cancel"
+        url = f"{base_url}/aladdin/api/v1/orders/cancel"
         headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
@@ -889,47 +944,83 @@ class CourierService:
 
     # ─── Status Mapper ────────────────────────────────────────────────────────
 
+    _STATUS_MAPS = {
+        "steadfast": {
+            "pending": "pending",
+            "hold": "pending",
+            "in-review": "pending",
+            "unknown": "pending",
+            "unknown-approval-pending": "pending",
+            "delivered": "delivered",
+            "delivered-approval-pending": "in_transit",
+            "partial-delivered": "partial_delivered",
+            "partial-delivered-approval-pending": "in_transit",
+            "completed": "delivered",
+            "returned": "returned",
+            "partial-returned": "returned",
+            "cancelled": "cancelled",
+            "cancelled-approval-pending": "in_transit",
+            "canceled": "cancelled",
+            "in-transit": "in_transit",
+            "picked-up": "in_transit",
+            "shipped": "in_transit",
+        },
+        "pathao": {
+            "pending": "pending",
+            "delivered": "delivered",
+            "returned": "returned",
+            "cancelled": "cancelled",
+            "canceled": "cancelled",
+            "picked": "in_transit",
+            "picked-up": "in_transit",
+            "in-transit": "in_transit",
+            "shipped": "in_transit",
+        },
+        "redx": {
+            "pending": "pending",
+            "pickup-pending": "pending",
+            "delivered": "delivered",
+            "returned": "returned",
+            "agent-returning": "returned",
+            "partial-return": "returned",
+            "cancelled": "cancelled",
+            "canceled": "cancelled",
+            "rejected": "cancelled",
+            "ready-for-delivery": "in_transit",
+            "delivery-in-progress": "in_transit",
+            "agent-hold": "in_transit",
+            "agent-area-change": "in_transit",
+        },
+    }
+
     @staticmethod
-    def map_status(provider: str, raw_status: str) -> str:
-        """বিভিন্ন কোরিয়ার সার্ভিসের স্ট্যাটাসকে আমাদের কমন সিস্টেমে ম্যাপ করা।"""
-        raw_status = raw_status.lower().strip()
+    def normalize_status_token(raw_status: str) -> str:
+        """Normalize courier spelling variants before provider-specific mapping."""
+        return "-".join(str(raw_status or "").strip().lower().replace("_", "-").split())
 
-        if provider == "steadfast":
-            # Steadfast statuses: delivered, returned, cancelled, in_transit, hold, pending
-            if raw_status in ("delivered", "completed"):
-                return "delivered"
-            elif raw_status in ("returned", "partial_returned"):
-                return "returned"
-            elif raw_status == "cancelled":
-                return "cancelled"
-            elif raw_status in ("in_transit", "picked_up", "shipped"):
-                return "in_transit"
-            else:
-                return "pending"
+    @classmethod
+    def is_known_status(cls, provider: str, raw_status: str) -> bool:
+        provider_key = str(provider or "").strip().lower()
+        return cls.normalize_status_token(raw_status) in cls._STATUS_MAPS.get(provider_key, {})
 
-        elif provider == "pathao":
-            # Pathao statuses: pending, picked, in_transit, delivered, returned, cancelled
-            if raw_status == "delivered":
-                return "delivered"
-            elif raw_status == "returned":
-                return "returned"
-            elif raw_status == "cancelled":
-                return "cancelled"
-            elif raw_status in ("picked", "in_transit", "shipped"):
-                return "in_transit"
-            else:
-                return "pending"
+    @classmethod
+    def map_status(cls, provider: str, raw_status: str) -> str:
+        """Map provider-specific statuses to the internal courier lifecycle."""
+        provider_key = str(provider or "").strip().lower()
+        status_token = cls.normalize_status_token(raw_status)
+        return cls._STATUS_MAPS.get(provider_key, {}).get(status_token, "pending")
 
-        elif provider == "redx":
-            if raw_status == "delivered":
-                return "delivered"
-            elif raw_status in ("returned", "agent-returning", "partial-return"):
-                return "returned"
-            elif raw_status in ("cancelled", "rejected"):
-                return "cancelled"
-            elif raw_status in ("ready-for-delivery", "delivery-in-progress"):
-                return "in_transit"
-            else:
-                return "pending"
-
-        return "pending"
+    @staticmethod
+    def should_apply_status_transition(old_status: str, new_status: str) -> bool:
+        """Reject stale callbacks that would move a shipment backwards."""
+        old_status = str(old_status or "pending").strip().lower()
+        new_status = str(new_status or "pending").strip().lower()
+        if old_status == new_status:
+            return False
+        if old_status in ("returned", "cancelled", "partial_delivered"):
+            return False
+        if old_status == "delivered":
+            return new_status in ("returned", "cancelled")
+        if old_status == "in_transit" and new_status == "pending":
+            return False
+        return True

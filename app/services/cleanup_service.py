@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 from sqlalchemy import delete, select
 from app.database import AsyncSessionLocal
@@ -9,6 +10,8 @@ from app.models.event_outbox import EventOutbox
 from app.models.failed_event import FailedEvent
 from app.models.usage_counter import UsageCounter
 from app.models.client_session import ClientSession
+from app.models.incomplete_checkout import IncompleteCheckout
+from app.models.courier_booking_job import CourierBookingJob
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +47,7 @@ async def auto_cleanup_database():
     Runs once every 24 hours.
     """
     retention_days = 30
+    incomplete_checkout_retention_days = int(os.getenv("INCOMPLETE_CHECKOUT_RETENTION_DAYS", "30"))
     usage_retention_days = 400  # Keep monthly quota counters long enough for audits.
     sleep_duration = 86400  # 24 hours in seconds
 
@@ -52,6 +56,7 @@ async def auto_cleanup_database():
             logger.info("🧹 Starting scheduled database cleanup...")
             cutoff_date = datetime.now(timezone.utc) - timedelta(days=retention_days)
             usage_cutoff = datetime.now(timezone.utc) - timedelta(days=usage_retention_days)
+            incomplete_checkout_cutoff = datetime.now(timezone.utc) - timedelta(days=incomplete_checkout_retention_days)
 
             async with AsyncSessionLocal() as db:
                 # Delete old EventLogs (batched — can be millions of rows)
@@ -92,6 +97,17 @@ async def auto_cleanup_database():
                     logger.warning(f"Could not clean EventOutbox: {e}")
                     outbox_deleted = 0
 
+                try:
+                    booking_jobs_deleted = await _batched_delete(
+                        db,
+                        CourierBookingJob,
+                        (CourierBookingJob.status.in_(["sent", "dead", "cancelled"]))
+                        & (CourierBookingJob.created_at < cutoff_date),
+                    )
+                except Exception as e:
+                    logger.warning(f"Could not clean CourierBookingJobs: {e}")
+                    booking_jobs_deleted = 0
+
                 # Delete old UsageCounters (rate + daily windows older than retention)
                 try:
                     usage_deleted = await _batched_delete(
@@ -118,11 +134,23 @@ async def auto_cleanup_database():
                     logger.warning(f"Could not clean ClientSessions: {e}")
                     sessions_deleted = 0
 
+                # Remove checkout recovery PII after its configured retention window.
+                try:
+                    incomplete_deleted = await _batched_delete(
+                        db,
+                        IncompleteCheckout,
+                        IncompleteCheckout.created_at < incomplete_checkout_cutoff,
+                    )
+                except Exception as e:
+                    logger.warning(f"Could not clean IncompleteCheckouts: {e}")
+                    incomplete_deleted = 0
+
             logger.info(
                 f"✅ Cleanup complete: Deleted {logs_deleted} logs, "
                 f"{dedup_deleted} dedup, {failed_deleted} failed events, "
-                f"{outbox_deleted} outbox rows, {usage_deleted} usage counters, "
-                f"{sessions_deleted} sessions "
+                f"{outbox_deleted} outbox rows, {booking_jobs_deleted} booking jobs, "
+                f"{usage_deleted} usage counters, "
+                f"{sessions_deleted} sessions, {incomplete_deleted} incomplete checkouts "
                 f"(retention: {retention_days}d logs, {usage_retention_days}d counters)."
             )
 

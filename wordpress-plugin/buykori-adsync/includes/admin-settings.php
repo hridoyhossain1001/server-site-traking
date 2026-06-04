@@ -12,6 +12,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 // ─── Register Admin Menu ───────────────────────────────────────────────────────
 add_action( 'admin_menu', 'buykorigw_admin_menu' );
+add_action( 'admin_enqueue_scripts', 'buykorigw_admin_settings_assets' );
 
 function buykorigw_admin_menu() {
     add_menu_page(
@@ -23,6 +24,28 @@ function buykorigw_admin_menu() {
         'dashicons-chart-area',        // Icon
         58                             // Position
     );
+}
+
+function buykorigw_admin_settings_assets( $hook ) {
+    if ( $hook !== 'toplevel_page_buykori-adsync' ) {
+        return;
+    }
+
+    wp_enqueue_style(
+        'buykorigw-admin-settings',
+        BUYKORIGW_PLUGIN_URL . 'assets/css/admin-settings.css',
+        array(),
+        BUYKORIGW_VERSION
+    );
+
+    wp_enqueue_script(
+        'buykorigw-admin-settings',
+        BUYKORIGW_PLUGIN_URL . 'assets/js/admin-settings.js',
+        array(),
+        BUYKORIGW_VERSION,
+        true
+    );
+
 }
 
 // ─── Register Settings ─────────────────────────────────────────────────────────
@@ -47,7 +70,7 @@ function buykorigw_maybe_show_cache_notice() {
             ? sanitize_text_field( rawurldecode( wp_unslash( $_GET['buykorigw_connect_msg'] ) ) )
             : '';
         if ( $type === 'success' ) {
-            echo '<div class="notice notice-success is-dismissible" style="border-left-color:#059669;"><p><strong>Buykori AdSync:</strong> ' . esc_html( $message ?: 'WordPress site connected successfully.' ) . '</p></div>';
+            echo '<div class="notice notice-success is-dismissible buykorigw-notice-connected"><p><strong>Buykori AdSync:</strong> ' . esc_html( $message ?: 'WordPress site connected successfully.' ) . '</p></div>';
         } elseif ( $type === 'error' ) {
             echo '<div class="notice notice-error is-dismissible"><p><strong>Buykori AdSync:</strong> ' . esc_html( $message ?: 'Connection failed. Please try again.' ) . '</p></div>';
         }
@@ -58,7 +81,7 @@ function buykorigw_maybe_show_cache_notice() {
         return;
     }
     ?>
-    <div class="notice notice-success is-dismissible" style="border-left-color:#4f46e5;">
+    <div class="notice notice-success is-dismissible buykorigw-notice-saved">
         <p>
             <strong>⚡ Buykori AdSync:</strong>
             সেটিংস সেভ হয়েছে এবং ওয়েবসাইটের পেজ ক্যাশ <strong>স্বয়ংক্রিয়ভাবে ক্লিয়ার</strong> করা হয়েছে।
@@ -358,567 +381,16 @@ function buykorigw_disconnect_account() {
 
 function buykorigw_settings_page() {
     $settings = buykorigw_get_settings();
-    $nonce    = wp_create_nonce( 'buykorigw_nonce' );
     $connect_url = wp_nonce_url( admin_url( 'admin-post.php?action=buykorigw_connect_start' ), 'buykorigw_connect_account' );
     $disconnect_url = wp_nonce_url( admin_url( 'admin-post.php?action=buykorigw_disconnect' ), 'buykorigw_disconnect_account' );
     $show_manual_setup = defined( 'BUYKORIGW_SHOW_MANUAL_SETUP' ) && BUYKORIGW_SHOW_MANUAL_SETUP;
     $show_manual_setup = (bool) apply_filters( 'buykorigw_show_manual_setup', $show_manual_setup );
     ?>
-    <style>
-        /* Modern CSS Variables & Base Styles */
-        :root {
-            --primary: #4f46e5;
-            --primary-hover: #4338ca;
-            --primary-light: #eef2ff;
-            --slate-50: #f8fafc;
-            --slate-100: #f1f5f9;
-            --slate-200: #e2e8f0;
-            --slate-300: #cbd5e1;
-            --slate-700: #334155;
-            --slate-800: #1e293b;
-            --slate-900: #0f172a;
-            --emerald-50: #ecfdf5;
-            --emerald-100: #d1fae5;
-            --emerald-600: #059669;
-            --emerald-800: #065f46;
-            --red-50: #fef2f2;
-            --red-100: #fee2e2;
-            --red-600: #dc2626;
-            --red-800: #991b1b;
-        }
 
-        .buykorigw-wrap {
-            max-width: 860px;
-            margin: 20px 20px 32px 0;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            color: var(--slate-800);
-        }
-
-        /* Sticky Header */
-        .buykorigw-header {
-            position: sticky;
-            top: 32px;
-            z-index: 99;
-            background: #ffffff;
-            padding: 16px 24px;
-            border: 1px solid var(--slate-200);
-            border-left: 4px solid var(--primary);
-            border-radius: 12px;
-            margin-bottom: 24px;
-            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05), 0 2px 4px -1px rgba(0,0,0,0.025);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-
-        .buykorigw-header-left h1 {
-            margin: 0 0 4px;
-            font-size: 22px;
-            font-weight: 700;
-            line-height: 1.2;
-            display: flex;
-            align-items: center;
-            color: var(--slate-900);
-        }
-
-        .buykorigw-header-left p {
-            margin: 0;
-            color: #64748b;
-            font-size: 13.5px;
-        }
-
-        .buykorigw-header .version {
-            background: var(--primary-light);
-            color: #3730a3;
-            padding: 2px 8px;
-            border-radius: 999px;
-            font-size: 11px;
-            margin-left: 8px;
-            font-weight: 600;
-        }
-
-        /* Navigation Tabs (Shadcn Style) */
-        .buykorigw-nav-container {
-            background: var(--slate-100);
-            padding: 4px;
-            border-radius: 8px;
-            display: inline-flex;
-            gap: 2px;
-            margin-bottom: 24px;
-        }
-
-        .buykorigw-nav-tab {
-            padding: 8px 16px;
-            font-size: 13.5px;
-            font-weight: 600;
-            color: #64748b;
-            cursor: pointer;
-            border-radius: 6px;
-            background: transparent;
-            transition: all 0.2s ease;
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-        }
-
-        .buykorigw-nav-tab:hover {
-            color: var(--slate-900);
-        }
-
-        .buykorigw-nav-tab.active {
-            color: var(--slate-900);
-            background: #ffffff;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-        }
-
-        .buykorigw-tab-content {
-            display: none;
-        }
-
-        .buykorigw-tab-content.active {
-            display: block;
-            animation: buykorigwFadeIn 0.2s ease-out;
-        }
-
-        @keyframes buykorigwFadeIn {
-            from { opacity: 0; transform: translateY(4px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-
-        /* Modern Cards */
-        .buykorigw-card {
-            background: #ffffff;
-            border: 1px solid var(--slate-200);
-            border-radius: 12px;
-            padding: 24px;
-            margin-bottom: 20px;
-            box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05);
-        }
-
-        .buykorigw-card h2 {
-            margin: 0 0 16px;
-            font-size: 16px;
-            font-weight: 600;
-            color: var(--slate-900);
-            border-bottom: 1px solid var(--slate-100);
-            padding-bottom: 12px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .buykorigw-card > p {
-            color: #64748b !important;
-            line-height: 1.5;
-            font-size: 13.5px;
-            margin-top: -8px;
-            margin-bottom: 16px;
-        }
-
-        /* Form Fields */
-        .buykorigw-field {
-            margin-bottom: 20px;
-        }
-
-        .buykorigw-field label {
-            display: block;
-            font-weight: 550;
-            margin-bottom: 8px;
-            color: var(--slate-900);
-            font-size: 13.5px;
-        }
-
-        .buykorigw-field input[type="text"],
-        .buykorigw-field input[type="password"],
-        .buykorigw-field select {
-            width: 100%;
-            max-width: 100%;
-            min-height: 40px;
-            padding: 8px 12px;
-            border: 1px solid var(--slate-300);
-            border-radius: 8px;
-            font-size: 13.5px;
-            color: var(--slate-900);
-            background: #ffffff;
-            transition: all 0.2s ease;
-        }
-
-        .buykorigw-field input:focus, 
-        .buykorigw-field select:focus {
-            border-color: var(--primary);
-            outline: none;
-            box-shadow: 0 0 0 3px rgba(79,70,229,0.12);
-        }
-
-        .buykorigw-field .description {
-            font-size: 12.5px;
-            color: #64748b;
-            margin-top: 6px;
-            line-height: 1.4;
-        }
-
-        /* Modern Toggle / Switch Container */
-        .buykorigw-toggle-card {
-            border: 1px solid var(--slate-200);
-            border-radius: 8px;
-            background: var(--slate-50);
-            margin-bottom: 12px;
-            padding: 14px 16px;
-            transition: all 0.15s ease;
-        }
-
-        .buykorigw-toggle-card:hover {
-            background: var(--slate-100);
-            border-color: var(--slate-300);
-        }
-
-        .buykorigw-toggle {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-
-        .buykorigw-toggle label {
-            font-weight: 500;
-            color: var(--slate-900);
-            margin: 0;
-            cursor: pointer;
-            font-size: 13.5px;
-            display: flex;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 4px;
-        }
-
-        /* Toggle Badges */
-        .buykorigw-badge {
-            display: inline-flex;
-            align-items: center;
-            padding: 1px 6px;
-            font-size: 10.5px;
-            font-weight: 600;
-            border-radius: 9999px;
-            margin-left: 6px;
-        }
-
-        .buykorigw-badge-recommended {
-            background-color: var(--emerald-50);
-            color: var(--emerald-800);
-            border: 1px solid var(--emerald-100);
-        }
-
-        .buykorigw-badge-optional {
-            background-color: var(--slate-100);
-            color: #475569;
-            border: 1px solid var(--slate-200);
-        }
-
-        /* Custom Switch */
-        .buykorigw-switch {
-            position: relative;
-            width: 40px;
-            height: 22px;
-            flex-shrink: 0;
-        }
-
-        .buykorigw-switch input {
-            opacity: 0;
-            width: 0;
-            height: 0;
-        }
-
-        .buykorigw-slider {
-            position: absolute;
-            cursor: pointer;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: var(--slate-300);
-            border-radius: 22px;
-            transition: all 0.2s ease;
-        }
-
-        .buykorigw-slider:before {
-            position: absolute;
-            content: "";
-            height: 16px;
-            width: 16px;
-            left: 3px;
-            bottom: 3px;
-            background: #ffffff;
-            border-radius: 50%;
-            transition: all 0.2s ease;
-            box-shadow: 0 1px 2px rgba(0,0,0,0.1);
-        }
-
-        .buykorigw-switch input:checked + .buykorigw-slider {
-            background: var(--primary);
-        }
-
-        .buykorigw-switch input:checked + .buykorigw-slider:before {
-            transform: translateX(18px);
-        }
-
-        /* Buttons */
-        .buykorigw-btn {
-            min-height: 38px;
-            padding: 8px 16px;
-            border: 1px solid transparent;
-            border-radius: 8px;
-            font-size: 13.5px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.15s ease;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            gap: 6px;
-        }
-
-        .buykorigw-btn-primary {
-            background: var(--primary);
-            color: #ffffff;
-            border-color: var(--primary-hover);
-            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
-        }
-
-        .buykorigw-btn-primary:hover {
-            background: var(--primary-hover);
-            color: #ffffff;
-            box-shadow: 0 2px 4px rgba(79,70,229,0.15);
-        }
-
-        .buykorigw-btn-test {
-            background: var(--slate-900);
-            color: #ffffff;
-            margin-right: 8px;
-        }
-
-        .buykorigw-btn-test:hover {
-            background: var(--slate-800);
-            color: #ffffff;
-        }
-
-        .buykorigw-btn-secondary {
-            background: #ffffff;
-            color: var(--slate-700);
-            border-color: var(--slate-300);
-        }
-
-        .buykorigw-btn-secondary:hover {
-            background: var(--slate-50);
-            color: var(--slate-900);
-            border-color: var(--slate-400);
-        }
-
-        .buykorigw-btn-danger {
-            background: #ffffff;
-            color: var(--red-600);
-            border-color: var(--red-100);
-        }
-
-        .buykorigw-btn-danger:hover {
-            background: var(--red-50);
-            color: var(--red-800);
-            border-color: var(--red-100);
-        }
-
-        .buykorigw-action-row {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
-            align-items: center;
-            margin: 14px 0 18px;
-        }
-
-        .buykorigw-advanced-details {
-            border: 1px solid var(--slate-200);
-            border-radius: 10px;
-            background: #ffffff;
-            padding: 12px 14px;
-            margin-bottom: 14px;
-        }
-
-        .buykorigw-advanced-details summary {
-            cursor: pointer;
-            color: var(--slate-800);
-            font-size: 13px;
-            font-weight: 700;
-        }
-
-        .buykorigw-advanced-details[open] summary {
-            margin-bottom: 14px;
-        }
-
-        /* Connection Status Badges */
-        .buykorigw-conn-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 5px;
-            padding: 2px 8px;
-            border-radius: 6px;
-            font-size: 11px;
-            font-weight: 600;
-            margin-left: 10px;
-        }
-        .buykorigw-conn-badge.active {
-            background: var(--emerald-50);
-            color: var(--emerald-800);
-            border: 1px solid var(--emerald-100);
-        }
-        .buykorigw-conn-badge.inactive {
-            background: var(--slate-100);
-            color: #64748b;
-            border: 1px solid var(--slate-200);
-        }
-
-        /* Status Messages */
-        .buykorigw-status {
-            padding: 12px 14px;
-            border-radius: 8px;
-            margin-top: 14px;
-            display: none;
-            font-size: 13px;
-            line-height: 1.4;
-            font-weight: 500;
-        }
-
-        .buykorigw-status.success {
-            display: block;
-            background: var(--emerald-50);
-            color: var(--emerald-800);
-            border: 1px solid var(--emerald-100);
-        }
-
-        .buykorigw-status.error {
-            display: block;
-            background: var(--red-50);
-            color: var(--red-800);
-            border: 1px solid var(--red-100);
-        }
-
-        .buykorigw-events-grid {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 12px;
-        }
-
-        .buykorigw-info-box {
-            background: #eff6ff;
-            border: 1px solid #bfdbfe;
-            border-radius: 8px;
-            padding: 14px;
-            font-size: 13px;
-            color: #1e3a8a;
-            line-height: 1.5;
-            margin-bottom: 16px;
-        }
-
-        .buykorigw-warning-box {
-            background: #fffbeb;
-            border: 1px solid #fde68a;
-            border-radius: 8px;
-            padding: 14px;
-            font-size: 13px;
-            color: #92400e;
-            line-height: 1.5;
-            margin-bottom: 16px;
-        }
-
-        .buykorigw-status-grid {
-            display: grid;
-            grid-template-columns: repeat(3, minmax(0, 1fr));
-            gap: 10px;
-            margin: 16px 0 18px;
-        }
-
-        .buykorigw-status-tile {
-            border: 1px solid var(--slate-200);
-            border-radius: 10px;
-            background: var(--slate-50);
-            padding: 12px;
-            min-width: 0;
-        }
-
-        .buykorigw-status-tile span {
-            display: block;
-            color: #64748b;
-            font-size: 11px;
-            font-weight: 650;
-            margin-bottom: 4px;
-        }
-
-        .buykorigw-status-tile strong {
-            display: block;
-            color: var(--slate-900);
-            font-size: 13px;
-            font-weight: 700;
-            overflow-wrap: anywhere;
-        }
-
-        .buykorigw-quiet-card {
-            background: #ffffff;
-            border: 1px solid var(--slate-200);
-            border-radius: 12px;
-            padding: 18px;
-            margin-bottom: 18px;
-        }
-
-        .buykorigw-quiet-card h2 {
-            margin-bottom: 10px;
-            padding-bottom: 10px;
-        }
-
-        .buykorigw-compact-copy {
-            color: #64748b;
-            font-size: 13px;
-            line-height: 1.5;
-            margin: 0 0 14px;
-        }
-
-        /* Responsive */
-        @media (max-width: 782px) {
-            .buykorigw-wrap {
-                margin-right: 12px;
-            }
-            .buykorigw-header {
-                top: 46px;
-                flex-direction: column;
-                gap: 12px;
-                align-items: flex-start;
-                padding: 16px;
-            }
-            .buykorigw-header-right {
-                width: 100%;
-            }
-            .buykorigw-header-right .buykorigw-btn {
-                width: 100%;
-            }
-            .buykorigw-card {
-                padding: 16px;
-            }
-            .buykorigw-events-grid {
-                grid-template-columns: 1fr;
-            }
-            .buykorigw-status-grid {
-                grid-template-columns: 1fr;
-            }
-            .buykorigw-nav-container {
-                display: flex;
-                width: 100%;
-            }
-            .buykorigw-nav-tab {
-                flex: 1;
-                text-align: center;
-                justify-content: center;
-                font-size: 12.5px;
-                padding: 8px 6px;
-            }
-        }
-    </style>
-
-    <div class="buykorigw-wrap">
+    <div class="buykorigw-wrap"
+         data-buykorigw-ajax-url="<?php echo esc_url( admin_url( 'admin-ajax.php' ) ); ?>"
+         data-buykorigw-nonce="<?php echo esc_attr( wp_create_nonce( 'buykorigw_nonce' ) ); ?>"
+         data-buykorigw-disconnect-message="Disconnect this WordPress site from Buykori AdSync? Tracking will stop until you reconnect.">
         <form method="post" action="options.php" id="buykorigw-form">
             <?php settings_fields( 'buykorigw_settings_group' ); ?>
             <input type="hidden" name="<?php echo BUYKORIGW_OPTION_KEY; ?>[low_resource_mode]" value="0">
@@ -997,7 +469,7 @@ function buykorigw_settings_page() {
                         <?php if ( ! empty( $settings['api_key'] ) ) : ?>
                             <a class="buykorigw-btn buykorigw-btn-danger"
                                href="<?php echo esc_url( $disconnect_url ); ?>"
-                               onclick="return confirm('Disconnect this WordPress site from Buykori AdSync? Tracking will stop until you reconnect.');">
+                               data-buykorigw-disconnect-confirm>
                                 Disconnect
                             </a>
                         <?php endif; ?>
@@ -1023,8 +495,8 @@ function buykorigw_settings_page() {
                            value="<?php echo esc_attr( $settings['installation_id'] ?? buykorigw_get_installation_id() ); ?>">
 
                     <?php if ( $show_manual_setup ) : ?>
-                    <details style="margin:14px 0 18px;">
-                        <summary style="cursor:pointer; font-size:12.5px; color:#64748b; font-weight:600;">Advanced manual setup</summary>
+                    <details class="buykorigw-manual-details">
+                        <summary>Advanced manual setup</summary>
 
                     <div class="buykorigw-field">
                         <label for="buykorigw_manual_api_key">API Key</label>
@@ -1044,7 +516,7 @@ function buykorigw_settings_page() {
                            name="<?php echo BUYKORIGW_OPTION_KEY; ?>[gateway_url]"
                            value="<?php echo esc_attr( $settings['gateway_url'] ); ?>">
 
-                    <button type="button" class="buykorigw-btn buykorigw-btn-test" id="buykorigw-test-btn" onclick="buykorigwTestConnection()">
+                    <button type="button" class="buykorigw-btn buykorigw-btn-test" id="buykorigw-test-btn" data-buykorigw-health-check>
                         🔍 Run Health Check
                     </button>
                     <div id="buykorigw-test-status" class="buykorigw-status"></div>
@@ -1055,7 +527,7 @@ function buykorigw_settings_page() {
                     <h2>📊 Essential Events</h2>
                     <p>Recommended defaults are already selected. Change these only when a store does not need a specific signal.</p>
                     
-                    <div class="buykorigw-toggle-card" style="display:none;">
+                    <div class="buykorigw-toggle-card buykorigw-hidden">
                         <div class="buykorigw-toggle">
                             <label class="buykorigw-switch">
                                 <input type="checkbox"
@@ -1066,7 +538,7 @@ function buykorigw_settings_page() {
                             </label>
                             <label>
                                 Low-resource mode 
-                                <span style="color:#64748b; font-size:12px; font-weight:normal; margin-left:6px;">— PageView, ViewContent, Search server-side ট্র্যাকিং বন্ধ রাখবে (রিসোর্স সাশ্রয়ী)</span>
+                                <span class="buykorigw-muted-inline">— PageView, ViewContent, Search server-side ট্র্যাকিং বন্ধ রাখবে (রিসোর্স সাশ্রয়ী)</span>
                             </label>
                         </div>
                     </div>
@@ -1094,7 +566,7 @@ function buykorigw_settings_page() {
                                         <span class="buykorigw-badge buykorigw-badge-<?php echo $info[2]; ?>">
                                             <?php echo ucfirst($info[2]); ?>
                                         </span>
-                                        <span style="color:#64748b; font-size:11.5px; font-weight:normal; display:block; margin-top:2px;">
+                                        <span class="buykorigw-event-description">
                                             <?php echo $info[1]; ?>
                                         </span>
                                     </label>
@@ -1111,7 +583,7 @@ function buykorigw_settings_page() {
                     <details class="buykorigw-advanced-details">
                         <summary>Pixel backup settings</summary>
                     
-                    <div class="buykorigw-toggle-card" style="margin-bottom: 20px;">
+                    <div class="buykorigw-toggle-card buykorigw-toggle-spaced">
                         <div class="buykorigw-toggle">
                             <label class="buykorigw-switch">
                                 <input type="checkbox"
@@ -1181,7 +653,7 @@ function buykorigw_settings_page() {
                                         <span class="buykorigw-badge buykorigw-badge-<?php echo $info[2]; ?>">
                                             <?php echo ucfirst($info[2]); ?>
                                         </span>
-                                        <span style="color:#64748b; font-size:11.5px; font-weight:normal; display:block; margin-top:2px;">
+                                        <span class="buykorigw-event-description">
                                             <?php echo $info[1]; ?>
                                         </span>
                                     </label>
@@ -1192,7 +664,7 @@ function buykorigw_settings_page() {
                 </div>
 
                 <!-- Landing Page Tracking Mode -->
-                <div class="buykorigw-card" style="display:none;">
+                <div class="buykorigw-card buykorigw-hidden">
                     <h2>🎯 Landing Page Tracking Mode</h2>
                     <div class="buykorigw-field">
                         <label for="buykorigw_tracking_mode">Tracking detection behavior</label>
@@ -1207,7 +679,7 @@ function buykorigw_settings_page() {
                 </div>
 
                 <!-- Product Catalog ID format mapping -->
-                <div class="buykorigw-card" style="display:none;">
+                <div class="buykorigw-card buykorigw-hidden">
                     <h2>🎯 Product Catalog ID Format</h2>
                     <div class="buykorigw-field">
                         <label for="buykorigw_content_id_format">Catalog Content ID Format</label>
@@ -1221,7 +693,7 @@ function buykorigw_settings_page() {
                 </div>
 
                 <!-- Product Variation Tracking -->
-                <div class="buykorigw-card" style="display:none;">
+                <div class="buykorigw-card buykorigw-hidden">
                     <h2>📦 Product Variation Tracking</h2>
                     <p>প্রোডাক্টের বিভিন্ন ভ্যারিয়েশন (যেমন: সাইজ, কালার) ট্র্যাকিং চালু করুন। এটি চালু করলে AddToCart, ViewContent এবং Purchase ইভেন্টে ভ্যারিয়েশনের আইডি এবং তার এট্রিবিউটসমূহ পাঠানো হবে।</p>
                     
@@ -1244,7 +716,7 @@ function buykorigw_settings_page() {
                     <h2>📦 COD Purchase Timing</h2>
                     <p>Use this when COD stores should send Purchase only after the order reaches a confirmed status.</p>
 
-                    <div class="buykorigw-toggle-card" style="margin-bottom: 20px;">
+                    <div class="buykorigw-toggle-card buykorigw-toggle-spaced">
                         <div class="buykorigw-toggle">
                             <label class="buykorigw-switch">
                                 <input type="checkbox"
@@ -1327,10 +799,10 @@ function buykorigw_settings_page() {
                 <div class="buykorigw-card">
                     <h2>Plugin Update Status</h2>
                     <p>WordPress normally checks for plugin updates automatically. Use this only when the latest Buykori AdSync version is not appearing on the Plugins page.</p>
-                    <button type="button" class="buykorigw-btn buykorigw-btn-secondary" id="buykorigw-update-btn" onclick="buykorigwCheckUpdateNow()">
+                    <button type="button" class="buykorigw-btn buykorigw-btn-secondary" id="buykorigw-update-btn" data-buykorigw-update-check>
                         Refresh Update Status
                     </button>
-                    <p class="description" style="margin-top:10px;">After refreshing, open WordPress Plugins or Dashboard Updates and click the normal Update now link if a new version is available.</p>
+                    <p class="description buykorigw-update-note">After refreshing, open WordPress Plugins or Dashboard Updates and click the normal Update now link if a new version is available.</p>
                     <div id="buykorigw-update-status" class="buykorigw-status"></div>
                 </div>
 
@@ -1338,148 +810,5 @@ function buykorigw_settings_page() {
         </form>
     </div>
 
-    <script>
-    // ─── Tab Switching Logic ───────────────────────────────────────────────────
-    (function() {
-        var tabs = document.querySelectorAll('.buykorigw-nav-tab');
-        var panels = document.querySelectorAll('.buykorigw-tab-content');
-        var STORAGE_KEY = 'buykorigw_active_tab';
-
-        function switchTab(tabName) {
-            tabs.forEach(function(t) { t.classList.remove('active'); });
-            panels.forEach(function(p) { p.classList.remove('active'); });
-            var activeTab = document.querySelector('.buykorigw-nav-tab[data-tab="' + tabName + '"]');
-            var activePanel = document.getElementById('tab-' + tabName);
-            if (activeTab) activeTab.classList.add('active');
-            if (activePanel) activePanel.classList.add('active');
-            try { localStorage.setItem(STORAGE_KEY, tabName); } catch(e) {}
-        }
-
-        tabs.forEach(function(tab) {
-            tab.addEventListener('click', function() {
-                switchTab(this.getAttribute('data-tab'));
-            });
-        });
-
-        // Restore last active tab after page reload / save
-        try {
-            var saved = localStorage.getItem(STORAGE_KEY);
-            if (saved && document.getElementById('tab-' + saved)) {
-                switchTab(saved);
-            }
-        } catch(e) {}
-    })();
-
-    // ─── Test Connection ───────────────────────────────────────────────────────
-    function buykorigwTestConnection() {
-        try {
-            var btn = document.getElementById('buykorigw-test-btn');
-            var status = document.getElementById('buykorigw-test-status');
-            var apiKey = document.getElementById('buykorigw_api_key').value.trim();
-            var gatewayUrl = document.getElementById('buykorigw_gateway_url').value.trim();
-
-            btn.disabled = true;
-            btn.textContent = '⏳ Testing...';
-            status.style.display = 'none';
-            status.className = 'buykorigw-status';
-
-            if (!apiKey || !gatewayUrl) {
-                status.style.display = 'block';
-                status.className = 'buykorigw-status error';
-                status.textContent = '❌ দয়া করে API Key দিন।';
-                btn.disabled = false;
-                btn.textContent = '🔍 Run Health Check';
-                return;
-            }
-
-            var formData = new FormData();
-            formData.append('action', 'buykorigw_test_connection');
-            formData.append('nonce', '<?php echo $nonce; ?>');
-            formData.append('api_key', apiKey);
-            formData.append('gateway_url', gatewayUrl);
-
-            var ajax_url = (typeof ajaxurl !== 'undefined') ? ajaxurl : '/wp-admin/admin-ajax.php';
-
-            fetch(ajax_url, {
-                method: 'POST',
-                body: formData,
-            })
-            .then(function(res) {
-                if (!res.ok) throw new Error('HTTP ' + res.status);
-                return res.json();
-            })
-            .then(function(data) {
-                status.style.display = 'block';
-                if (data.success) {
-                    status.className = 'buykorigw-status success';
-                    status.innerHTML = '✅ ' + data.data;
-                } else {
-                    status.className = 'buykorigw-status error';
-                    status.innerHTML = '❌ ' + (data.data || 'Unknown error');
-                }
-                btn.disabled = false;
-                btn.textContent = '🔍 Run Health Check';
-            })
-            .catch(function(err) {
-                status.style.display = 'block';
-                status.className = 'buykorigw-status error';
-                status.textContent = '❌ Network error: ' + err.message;
-                btn.disabled = false;
-                btn.textContent = '🔍 Run Health Check';
-            });
-        } catch (e) {
-            console.error(e);
-            alert("Error: " + e.message);
-        }
-    }
-    function buykorigwCheckUpdateNow() {
-        try {
-            var btn = document.getElementById('buykorigw-update-btn');
-            var status = document.getElementById('buykorigw-update-status');
-
-            btn.disabled = true;
-            btn.textContent = 'Checking...';
-            status.style.display = 'none';
-            status.className = 'buykorigw-status';
-
-            var formData = new FormData();
-            formData.append('action', 'buykorigw_check_update_now');
-            formData.append('nonce', '<?php echo $nonce; ?>');
-
-            var ajax_url = (typeof ajaxurl !== 'undefined') ? ajaxurl : '/wp-admin/admin-ajax.php';
-
-            fetch(ajax_url, {
-                method: 'POST',
-                body: formData,
-            })
-            .then(function(res) {
-                if (!res.ok) throw new Error('HTTP ' + res.status);
-                return res.json();
-            })
-            .then(function(data) {
-                status.style.display = 'block';
-                if (data.success) {
-                    status.className = 'buykorigw-status success';
-                    status.innerHTML = '✅ ' + data.data;
-                } else {
-                    status.className = 'buykorigw-status error';
-                    status.innerHTML = '❌ ' + (data.data || 'Unknown error');
-                }
-                btn.disabled = false;
-                btn.textContent = 'Check Update Now';
-            })
-            .catch(function(err) {
-                status.style.display = 'block';
-                status.className = 'buykorigw-status error';
-                status.textContent = '❌ Network error: ' + err.message;
-                btn.disabled = false;
-                btn.textContent = 'Check Update Now';
-            });
-        } catch (e) {
-            console.error(e);
-            alert("Error: " + e.message);
-        }
-    }
-    </script>
     <?php
 }

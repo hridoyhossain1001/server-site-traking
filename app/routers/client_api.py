@@ -13,6 +13,8 @@ from app.models.event_log import EventLog
 from app.models.event_outbox import EventOutbox
 from app.models.pending_event import PendingEvent
 from app.models.incomplete_checkout import IncompleteCheckout
+from app.models.audit_log import AuditLog
+from app.models.plugin_connect_session import PluginConnectSession
 from app.models.usage_counter import UsageCounter
 from app.routers.client_portal import get_client_from_portal_session
 from app.security import encrypt_token, decrypt_token
@@ -35,6 +37,15 @@ from app.services.plan_service import (
     record_trial_identity,
     require_growth_access,
     require_trial_available,
+)
+from app.services.site_binding_service import require_site_binding_available
+from app.utils.plugin_connect import (
+    append_query,
+    is_site_allowed_for_client,
+    normalize_site_url,
+    sha256_hex,
+    validate_return_url,
+    validate_token,
 )
 
 logger = logging.getLogger(__name__)
@@ -90,6 +101,13 @@ class IncompleteCheckoutStatusRequest(BaseModel):
     status: str
 
 
+class PluginConnectAuthorizeRequest(BaseModel):
+    siteUrl: str
+    returnUrl: str
+    state: str
+    codeChallenge: str
+
+
 ALLOWED_RULE_EVENTS = {
     "PageView",
     "ViewContent",
@@ -112,7 +130,16 @@ SIDEBAR_SEEN_KEYS = {
     "orders_delivery": "orders_delivery_seen_at",
 }
 
-ACTIVE_COURIER_STATUSES = ["pending", "picked", "in_transit", "processing", "booked", "shipped"]
+ACTIVE_COURIER_STATUSES = [
+    "booking_queued",
+    "booking_processing",
+    "pending",
+    "picked",
+    "in_transit",
+    "processing",
+    "booked",
+    "shipped",
+]
 INCOMPLETE_CHECKOUT_STATUSES = {"active", "incomplete", "contacted", "recovered", "ignored", "expired"}
 
 
@@ -537,6 +564,59 @@ async def revoke_wp_token(
     }
 
 # ─── Platform Credentials ────────────────────────────────────────────────────
+@router.post("/plugin-connect/authorize")
+async def authorize_plugin_connect(
+    request: Request,
+    payload: PluginConnectAuthorizeRequest,
+    client: Client = Depends(get_current_portal_client),
+    db: AsyncSession = Depends(get_db),
+):
+    site_url, site_host = normalize_site_url(payload.siteUrl)
+    return_url = validate_return_url(payload.returnUrl, site_host)
+    state = validate_token(payload.state, "state")
+    code_challenge = validate_token(payload.codeChallenge, "code challenge")
+
+    if not is_site_allowed_for_client(site_host, client.domain):
+        raise HTTPException(
+            status_code=403,
+            detail=f"This WordPress site ({site_host}) is not allowed for this workspace.",
+        )
+    await require_site_binding_available(db, site_host, client.id)
+
+    if not client.domain:
+        client.domain = site_host
+
+    code = secrets.token_urlsafe(32)
+    now = datetime.now(timezone.utc)
+    session = PluginConnectSession(
+        client_id=client.id,
+        site_url=site_url,
+        site_host=site_host,
+        return_url=return_url,
+        state=state,
+        code_hash=sha256_hex(code),
+        code_challenge=code_challenge,
+        created_ip=request.client.host if request.client else None,
+        expires_at=now + timedelta(minutes=10),
+    )
+    db.add(session)
+    db.add(AuditLog(
+        actor="client_portal",
+        action="plugin_connect_authorized",
+        client_id=client.id,
+        ip_address=request.client.host if request.client else None,
+        details=f"site={site_host}",
+    ))
+    await db.commit()
+
+    return {
+        "success": True,
+        "siteHost": site_host,
+        "expiresAt": session.expires_at.isoformat(),
+        "redirectUrl": append_query(return_url, {"code": code, "state": state}),
+    }
+
+
 @router.get("/credentials")
 async def get_credentials(client: Client = Depends(get_current_portal_client)):
     growth_enabled = has_growth_access(client)
@@ -1488,7 +1568,8 @@ async def api_confirm_deferred(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.error("Deferred confirm failed for client %s order %s: %s", client.id, payload.order_id, e)
+        raise HTTPException(status_code=400, detail="Deferred order could not be confirmed.")
 
 @router.post("/deferred/confirm-bulk")
 async def api_confirm_deferred_bulk(
@@ -1504,7 +1585,8 @@ async def api_confirm_deferred_bulk(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.error("Deferred bulk confirm failed for client %s: %s", client.id, e)
+        raise HTTPException(status_code=400, detail="Deferred orders could not be confirmed.")
 
 @router.post("/deferred/cancel")
 async def api_cancel_deferred(
@@ -1516,8 +1598,11 @@ async def api_cancel_deferred(
     try:
         res = await cancel_event(CancelRequest(order_id=payload.order_id), client=client, db=db)
         return {"success": True, "message": res.message}
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.error("Deferred cancel failed for client %s order %s: %s", client.id, payload.order_id, e)
+        raise HTTPException(status_code=400, detail="Deferred order could not be cancelled.")
 
 @router.post("/deferred/cancel-bulk")
 async def api_cancel_deferred_bulk(
@@ -1530,8 +1615,11 @@ async def api_cancel_deferred_bulk(
     try:
         res = await bulk_cancel_events(BulkCancelRequest(order_ids=payload.order_ids), client=client, db=db)
         return {"success": True, "cancelled": res.cancelled, "failed": res.failed, "details": res.details}
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.error("Deferred bulk cancel failed for client %s: %s", client.id, e)
+        raise HTTPException(status_code=400, detail="Deferred orders could not be cancelled.")
 
 
 # ─── Multiple Store Management ────────────────────────────────────────────────

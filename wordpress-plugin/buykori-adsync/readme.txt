@@ -4,7 +4,7 @@ Tags: facebook, capi, server-side tracking, woocommerce, pixel, ga4, tiktok
 Requires at least: 5.8
 Tested up to: 6.7
 Requires PHP: 7.4
-Stable tag: 1.2.33
+Stable tag: 1.2.36
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -43,6 +43,19 @@ Buykori AdSync প্লাগইন আপনার WooCommerce স্টোর
 ক্যাশ-অন-ডেলিভারি (COD) অর্ডারের ক্ষেত্রে Purchase ইভেন্ট তখনই Facebook-এ পাঠানো হয় যখন আপনি অর্ডারটি "Completed" করেন। এতে ফেক অর্ডারের ডাটা Facebook-এ যায় না।
 
 == Changelog ==
+
+= 1.2.36 =
+* Fixed COD/deferred purchase summary compatibility with SQLAlchemy 2 JSON value extraction.
+
+= 1.2.35 =
+* Added theme-agnostic WooCommerce page detection for product listings, shortcode cart pages, and custom checkout pages.
+* Improved AddToCart detection across classic WooCommerce buttons, block buttons, and add-to-cart URLs.
+* Restored checkout page-load surface checks so multi-page checkout can send InitiateCheckout reliably.
+
+= 1.2.34 =
+* Moved WordPress plugin admin UI scripts and styles into packaged asset files.
+* Removed inline handlers, inline scripts, and inline styles from plugin admin screens and widgets.
+* Moved frontend tracker config to a data attribute and loaded tracker scripts through WordPress enqueue APIs.
 
 = 1.2.33 =
 * Set optional events off by default for cleaner tracking: Lead, Search, ViewCart, RemoveFromCart, and AddPaymentInfo.

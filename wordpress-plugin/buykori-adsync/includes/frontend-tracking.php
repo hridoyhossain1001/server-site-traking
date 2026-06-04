@@ -26,37 +26,96 @@ if ( ! defined( 'ABSPATH' ) ) {
  * firing immediately on page load.
  */
 function buykorigw_resolve_tracking_mode( $settings ) {
-    $mode = isset( $settings['tracking_mode'] ) ? $settings['tracking_mode'] : 'standard';
-    if ( ! in_array( $mode, array( 'standard', 'one_page' ), true ) ) {
-        $mode = 'standard';
+    $mode = isset( $settings['tracking_mode'] ) ? $settings['tracking_mode'] : 'auto';
+    if ( ! in_array( $mode, array( 'auto', 'standard', 'one_page' ), true ) ) {
+        $mode = 'auto';
     }
 
-    if ( $mode === 'one_page' ) {
-        return 'one_page';
+    if ( $mode !== 'auto' ) {
+        return $mode;
     }
 
-    $is_landing = false;
-    if ( function_exists( 'is_front_page' ) && is_front_page() ) {
-        $is_landing = true;
-    } elseif ( function_exists( 'is_home' ) && is_home() ) {
-        $is_landing = true;
-    } elseif ( function_exists( 'is_product' ) && is_product() ) {
-        $is_landing = true;
-    }
-
-    if (
-        $is_landing
-        && function_exists( 'is_checkout' )
-        && is_checkout()
-        && ( ! function_exists( 'is_order_received_page' ) || ! is_order_received_page() )
-    ) {
-        return 'one_page';
-    }
-
-    return 'standard';
+    // PHP cannot reliably detect checkout widgets rendered later by builders.
+    // Pass auto through so the browser resolver can combine PHP and live DOM hints.
+    return 'auto';
 }
 
-add_action( 'wp_footer', 'buykorigw_inject_tracker', 99 );
+add_action( 'wp_enqueue_scripts', 'buykorigw_enqueue_tracker_script' );
+add_action( 'wp_footer', 'buykorigw_inject_tracker', 5 );
+
+function buykorigw_enqueue_tracker_script() {
+    $settings = buykorigw_get_settings();
+    if ( empty( $settings['api_key'] ) ) {
+        return;
+    }
+
+    $js_file = BUYKORIGW_PLUGIN_DIR . 'assets/js/tracker.js';
+    $version = file_exists( $js_file ) ? filemtime( $js_file ) : BUYKORIGW_VERSION;
+
+    wp_enqueue_script(
+        'buykorigw-tracker',
+        plugins_url( 'assets/js/tracker.js', dirname( __FILE__ ) ),
+        array(),
+        $version,
+        true
+    );
+}
+
+function buykorigw_current_post_has_shortcode( $shortcodes ) {
+    global $post;
+    if ( ! $post || empty( $post->post_content ) ) {
+        return false;
+    }
+
+    foreach ( (array) $shortcodes as $shortcode ) {
+        if ( has_shortcode( $post->post_content, $shortcode ) ) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function buykorigw_current_page_is_wc_page( $page_key ) {
+    if ( ! function_exists( 'wc_get_page_id' ) || ! function_exists( 'get_queried_object_id' ) ) {
+        return false;
+    }
+
+    $page_id = wc_get_page_id( $page_key );
+    return $page_id > 0 && (int) get_queried_object_id() === (int) $page_id;
+}
+
+function buykorigw_is_checkout_context() {
+    return ( function_exists( 'is_checkout' ) && is_checkout() )
+        || buykorigw_current_page_is_wc_page( 'checkout' )
+        || buykorigw_current_post_has_shortcode( array( 'woocommerce_checkout' ) );
+}
+
+function buykorigw_is_cart_context() {
+    return ( function_exists( 'is_cart' ) && is_cart() )
+        || buykorigw_current_page_is_wc_page( 'cart' )
+        || buykorigw_current_post_has_shortcode( array( 'woocommerce_cart' ) );
+}
+
+function buykorigw_is_product_listing_context() {
+    $has_archive = ( function_exists( 'is_shop' ) && is_shop() )
+        || ( function_exists( 'is_product_category' ) && is_product_category() )
+        || ( function_exists( 'is_product_tag' ) && is_product_tag() );
+
+    return $has_archive || buykorigw_current_post_has_shortcode(
+        array(
+            'products',
+            'product_category',
+            'product_categories',
+            'sale_products',
+            'best_selling_products',
+            'recent_products',
+            'featured_products',
+            'top_rated_products',
+            'add_to_cart',
+        )
+    );
+}
 
 function buykorigw_inject_tracker() {
     $settings = buykorigw_get_settings();
@@ -65,19 +124,22 @@ function buykorigw_inject_tracker() {
     if ( empty( $settings['api_key'] ) ) {
         return;
     }
-    $low_resource_mode = ! empty( $settings['low_resource_mode'] );
+    $low_resource_mode = false;
 
     // Pass config to JS
     $tracker_data = array(
         'ajax_url'    => admin_url( 'admin-ajax.php' ),
         'rest_url'    => rest_url( 'buykori/v1/track' ),
+        'atc_receipts_url' => rest_url( 'buykori/v1/atc-receipts' ),
+        'incomplete_checkout_url' => rest_url( 'buykori/v1/incomplete-checkout' ),
+        'store_cart_url' => rest_url( 'wc/store/v1/cart' ),
         'nonce'       => wp_create_nonce( 'buykorigw_track_nonce' ),
         'rest_nonce'  => wp_create_nonce( 'wp_rest' ),
         'tracking_mode' => buykorigw_resolve_tracking_mode( $settings ),
         'content_id_format' => isset( $settings['content_id_format'] ) ? $settings['content_id_format'] : 'id',
         'currency' => function_exists( 'get_woocommerce_currency' ) ? get_woocommerce_currency() : 'BDT',
         'enable_hybrid' => isset( $settings['enable_hybrid'] ) ? (bool) $settings['enable_hybrid'] : false,
-        'enable_variations' => isset( $settings['enable_variations'] ) ? (bool) $settings['enable_variations'] : false,
+        'enable_variations' => true,
         'fb_pixel_id'  => isset( $settings['fb_pixel_id'] ) ? trim( $settings['fb_pixel_id'] ) : '',
         'tt_pixel_id'  => isset( $settings['tt_pixel_id'] ) ? trim( $settings['tt_pixel_id'] ) : '',
         'events'      => array(
@@ -94,8 +156,25 @@ function buykorigw_inject_tracker() {
         ),
     );
 
+    $is_product = function_exists( 'is_product' ) && is_product();
+    $is_checkout = buykorigw_is_checkout_context()
+        && ( ! function_exists( 'is_order_received_page' ) || ! is_order_received_page() );
+    $is_cart = buykorigw_is_cart_context();
+    $is_thankyou = function_exists( 'is_order_received_page' ) && is_order_received_page();
+    $is_product_listing = buykorigw_is_product_listing_context();
+    $tracker_data['page_context'] = array(
+        'has_product'         => $is_product,
+        'has_product_listing' => $is_product_listing,
+        'has_checkout'        => $is_checkout,
+        'has_cart'            => $is_cart,
+        'is_thankyou'         => $is_thankyou,
+        'is_search'           => function_exists( 'is_search' ) && is_search(),
+        'is_landing'          => ( function_exists( 'is_front_page' ) && is_front_page() )
+            || ( function_exists( 'is_home' ) && is_home() ),
+    );
+
     // Add product data if on a WooCommerce product page
-    if ( ! $low_resource_mode && function_exists( 'is_product' ) && is_product() && $settings['enable_viewcontent'] ) {
+    if ( ! $low_resource_mode && $is_product && $settings['enable_viewcontent'] ) {
         global $product;
         if ( $product && is_a( $product, 'WC_Product' ) ) {
             $tracker_data['product'] = array(
@@ -111,50 +190,58 @@ function buykorigw_inject_tracker() {
 
     // Detect page type
     $tracker_data['page_type'] = 'other';
-    if ( function_exists( 'is_product' ) && is_product() ) {
+    if ( $is_product ) {
         $tracker_data['page_type'] = 'product';
-    } elseif ( function_exists( 'is_checkout' ) && is_checkout() && ( ! function_exists( 'is_order_received_page' ) || ! is_order_received_page() ) ) {
+    } elseif ( $is_product_listing ) {
+        $tracker_data['page_type'] = 'product_listing';
+    } elseif ( $is_checkout ) {
         $tracker_data['page_type'] = 'checkout';
-    } elseif ( function_exists( 'is_cart' ) && is_cart() ) {
+    } elseif ( $is_cart ) {
         $tracker_data['page_type'] = 'cart';
-    } elseif ( function_exists( 'is_order_received_page' ) && is_order_received_page() ) {
+    } elseif ( $is_thankyou ) {
         $tracker_data['page_type'] = 'thankyou';
     } elseif ( is_search() ) {
         $tracker_data['page_type'] = 'search';
         $tracker_data['search_string'] = get_search_query();
     }
 
-    // Add cart data for ViewCart and InitiateCheckout matching/optimization.
-    if (
-        function_exists( 'buykorigw_get_cart_event_data' ) &&
-        ( ( function_exists( 'is_cart' ) && is_cart() ) || ( function_exists( 'is_checkout' ) && is_checkout() && ( ! function_exists( 'is_order_received_page' ) || ! is_order_received_page() ) ) )
-    ) {
+    // Reuse an already-loaded cart on landing pages as well. Embedded checkout
+    // builders frequently preload it without making is_checkout() true.
+    $has_loaded_cart = function_exists( 'WC' ) && WC() && WC()->cart && ! WC()->cart->is_empty();
+    if ( function_exists( 'buykorigw_get_cart_event_data' ) && ( $is_cart || $is_checkout || $has_loaded_cart ) ) {
         $cart_data = buykorigw_get_cart_event_data();
         if ( ! empty( $cart_data ) ) {
             $tracker_data['cart'] = $cart_data;
         }
     }
 
-    echo "<script id='buykorigw-tracker-config'>\n";
-    echo "window.buykorigw_config = " . wp_json_encode( $tracker_data ) . ";\n";
-    echo "</script>\n";
+    if (
+        ! $low_resource_mode
+        && ! empty( $settings['enable_viewcontent'] )
+        && empty( $tracker_data['product'] )
+        && $has_loaded_cart
+    ) {
+        $cart_items = WC()->cart->get_cart();
+        $first_item = reset( $cart_items );
+        $product_id = ! empty( $first_item['variation_id'] ) ? $first_item['variation_id'] : ( $first_item['product_id'] ?? 0 );
+        $product    = $product_id ? wc_get_product( $product_id ) : false;
+        if ( $product && is_a( $product, 'WC_Product' ) ) {
+            $tracker_data['product'] = array(
+                'id'       => $product->get_id(),
+                'sku'      => $product->get_sku() ?: (string) $product->get_id(),
+                'name'     => $product->get_name(),
+                'price'    => (float) $product->get_price(),
+                'currency' => get_woocommerce_currency(),
+                'category' => implode( ', ', wp_list_pluck( wc_get_product_terms( $product->get_id(), 'product_cat' ), 'name' ) ),
+                'source'   => 'cart_session',
+            );
+        }
+    }
 
-    $js_file = BUYKORIGW_PLUGIN_DIR . 'assets/js/tracker.js';
-    $version = file_exists( $js_file ) ? filemtime( $js_file ) : BUYKORIGW_VERSION;
-    $js_url  = plugins_url( 'assets/js/tracker.js', dirname( __FILE__ ) );
-    echo "<script id='buykorigw-tracker-js' src='" . esc_url( add_query_arg( 'ver', $version, $js_url ) ) . "' defer></script>\n";
+    echo '<span id="buykorigw-tracker-config" hidden data-config="' . esc_attr( wp_json_encode( $tracker_data ) ) . '"></span>' . "\n";
 }
 
 // ─── Tracker JavaScript ────────────────────────────────────────────────────────
-function buykorigw_get_tracker_js() {
-    $js_file = BUYKORIGW_PLUGIN_DIR . 'assets/js/tracker.js';
-    if ( file_exists( $js_file ) ) {
-        return file_get_contents( $js_file );
-    }
-    return '';
-}
-
-
 // ─── AJAX Handler: Track Event (Server-Side — bypasses cache) ──────────────────
 add_action( 'wp_ajax_buykorigw_track_event', 'buykorigw_ajax_track_event' );
 add_action( 'wp_ajax_nopriv_buykorigw_track_event', 'buykorigw_ajax_track_event' );
@@ -408,9 +495,50 @@ function buykorigw_ajax_rate_limited() {
 
 
 // ─── WooCommerce: Purchase Event on Thank You Page (Server-Side) ───────────────
-add_action( 'woocommerce_thankyou', 'buykorigw_track_purchase', 10, 1 );
+add_action( 'woocommerce_thankyou', 'buykorigw_schedule_purchase_sync', 10, 1 );
 add_action( 'woocommerce_checkout_order_processed', 'buykorigw_track_deferred_purchase_after_checkout', 30, 1 );
 add_action( 'woocommerce_store_api_checkout_order_processed', 'buykorigw_track_deferred_purchase_after_store_api_checkout', 30, 1 );
+add_action( 'buykorigw_sync_purchase', 'buykorigw_sync_purchase_handler', 10, 1 );
+
+function buykorigw_schedule_purchase_sync( $order_or_id ) {
+    $order_id = is_object( $order_or_id ) && method_exists( $order_or_id, 'get_id' )
+        ? $order_or_id->get_id()
+        : (int) $order_or_id;
+
+    if ( ! $order_id || buykorigw_get_order_meta( $order_id, '_buykorigw_tracked' ) ) {
+        return;
+    }
+
+    $queued_at = (int) buykorigw_get_order_meta( $order_id, '_buykorigw_purchase_sync_queued_at' );
+    if ( $queued_at && abs( time() - $queued_at ) < 600 ) {
+        return;
+    }
+
+    buykorigw_update_order_meta( $order_id, '_buykorigw_purchase_sync_queued_at', time() );
+
+    if ( function_exists( 'as_enqueue_async_action' ) ) {
+        as_enqueue_async_action(
+            'buykorigw_sync_purchase',
+            array( 'order_id' => $order_id ),
+            'buykori-adsync'
+        );
+        return;
+    }
+
+    if ( ! wp_next_scheduled( 'buykorigw_sync_purchase', array( $order_id ) ) ) {
+        wp_schedule_single_event( time() + 1, 'buykorigw_sync_purchase', array( $order_id ) );
+    }
+}
+
+function buykorigw_sync_purchase_handler( $order_id ) {
+    $order_id = (int) $order_id;
+    if ( ! $order_id ) {
+        return;
+    }
+
+    buykorigw_update_order_meta( $order_id, '_buykorigw_purchase_sync_queued_at', '' );
+    buykorigw_track_purchase( $order_id );
+}
 
 function buykorigw_track_deferred_purchase_after_checkout( $order_id ) {
     $settings = buykorigw_get_settings();
@@ -419,7 +547,7 @@ function buykorigw_track_deferred_purchase_after_checkout( $order_id ) {
         return;
     }
 
-    buykorigw_track_purchase( $order_id );
+    buykorigw_schedule_purchase_sync( $order_id );
 }
 
 function buykorigw_track_deferred_purchase_after_store_api_checkout( $order ) {
@@ -429,7 +557,7 @@ function buykorigw_track_deferred_purchase_after_store_api_checkout( $order ) {
         return;
     }
 
-    buykorigw_track_purchase( $order->get_id() );
+    buykorigw_schedule_purchase_sync( $order->get_id() );
 }
 
 function buykorigw_track_purchase( $order_id ) {

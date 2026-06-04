@@ -14,6 +14,7 @@ class ClientUser(Base):
     id = Column(Integer, primary_key=True, index=True)
     client_id = Column(Integer, ForeignKey("clients.id", ondelete="CASCADE"), nullable=False, index=True)
     email = Column(String(255), nullable=False, index=True)
+    phone_number = Column(String(32), nullable=True, index=True)
     password_hash = Column(String(255), nullable=False)
     full_name = Column(String(120), nullable=True)
     notification_email = Column(String(255), nullable=True)

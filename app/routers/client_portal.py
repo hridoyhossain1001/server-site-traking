@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Request, Form, Response, HTTPException
+from fastapi import APIRouter, Depends, Request, Form, Response, HTTPException, Query
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -24,9 +24,11 @@ from app.routers.client_auth import (
     _create_session,
     _validate_email,
     _validate_password,
+    _validate_phone_number,
     get_client_user_from_cookie,
 )
 from app.services.auth_service import hash_password, verify_password
+from app.services.plan_service import has_growth_access, new_free_values, new_trial_values, record_trial_identity, require_trial_available
 from app.limiter import limiter
 from fastapi.templating import Jinja2Templates
 
@@ -35,6 +37,17 @@ templates.env.globals["mask_secret"] = mask_secret
 templates.env.globals["display_domain_url"] = display_domain_url
 
 router = APIRouter(tags=["Client Portal"])
+
+
+def _safe_next_url(value: str | None) -> str:
+    value = (value or "").strip()
+    if not value or not value.startswith("/") or value.startswith("//"):
+        return ""
+    if "\r" in value or "\n" in value:
+        return ""
+    if not (value.startswith("/plugin/connect") or value.startswith("/client/dashboard")):
+        return ""
+    return value
 
 
 def get_client_from_cookie(request: Request) -> Optional[str]:
@@ -78,15 +91,20 @@ async def get_client_from_portal_session(request: Request, db: AsyncSession) -> 
 
 
 @router.get("/client", response_class=HTMLResponse, include_in_schema=False)
-async def client_login_page(request: Request, db: AsyncSession = Depends(get_db)):
+async def client_login_page(
+    request: Request,
+    next_url: str = Query("", alias="next"),
+    db: AsyncSession = Depends(get_db),
+):
+    safe_next = _safe_next_url(next_url)
     client = await get_client_from_portal_session(request, db)
     if client:
-        return RedirectResponse(url="/client/dashboard", status_code=303)
+        return RedirectResponse(url=safe_next or "/client/dashboard", status_code=303)
 
     return templates.TemplateResponse(
         request,
         "client_portal/login.html",
-        {"title": "Client Login", "active_tab": "login"}
+        {"title": "Client Login", "active_tab": "login", "next_url": safe_next}
     )
 
 
@@ -96,8 +114,10 @@ async def client_login(
     request: Request,
     email: str = Form(...),
     password: str = Form(...),
+    next_url: str = Form(""),
     db: AsyncSession = Depends(get_db),
 ):
+    safe_next = _safe_next_url(next_url)
     try:
         email = _validate_email(email)
         result = await db.execute(select(ClientUser).where(ClientUser.email == email))
@@ -106,7 +126,7 @@ async def client_login(
             return templates.TemplateResponse(
                 request,
                 "client_portal/login_failed.html",
-                {"title": "Login Failed", "message": "Invalid email or password."},
+                {"title": "Login Failed", "message": "Invalid email or password.", "next_url": safe_next},
                 status_code=401
             )
 
@@ -116,11 +136,11 @@ async def client_login(
             return templates.TemplateResponse(
                 request,
                 "client_portal/login_failed.html",
-                {"title": "Login Failed", "message": "This workspace is inactive."},
+                {"title": "Login Failed", "message": "This workspace is inactive.", "next_url": safe_next},
                 status_code=401
             )
 
-        redirect = RedirectResponse(url="/client/dashboard", status_code=303)
+        redirect = RedirectResponse(url=safe_next or "/client/dashboard", status_code=303)
         user.last_login_at = datetime.datetime.now(datetime.timezone.utc)
         await _create_session(db, user, redirect, request)
         await db.commit()
@@ -129,7 +149,7 @@ async def client_login(
         return templates.TemplateResponse(
             request,
             "client_portal/login_failed.html",
-            {"title": "Login Failed", "message": exc.detail},
+            {"title": "Login Failed", "message": exc.detail, "next_url": safe_next},
             status_code=exc.status_code
         )
     except Exception as exc:
@@ -137,7 +157,7 @@ async def client_login(
         return templates.TemplateResponse(
             request,
             "client_portal/login_failed.html",
-            {"title": "Login Error", "message": "An unexpected error occurred during login. Please try again."},
+            {"title": "Login Error", "message": "An unexpected error occurred during login. Please try again.", "next_url": safe_next},
             status_code=500
         )
 
@@ -149,11 +169,15 @@ async def client_signup_form(
     full_name: str = Form(...),
     business_name: str = Form(...),
     email: str = Form(...),
+    phone_number: str = Form(...),
     password: str = Form(...),
     confirm_password: str = Form(...),
     domain: str = Form(""),
+    selected_plan: str = Form("growth_trial"),
+    next_url: str = Form(""),
     db: AsyncSession = Depends(get_db),
 ):
+    safe_next = _safe_next_url(next_url)
     try:
         try:
             clean_email = _validate_email(email)
@@ -161,13 +185,14 @@ async def client_signup_form(
             if password != confirm_password:
                 raise HTTPException(status_code=400, detail="Passwords do not match.")
             clean_full_name = _clean_name(full_name, "Full name")
+            clean_phone_number = _validate_phone_number(phone_number)
             clean_business_name = _clean_name(business_name, "Business name")
             clean_domain = _clean_domain(domain)
         except HTTPException as exc:
             return templates.TemplateResponse(
                 request,
                 "client_portal/login.html",
-                {"title": "Client Login", "active_tab": "signup", "error": exc.detail},
+                {"title": "Client Login", "active_tab": "signup", "error": exc.detail, "next_url": safe_next},
                 status_code=400,
             )
 
@@ -180,9 +205,28 @@ async def client_signup_form(
                     "title": "Client Login",
                     "active_tab": "signup",
                     "error": "An account already exists for this email.",
+                    "next_url": safe_next,
                 },
                 status_code=409,
             )
+        starts_trial = selected_plan == "growth_trial"
+        if selected_plan not in {"free", "growth_trial"}:
+            starts_trial = True
+        if starts_trial:
+            try:
+                await require_trial_available(db, domain=clean_domain)
+            except HTTPException as exc:
+                return templates.TemplateResponse(
+                    request,
+                    "client_portal/login.html",
+                    {
+                        "title": "Client Login",
+                        "active_tab": "signup",
+                        "error": exc.detail,
+                        "next_url": safe_next,
+                    },
+                    status_code=exc.status_code,
+                )
 
         client = Client(
             name=clean_business_name,
@@ -195,9 +239,9 @@ async def client_signup_form(
             enable_facebook=False,
             enable_tiktok=False,
             enable_ga4=False,
-            monthly_limit=1000,
             daily_quota=1000,
             rate_limit=120,
+            **(new_trial_values() if starts_trial else new_free_values()),
         )
         db.add(client)
         await db.flush()
@@ -205,6 +249,7 @@ async def client_signup_form(
         user = ClientUser(
             client_id=client.id,
             email=clean_email,
+            phone_number=clean_phone_number,
             password_hash=hash_password(password),
             full_name=clean_full_name,
             role="owner",
@@ -213,8 +258,10 @@ async def client_signup_form(
         )
         db.add(user)
         await db.flush()
+        if starts_trial:
+            await record_trial_identity(db, client, email=clean_email, source="signup")
 
-        redirect = RedirectResponse(url="/client/dashboard", status_code=303)
+        redirect = RedirectResponse(url=safe_next or "/client/dashboard", status_code=303)
         await _create_session(db, user, redirect, request)
         await db.commit()
         return redirect
@@ -227,6 +274,7 @@ async def client_signup_form(
                 "title": "Client Login",
                 "active_tab": "signup",
                 "error": "An unexpected error occurred during signup. Please try again.",
+                "next_url": safe_next,
             },
             status_code=500,
         )
@@ -265,6 +313,24 @@ async def client_dashboard(request: Request, db: AsyncSession = Depends(get_db))
     except Exception as e:
         logger.error(f"Failed to serve SPA index.html: {e}")
         raise HTTPException(status_code=500, detail="Client portal SPA index file not found. Run vite compile build.")
+
+
+@router.get("/plugin/connect", response_class=HTMLResponse, include_in_schema=False)
+async def plugin_connect_page(request: Request, db: AsyncSession = Depends(get_db)):
+    client = await get_client_from_portal_session(request, db)
+    current_path = str(request.url.path)
+    if request.url.query:
+        current_path = f"{current_path}?{request.url.query}"
+    if not client:
+        from urllib.parse import urlencode
+        return RedirectResponse(url=f"/client?{urlencode({'next': current_path})}", status_code=303)
+
+    if not client.is_active:
+        redirect = RedirectResponse(url="/client", status_code=303)
+        redirect.delete_cookie("client_session")
+        return redirect
+
+    return await client_dashboard(request, db)
 
 
 @router.post("/client/settings/update", include_in_schema=False)
@@ -341,9 +407,10 @@ async def client_settings_update(
     # ─── Update non-sensitive fields always ─────────────────────────────────
     client.test_event_code = test_event_code.strip() if test_event_code and test_event_code.strip() else None
     client.enable_facebook = (enable_facebook == "1")
-    client.enable_tiktok = (enable_tiktok == "1")
-    client.enable_ga4 = (enable_ga4 == "1")
-    client.deferred_purchase = (deferred_purchase == "1")
+    growth_enabled = has_growth_access(client)
+    client.enable_tiktok = growth_enabled and (enable_tiktok == "1")
+    client.enable_ga4 = growth_enabled and (enable_ga4 == "1")
+    client.deferred_purchase = growth_enabled and (deferred_purchase == "1")
 
     # Update domain(s) if provided
     if domain is not None:
@@ -363,7 +430,7 @@ async def client_settings_update(
         client.domain = ",".join(parts) if parts else None
 
     # Update COD Auto-Confirm Settings
-    client.auto_confirm_days = min(max(0, auto_confirm_days), 7)
+    client.auto_confirm_days = min(max(0, auto_confirm_days), 7) if growth_enabled else 0
     client.auto_confirm_status = auto_confirm_status.strip() or "completed"
 
     client.tiktok_test_event_code = tiktok_test_event_code.strip() if tiktok_test_event_code and tiktok_test_event_code.strip() else None
@@ -375,6 +442,14 @@ async def client_settings_update(
         client.tiktok_access_token = encrypt_token(tiktok_access_token.strip())
     if ga4_api_secret and ga4_api_secret.strip():
         client.ga4_api_secret = encrypt_token(ga4_api_secret.strip())
+
+    if getattr(client, "trial_started_at", None):
+        try:
+            await require_trial_available(db, domain=client.domain, pixel_id=client.pixel_id, exclude_client_id=client.id)
+            await record_trial_identity(db, client, source="settings")
+        except HTTPException as exc:
+            q = urlencode({"settings_msg": exc.detail, "settings_type": "error"})
+            return RedirectResponse(url=f"/client/dashboard?{q}#settings", status_code=303)
 
     await db.commit()
 

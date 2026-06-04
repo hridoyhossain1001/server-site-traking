@@ -10,7 +10,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone, timedelta
 
-from sqlalchemy import update, and_
+from sqlalchemy import update, and_, select
 
 from app.database import AsyncSessionLocal
 from app.models.pending_event import PendingEvent
@@ -21,6 +21,36 @@ EXPIRY_DAYS = 7               # Facebook-এর ৭ দিনের limit
 CHECK_INTERVAL_HOURS = 1      # প্রতি ১ ঘণ্টায় চেক করো
 
 
+async def downgrade_expired_trials_once(now: datetime | None = None) -> int:
+    """Persist Free-plan limits for clients whose 14-day Growth trial has ended."""
+    from app.models.client import Client
+    from app.services.plan_service import apply_expired_trial_downgrade
+
+    current = now or datetime.now(timezone.utc)
+    async with AsyncSessionLocal() as db:
+        clients_r = await db.execute(
+            select(Client).where(
+                and_(
+                    Client.is_active == True,
+                    Client.plan_tier == "free",
+                    Client.trial_ends_at.is_not(None),
+                    Client.trial_ends_at <= current,
+                )
+            )
+        )
+        clients = clients_r.scalars().all()
+        changed_count = 0
+        for client in clients:
+            if apply_expired_trial_downgrade(client, current):
+                changed_count += 1
+
+        if changed_count:
+            await db.commit()
+            logger.info("Downgraded %s expired trial client(s) to Free limits.", changed_count)
+
+        return changed_count
+
+
 async def expire_old_pending_events():
     """
     Background loop — প্রতি ১ ঘণ্টায় পুরোনো pending events expire করে এবং expired COD orders auto-confirm করে।
@@ -29,11 +59,14 @@ async def expire_old_pending_events():
 
     while True:
         try:
+            await downgrade_expired_trials_once()
+
             # 1. Auto-confirm COD orders based on client config (older than N days)
             async with AsyncSessionLocal() as db:
                 from app.models.client import Client
                 from app.routers.deferred_events import _queue_confirmed_event
                 from app.dependencies import _snapshot
+                from app.services.plan_service import has_growth_access
                 from sqlalchemy import select
 
                 clients_r = await db.execute(
@@ -48,6 +81,8 @@ async def expire_old_pending_events():
                 clients = clients_r.scalars().all()
 
                 for client in clients:
+                    if not has_growth_access(client):
+                        continue
                     auto_confirm_cutoff = datetime.now(timezone.utc) - timedelta(days=client.auto_confirm_days)
                     pending_r = await db.execute(
                         select(PendingEvent)
@@ -66,6 +101,8 @@ async def expire_old_pending_events():
                         cached_client = _snapshot(client)
                         confirmed_count = 0
                         for pe in pending_events:
+                            if pe.portal_state == "operations_only":
+                                continue
                             try:
                                 async with db.begin_nested():
                                     await _queue_confirmed_event(cached_client, pe, db)

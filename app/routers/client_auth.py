@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 import os
 import re
+from typing import Literal
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -20,6 +21,7 @@ from app.services.auth_service import (
     normalize_email,
     verify_password,
 )
+from app.services.plan_service import new_free_values, new_trial_values, plan_summary, record_trial_identity, require_trial_available
 from app.limiter import limiter
 
 
@@ -43,9 +45,11 @@ ALLOWED_CLIENT_AUTH_HOSTS = {
 class ClientSignupRequest(BaseModel):
     full_name: str
     email: str
+    phone_number: str
     password: str
     business_name: str
     domain: str | None = None
+    selected_plan: Literal["free", "growth_trial"] = "growth_trial"
 
 
 class ClientLoginRequest(BaseModel):
@@ -84,12 +88,34 @@ def _validate_password(password: str) -> None:
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters.")
 
 
+def _validate_phone_number(phone_number: str) -> str:
+    raw = str(phone_number or "").strip()
+    digits = re.sub(r"\D+", "", raw)
+    if digits.startswith("8801") and len(digits) == 13:
+        return f"+{digits}"
+    if digits.startswith("01") and len(digits) == 11:
+        return f"+88{digits}"
+    if digits.startswith("1") and len(digits) == 10:
+        return f"+880{digits}"
+    if raw.startswith("+") and 8 <= len(digits) <= 15:
+        return f"+{digits}"
+    if 8 <= len(digits) <= 15 and not digits.startswith("0"):
+        return f"+{digits}"
+    raise HTTPException(status_code=400, detail="Enter a valid phone number for trial support.")
+
+
 def require_allowed_origin(request: Request) -> None:
     origin = request.headers.get("origin")
     if not origin:
         return
     host = (urlparse(origin).hostname or "").lower()
-    if host not in ALLOWED_CLIENT_AUTH_HOSTS:
+    request_host = (
+        request.headers.get("x-forwarded-host")
+        or request.headers.get("host")
+        or request.url.hostname
+        or ""
+    ).split(",", 1)[0].split(":", 1)[0].strip().lower()
+    if host != request_host and host not in ALLOWED_CLIENT_AUTH_HOSTS:
         raise HTTPException(status_code=403, detail="Origin is not allowed.")
 
 
@@ -141,9 +167,11 @@ def _clear_session_cookie(response: Response, request: Request) -> None:
 
 
 def _user_payload(user: ClientUser, client: Client) -> dict:
+    plan = plan_summary(client)
     return {
         "id": user.id,
         "email": user.email,
+        "phone_number": user.phone_number,
         "full_name": user.full_name,
         "role": user.role,
         "email_verified": bool(user.email_verified),
@@ -152,6 +180,7 @@ def _user_payload(user: ClientUser, client: Client) -> dict:
             "name": client.name,
             "domain": client.domain,
             "is_active": bool(client.is_active),
+            "plan": plan,
         },
     }
 
@@ -214,12 +243,16 @@ async def client_signup(
     email = _validate_email(payload.email)
     _validate_password(payload.password)
     full_name = _clean_name(payload.full_name, "Full name")
+    phone_number = _validate_phone_number(payload.phone_number)
     business_name = _clean_name(payload.business_name, "Business name")
     domain = _clean_domain(payload.domain)
 
     existing = await db.execute(select(ClientUser).where(ClientUser.email == email))
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=409, detail="An account already exists for this email.")
+    starts_trial = payload.selected_plan == "growth_trial"
+    if starts_trial:
+        await require_trial_available(db, domain=domain)
 
     client = Client(
         name=business_name,
@@ -232,9 +265,9 @@ async def client_signup(
         enable_facebook=False,
         enable_tiktok=False,
         enable_ga4=False,
-        monthly_limit=1000,
         daily_quota=1000,
         rate_limit=120,
+        **(new_trial_values() if starts_trial else new_free_values()),
     )
     db.add(client)
     await db.flush()
@@ -242,6 +275,7 @@ async def client_signup(
     user = ClientUser(
         client_id=client.id,
         email=email,
+        phone_number=phone_number,
         password_hash=hash_password(payload.password),
         full_name=full_name,
         role="owner",
@@ -250,6 +284,8 @@ async def client_signup(
     )
     db.add(user)
     await db.flush()
+    if starts_trial:
+        await record_trial_identity(db, client, email=email, source="signup")
     await _create_session(db, user, response, request)
     await db.commit()
     await db.refresh(client)

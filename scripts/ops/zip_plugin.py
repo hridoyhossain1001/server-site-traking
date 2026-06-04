@@ -8,11 +8,17 @@ from __future__ import annotations
 
 import hashlib
 import re
+import sys
 import zipfile
 from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from app.utils.plugin_package import protect_plugin_package_content
+
 PLUGIN_SLUG = "buykori-adsync"
 SOURCE_DIR = PROJECT_ROOT / "wordpress-plugin" / PLUGIN_SLUG
 OUTPUT_ZIP = PROJECT_ROOT / "wordpress-plugin" / f"{PLUGIN_SLUG}.zip"
@@ -106,7 +112,7 @@ def build_zip() -> tuple[int, str]:
             info = zipfile.ZipInfo(archive_name, FIXED_ZIP_DATE)
             info.compress_type = zipfile.ZIP_DEFLATED
             info.external_attr = 0o644 << 16
-            archive.writestr(info, path.read_bytes())
+            archive.writestr(info, protect_plugin_package_content(archive_name, path.read_bytes()))
 
     package_hash = hashlib.sha256(OUTPUT_ZIP.read_bytes()).hexdigest()
     return len(files), package_hash

@@ -20,6 +20,9 @@ from app.services.event_quality import boost_event_quality
 from app.services.event_worker import enqueue_events
 from app.services.fast_ingest_service import reserve_usage_and_enqueue_stream
 from app.services.usage_service import check_and_reserve_usage
+from app.services.plan_service import has_growth_access, remaining_monthly_order_capacity
+from app.services.site_binding_service import check_site_event_rate_limit, validate_event_site_binding
+from app.services.visitor_context import extract_device_metadata
 from app.models.pending_event import PendingEvent
 
 logger = logging.getLogger(__name__)
@@ -28,12 +31,17 @@ router = APIRouter()
 
 MAX_EVENTS_PER_REQUEST = int(os.getenv("MAX_EVENTS_PER_REQUEST", "500"))
 CAPI_SIGNATURE_WINDOW_SECONDS = int(os.getenv("CAPI_SIGNATURE_WINDOW_SECONDS", "300"))
-GEOIP_ENRICH_IN_REQUEST = os.getenv("GEOIP_ENRICH_IN_REQUEST", "true").lower() in ("true", "1", "yes")
+GEOIP_ENRICH_IN_REQUEST = os.getenv("GEOIP_ENRICH_IN_REQUEST", "false").lower() in ("true", "1", "yes")
 FRAUD_INTERNAL_CUSTOM_KEYS = {
     "raw_first_name",
     "billing_first_name_raw",
     "email_domain",
     "billing_email_domain",
+    "_bk_device_type",
+    "_bk_device_os",
+    "_bk_device_browser",
+    "_bk_screen_width",
+    "_bk_screen_height",
 }
 
 
@@ -94,6 +102,73 @@ def _strip_internal_custom_data(event_dict: dict) -> dict:
         for key in FRAUD_INTERNAL_CUSTOM_KEYS:
             custom_data.pop(key, None)
     return event_dict
+
+
+def _event_order_id(event) -> str:
+    if event.custom_data and getattr(event.custom_data, "order_id", None):
+        return str(event.custom_data.order_id)
+    if event.event_id:
+        return str(event.event_id)
+    return f"auto-{event.event_time}-{id(event)}"
+
+
+async def _upsert_order_record(
+    db: AsyncSession,
+    client: CachedClient,
+    event,
+    *,
+    portal_state: str | None = None,
+    fraud_score: int | None = None,
+    fraud_details: dict | None = None,
+) -> None:
+    order_id = _event_order_id(event)
+    raw_order_data = event.raw_order_data
+    event_dict = _strip_internal_custom_data(event.model_dump(exclude_none=True))
+
+    try:
+        async with db.begin_nested():
+            db.add(PendingEvent(
+                client_id=client.id,
+                order_id=order_id,
+                event_data=event_dict,
+                raw_order_data=raw_order_data,
+                status="pending",
+                portal_state=portal_state,
+                fraud_score=fraud_score,
+                fraud_details=fraud_details,
+            ))
+            await db.flush()
+        logger.info(f"[{client.name}] Order record captured: {order_id}")
+        return
+    except Exception as exc:
+        existing_result = await db.execute(
+            select(PendingEvent)
+            .where(
+                and_(
+                    PendingEvent.client_id == client.id,
+                    PendingEvent.order_id == order_id,
+                )
+            )
+            .order_by(PendingEvent.id.desc())
+            .limit(1)
+        )
+        existing = existing_result.scalar_one_or_none()
+        if not existing:
+            logger.exception(f"[{client.name}] Order record insert failed ({order_id}): {exc}")
+            raise
+
+    old_status = existing.status
+    existing.event_data = event_dict
+    existing.raw_order_data = raw_order_data
+    existing.status = "pending"
+    existing.portal_state = portal_state
+    existing.is_confirmed = False
+    existing.is_deleted = False
+    existing.fraud_score = fraud_score
+    existing.fraud_details = fraud_details
+    existing.confirmed_at = None
+    existing.created_at = datetime.now(timezone.utc)
+    logger.info(f"[{client.name}] Refreshed order record: {order_id} (was {old_status})")
 
 
 async def reserve_unique_events(
@@ -170,6 +245,8 @@ async def receive_events(
             status_code=413,
             detail=f"Too many events in one request. Max {MAX_EVENTS_PER_REQUEST}.",
         )
+    client_ip = _request_client_ip(request)
+    site_host_for_binding = request.headers.get("x-capi-origin", "") or ""
     # ─── Domain Whitelisting (API Key চুরি প্রতিরোধ) ─────────────────
     # Client-এর domain সেট করা থাকলে, শুধু সেই ডোমেইন থেকে রিকোয়েস্ট নেবে
     # urlparse দিয়ে hostname extract করে exact match বা real subdomain চেক
@@ -195,6 +272,7 @@ async def receive_events(
         origin_host = _extract_hostname(origin)
         referer_host = _extract_hostname(referer)
         declared_host = _extract_hostname(declared_origin)
+        site_host_for_binding = declared_host or origin_host or referer_host
         signed_declared_origin_ok = False
 
         if declared_host and allowed_domains:
@@ -244,8 +322,16 @@ async def receive_events(
                 detail="Unauthorized domain. এই API Key আপনার ডোমেইনে রেজিস্টার্ড নয়।",
             )
 
-    # ─── Real IP Detection (Cloudflare/Nginx X-Forwarded-For হেডার থেকে) ──
-    client_ip = _request_client_ip(request)
+    if site_host_for_binding:
+        await validate_event_site_binding(
+            db,
+            client=client,
+            events=payload.data,
+            signed_site_host=site_host_for_binding,
+            installation_id=(request.headers.get("x-buykori-installation-id") or "").strip()[:128] or None,
+            ip_address=client_ip,
+        )
+        await check_site_event_rate_limit(client, site_host_for_binding, len(payload.data))
 
     # ─── Auto-inject real IP & User-Agent into user_data ─────────────────
     # ফ্রন্টএন্ড থেকে placeholder IP (8.8.8.8) বা কোনো IP না আসলে
@@ -282,7 +368,7 @@ async def receive_events(
 
     # ─── Durable Outbox Transaction ───────────────────────────────────
     # Dedup + usage reserve + queue insert একই transaction-এ commit হবে।
-    should_hold = (hold or client.deferred_purchase) and not force_send
+    should_hold = has_growth_access(client) and (hold or client.deferred_purchase) and not force_send
     deferred_count = 0
     queued_count = 0
     reserved_ids = set()
@@ -404,7 +490,49 @@ async def receive_events(
                     )
                     raise
 
+        operations_events = [
+            event for event in queue_events
+            if event.event_name == "Purchase"
+        ]
+        if operations_events:
+            operations_order_ids = {_event_order_id(event) for event in operations_events}
+            existing_operations_r = await db.execute(
+                select(PendingEvent.order_id).where(
+                    and_(
+                        PendingEvent.client_id == client.id,
+                        PendingEvent.order_id.in_(operations_order_ids),
+                    )
+                )
+            )
+            existing_operations = set(existing_operations_r.scalars().all())
+            remaining_orders = await remaining_monthly_order_capacity(db, client.id, client)
+            for event in operations_events:
+                order_id = _event_order_id(event)
+                is_new_order = order_id not in existing_operations
+                if is_new_order and remaining_orders is not None and remaining_orders <= 0:
+                    logger.warning(f"[{client.name}] Monthly manual order dashboard quota reached; skipped capture: {order_id}")
+                    continue
+                await _upsert_order_record(
+                    db,
+                    client,
+                    event,
+                    portal_state="operations_only",
+                )
+                if is_new_order:
+                    existing_operations.add(order_id)
+                    if remaining_orders is not None:
+                        remaining_orders -= 1
+
         if queue_events:
+            request_device = {}
+            for event in queue_events:
+                custom_data = event.custom_data.model_dump() if event.custom_data else {}
+                request_device = extract_device_metadata(
+                    custom_data,
+                    user_agent=request.headers.get("user-agent"),
+                )
+                if request_device:
+                    break
             events_as_dicts = [
                 _strip_internal_custom_data(event.model_dump(exclude_none=True))
                 for event in queue_events
@@ -412,6 +540,7 @@ async def receive_events(
             request_context = {
                 "ip_address": client_ip,
                 "user_agent": request.headers.get("user-agent", ""),
+                "device": request_device,
                 "cookies": {
                     key: value
                     for key, value in request.cookies.items()

@@ -3,7 +3,7 @@
  * Plugin Name:       Buykori AdSync — Server-Side Tracking
  * Plugin URI:        https://buykori.app/
  * Description:       Server-Side Facebook CAPI, TikTok, and GA4 tracking for WooCommerce with one-page landing support, SHA-256 PII hashing, and deferred purchase control.
- * Version:           1.2.33
+ * Version:           1.2.36
  * Requires at least: 5.8
  * Requires PHP:      7.4
  * Author:            Buykori AdSync
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // ─── Plugin Constants ──────────────────────────────────────────────────────────
-define('BUYKORIGW_VERSION', '1.2.33');
+define('BUYKORIGW_VERSION', '1.2.36');
 define('BUYKORIGW_OPTIONAL_EVENTS_POLICY_VERSION', '1.2.33');
 
 define('BUYKORIGW_PLUGIN_FILE', __FILE__);
@@ -412,11 +412,28 @@ function buykorigw_recent_initiate_checkout_marker($timestamp, $max_age_seconds 
 }
 
 // ─── Helper: Send Event to Buykori AdSync (Server-Side via wp_remote_post) ─────
+function buykorigw_set_last_event_error($message = '', $code = 0, $body = '')
+{
+    $GLOBALS['buykorigw_last_event_error'] = array(
+        'message' => sanitize_text_field((string) $message),
+        'code'    => (int) $code,
+        'body'    => substr(wp_strip_all_tags((string) $body), 0, 500),
+    );
+}
+
+function buykorigw_get_last_event_error()
+{
+    $error = $GLOBALS['buykorigw_last_event_error'] ?? array();
+    return is_array($error) ? $error : array();
+}
+
 function buykorigw_send_event($event_data, $blocking = true)
 {
     $settings = buykorigw_get_settings();
+    buykorigw_set_last_event_error();
 
     if (empty($settings['api_key']) || empty($settings['gateway_url'])) {
+        buykorigw_set_last_event_error('API Key or AdSync API URL is missing.');
         if ($settings['debug_mode']) {
             error_log('[Buykori AdSync] API Key or AdSync API URL is missing.');
         }
@@ -443,6 +460,7 @@ function buykorigw_send_event($event_data, $blocking = true)
     ));
 
     if (is_wp_error($response)) {
+        buykorigw_set_last_event_error($response->get_error_message());
         if ($settings['debug_mode']) {
             error_log('[Buykori AdSync] Send event failed: ' . $response->get_error_message());
         }
@@ -461,6 +479,7 @@ function buykorigw_send_event($event_data, $blocking = true)
     if ($settings['debug_mode']) {
         error_log('[Buykori AdSync] Send event HTTP ' . $code . ': ' . wp_remote_retrieve_body($response));
     }
+    buykorigw_set_last_event_error('Gateway returned a non-success response.', $code, wp_remote_retrieve_body($response));
     return false;
 }
 
@@ -1362,10 +1381,19 @@ function buykorigw_rest_track_event(WP_REST_Request $request)
     // ─── Forward to FastAPI Backend ──────────────────────────────────────
     $sent = buykorigw_send_event($event_payload, true);
     if (!$sent) {
-        return new WP_REST_Response(array(
+        $response = array(
             'success' => false,
             'message' => 'Event accepted by WordPress but gateway forwarding failed',
-        ), 502);
+        );
+        $last_error = buykorigw_get_last_event_error();
+        if (!empty($settings['debug_mode']) && !empty($last_error)) {
+            $response['gateway_error'] = array_filter(array(
+                'message' => $last_error['message'] ?? '',
+                'code'    => $last_error['code'] ?? 0,
+                'body'    => $last_error['body'] ?? '',
+            ));
+        }
+        return new WP_REST_Response($response, 502);
     }
 
     if ($event_name === 'InitiateCheckout') {

@@ -28,6 +28,21 @@ add_action( 'woocommerce_new_order', 'buykorigw_save_attribution_snapshot', 10, 
 add_action( 'woocommerce_checkout_order_created', 'buykorigw_send_order_initiate_checkout_fallback', 999, 1 );
 add_action( 'woocommerce_checkout_order_processed', 'buykorigw_send_order_initiate_checkout_fallback', 30, 1 );
 add_action( 'woocommerce_thankyou', 'buykorigw_send_order_initiate_checkout_fallback', 5, 1 );
+add_action( 'woocommerce_checkout_order_created', 'buykorigw_mark_incomplete_checkout_recovered', 20, 1 );
+add_action( 'woocommerce_checkout_order_processed', 'buykorigw_mark_incomplete_checkout_recovered', 20, 1 );
+add_action( 'woocommerce_store_api_checkout_order_processed', 'buykorigw_mark_incomplete_checkout_recovered', 20, 1 );
+add_action( 'woocommerce_thankyou', 'buykorigw_mark_incomplete_checkout_recovered', 20, 1 );
+
+function buykorigw_mark_incomplete_checkout_recovered( $order_or_id ) {
+    $order = is_a( $order_or_id, 'WC_Order' ) ? $order_or_id : wc_get_order( $order_or_id );
+    if ( ! $order || $order->get_meta( '_buykorigw_incomplete_checkout_recovered' ) ) {
+        return;
+    }
+    if ( function_exists( 'buykorigw_convert_incomplete_checkout' ) && buykorigw_convert_incomplete_checkout( $order ) ) {
+        $order->update_meta_data( '_buykorigw_incomplete_checkout_recovered', 1 );
+        $order->save();
+    }
+}
 
 /**
  * buykorigw_save_attribution_snapshot()
@@ -307,12 +322,14 @@ function buykorigw_send_order_initiate_checkout_fallback( $order_or_id ) {
         'custom_data'      => buykorigw_add_marketing_params( $custom_data ),
     );
 
-    $sent = buykorigw_send_event( $event_payload, true );
+    // This is a best-effort fallback for the browser event. Dispatch without
+    // blocking checkout while the durable Purchase sync uses Action Scheduler.
+    $sent = buykorigw_send_event( $event_payload, false );
     if ( $sent ) {
         $order->update_meta_data( '_buykorigw_initiate_checkout_sent', 1 );
         $order->update_meta_data( '_buykorigw_initiate_checkout_sent_at', current_time( 'mysql' ) );
         $order->save();
-        buykorigw_add_order_note( $order_id, 'InitiateCheckout fallback event sent after order items were ready.' );
+        buykorigw_add_order_note( $order_id, 'InitiateCheckout fallback event queued after order items were ready.' );
     }
 }
 
@@ -776,6 +793,33 @@ function buykorigw_retry_cancel_cron_handler( $order_id ) {
 }
 
 add_action( 'add_meta_boxes', 'buykorigw_add_order_meta_box' );
+add_action( 'admin_enqueue_scripts', 'buykorigw_order_admin_assets' );
+
+function buykorigw_order_admin_assets( $hook ) {
+    if ( ! in_array( $hook, array( 'post.php', 'post-new.php', 'woocommerce_page_wc-orders' ), true ) ) {
+        return;
+    }
+
+    $screen = get_current_screen();
+    if ( ! $screen || ! in_array( $screen->id, array( 'shop_order', 'woocommerce_page_wc-orders' ), true ) ) {
+        return;
+    }
+
+    wp_enqueue_style(
+        'buykorigw-admin-order',
+        BUYKORIGW_PLUGIN_URL . 'assets/css/admin-order.css',
+        array(),
+        BUYKORIGW_VERSION
+    );
+
+    wp_enqueue_script(
+        'buykorigw-admin-order',
+        BUYKORIGW_PLUGIN_URL . 'assets/js/admin-order.js',
+        array(),
+        BUYKORIGW_VERSION,
+        true
+    );
+}
 
 function buykorigw_add_order_meta_box() {
     // Support both legacy (post) and HPOS (woocommerce_page_wc-orders) screens
@@ -793,7 +837,6 @@ function buykorigw_add_order_meta_box() {
 }
 
 function buykorigw_render_order_meta_box( $post_or_order ) {
-    // Support both legacy and HPOS
     if ( $post_or_order instanceof WP_Post ) {
         $order_id = $post_or_order->ID;
     } elseif ( is_a( $post_or_order, 'WC_Order' ) ) {
@@ -803,11 +846,10 @@ function buykorigw_render_order_meta_box( $post_or_order ) {
     }
 
     if ( ! $order_id ) {
-        echo '<p style="color:#999;">Order ID not found.</p>';
+        echo '<p class="buykorigw-order-muted">Order ID not found.</p>';
         return;
     }
 
-    // Use WC_Order for HPOS compatibility
     $order = wc_get_order( $order_id );
     if ( $order ) {
         $tracked      = $order->get_meta( '_buykorigw_tracked' );
@@ -818,79 +860,44 @@ function buykorigw_render_order_meta_box( $post_or_order ) {
     } else {
         $tracked = $confirmed = $confirmed_at = $status = $retry_count = '';
     }
-    $settings     = buykorigw_get_settings();
+    $settings = buykorigw_get_settings();
 
-    echo '<div style="font-size:13px; line-height:1.8;">';
+    echo '<div class="buykorigw-order-status">';
 
-    // Purchase event tracked?
     if ( $tracked ) {
-        echo '<div style="color:#2e7d32;">✅ Purchase event tracked</div>';
+        echo '<div class="buykorigw-order-ok">Purchase event tracked</div>';
     } else {
-        echo '<div style="color:#999;">⏳ Purchase event not yet tracked</div>';
+        echo '<div class="buykorigw-order-muted">Purchase event not yet tracked</div>';
     }
 
-    // Deferred purchase info
     if ( $settings['deferred_purchase'] ) {
-        echo '<hr style="border:none; border-top:1px solid #eee; margin:8px 0;">';
+        echo '<hr class="buykorigw-order-divider">';
 
         if ( $confirmed ) {
-            echo '<div style="color:#2e7d32;">✅ Confirmed & sent to Facebook</div>';
+            echo '<div class="buykorigw-order-ok">Confirmed & sent to Facebook</div>';
             if ( $confirmed_at ) {
-                echo '<div style="color:#666; font-size:11px;">📅 ' . esc_html( $confirmed_at ) . '</div>';
+                echo '<div class="buykorigw-order-note">' . esc_html( $confirmed_at ) . '</div>';
             }
         } elseif ( $status === 'cancelled' ) {
-            echo '<div style="color:#c62828;">Cancelled — Purchase event was not sent</div>';
+            echo '<div class="buykorigw-order-danger">Cancelled - Purchase event was not sent</div>';
         } elseif ( $status === 'refunded_after_confirm' ) {
-            echo '<div style="color:#f57c00;">Refunded after event was already sent</div>';
+            echo '<div class="buykorigw-order-warning">Refunded after event was already sent</div>';
         } elseif ( $status === 'cancel_failed' ) {
-            echo '<div style="color:#c62828;">Cancel sync failed (max retries reached)</div>';
+            echo '<div class="buykorigw-order-danger">Cancel sync failed (max retries reached)</div>';
         } elseif ( strpos( $status, 'cancel_retry' ) !== false ) {
-            echo '<div style="color:#f57c00;">Cancel retry in progress</div>';
+            echo '<div class="buykorigw-order-warning">Cancel retry in progress</div>';
         } elseif ( $status === 'failed' ) {
-            echo '<div style="color:#c62828;">❌ Confirm failed (max retries reached)</div>';
-            echo '<div style="margin-top:6px;"><button type="button" class="button button-small" onclick="buykorigwManualConfirm(' . $order_id . ', this)">🔄 Retry Now</button></div>';
+            echo '<div class="buykorigw-order-danger">Confirm failed (max retries reached)</div>';
+            echo '<div class="buykorigw-order-actions"><button type="button" class="button button-small buykorigw-manual-confirm" data-buykorigw-order-id="' . esc_attr( $order_id ) . '" data-buykorigw-nonce="' . esc_attr( wp_create_nonce( 'buykorigw_manual_confirm' ) ) . '">Retry Now</button></div>';
         } elseif ( strpos( $status, 'retry' ) !== false ) {
-            echo '<div style="color:#f57c00;">⏳ Retry in progress (attempt ' . intval( $retry_count ) . '/5)</div>';
+            echo '<div class="buykorigw-order-warning">Retry in progress (attempt ' . intval( $retry_count ) . '/5)</div>';
         } else {
-            echo '<div style="color:#1565c0;">📦 Pending — waiting for order status change</div>';
-            echo '<div style="color:#999; font-size:11px;">Auto-confirm on: <strong>' . esc_html( ucfirst( $settings['auto_confirm_status'] ) ) . '</strong></div>';
+            echo '<div class="buykorigw-order-info">Pending - waiting for order status change</div>';
+            echo '<div class="buykorigw-order-muted buykorigw-order-note">Auto-confirm on: <strong>' . esc_html( ucfirst( $settings['auto_confirm_status'] ) ) . '</strong></div>';
         }
     }
 
     echo '</div>';
-
-    // Manual retry button JS
-    ?>
-    <script>
-    function buykorigwManualConfirm(orderId, btn) {
-        btn = btn || (typeof event !== 'undefined' ? event.target : null);
-        if (!btn) return;
-        if (!confirm('Order #' + orderId + ' এর Purchase event আবার পাঠাতে চান?')) return;
-        btn.disabled = true;
-        btn.textContent = '⏳ Sending...';
-
-        fetch(ajaxurl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: 'action=buykorigw_manual_confirm&order_id=' + orderId + '&nonce=<?php echo wp_create_nonce( "buykorigw_manual_confirm" ); ?>'
-        })
-        .then(function(r) { return r.json(); })
-        .then(function(data) {
-            if (data.success) {
-                btn.textContent = '✅ Sent!';
-                btn.style.color = '#2e7d32';
-            } else {
-                btn.textContent = '❌ Failed';
-                btn.disabled = false;
-            }
-        })
-        .catch(function() {
-            btn.textContent = '❌ Error';
-            btn.disabled = false;
-        });
-    }
-    </script>
-    <?php
 }
 
 

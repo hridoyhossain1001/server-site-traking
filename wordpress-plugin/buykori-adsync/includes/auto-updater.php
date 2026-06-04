@@ -54,7 +54,6 @@ class BUYKORIGW_Auto_Updater
         add_filter('pre_set_site_transient_update_plugins', array($this, 'check_for_update'));
         add_filter('plugins_api', array($this, 'plugin_info'), 20, 3);
         add_filter('upgrader_pre_download', array($this, 'verify_downloaded_package'), 10, 3);
-        add_filter('upgrader_post_install', array($this, 'after_install'), 10, 3);
     }
 
     /**
@@ -127,24 +126,6 @@ class BUYKORIGW_Auto_Updater
     /**
      * After install — ফোল্ডার নাম ঠিক করে
      */
-    public function after_install($response, $hook_extra, $result)
-    {
-        global $wp_filesystem;
-
-        if (!isset($hook_extra['plugin']) || $hook_extra['plugin'] !== $this->plugin_file) {
-            return $result;
-        }
-
-        $install_dir = plugin_dir_path(BUYKORIGW_PLUGIN_FILE);
-        $wp_filesystem->move($result['destination'], $install_dir);
-        $result['destination'] = $install_dir;
-
-        // Re-activate plugin
-        activate_plugin($this->plugin_file);
-
-        return $result;
-    }
-
     /**
      * Fetch remote plugin info from our server — ক্যাশ সহ
      */

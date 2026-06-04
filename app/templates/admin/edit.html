@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="page-header" style="margin-bottom:24px;">
+<div class="page-header">
   <div>
     <h1 class="page-title">✏️ Edit Client</h1>
     <p class="page-sub">Update settings for <strong>{{ client.name }}</strong></p>
@@ -13,15 +13,15 @@
 
 <div class="card">
   <div class="card-header"><h2 class="card-title">🔧 Client Configuration</h2></div>
-  <div style="padding:24px;">
+  <div class="card-body">
     <form method="post" action="/api/v1/admin/client/{{ client.id }}/edit">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
-      <div class="layout-grid" style="grid-template-columns: 1fr 1fr; gap: 28px;">
+      <div class="form-grid-wide">
 
         <!-- LEFT COLUMN: Core Settings -->
         <div>
-          <div style="font-size:13px;color:#7e57c2;font-weight:700;border-bottom:1px solid var(--border);padding-bottom:8px;margin-bottom:16px;">🔵 Core Settings (Facebook CAPI)</div>
+          <div class="section-title">🔵 Core Settings (Facebook CAPI)</div>
 
           <div class="form-group">
             <label>ক্লায়েন্টের নাম *</label>
@@ -37,8 +37,8 @@
           <div class="form-group">
             <label>CAPI Access Token</label>
             <input type="text" name="access_token" placeholder="{% if has_access_token %}[Encrypted — paste new to update]{% else %}EAAxxxx...{% endif %}">
-            <label style="display:flex;align-items:center;gap:8px;margin-top:10px;color:#fff"><input type="checkbox" name="enable_facebook" value="1" {% if client.enable_facebook %}checked{% endif %}> Facebook CAPI delivery ON</label>
-            <div class="hint" style="color:#facc15">⚠️ খালি রাখলে বর্তমান টোকেন রাখা থাকবে।</div>
+            <label class="check-label"><input type="checkbox" name="enable_facebook" value="1" {% if client.enable_facebook %}checked{% endif %}> Facebook CAPI delivery ON</label>
+            <div class="hint hint-warning">⚠️ খালি রাখলে বর্তমান টোকেন রাখা থাকবে।</div>
           </div>
 
           <div class="form-group">
@@ -53,9 +53,9 @@
             <div class="hint">শুধু টেস্টিংয়ের সময় দিন। লাইভে খালি রাখুন।</div>
           </div>
 
-          <div class="form-group" style="margin-top:16px;">
-            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;color:#fff;font-weight:600">
-              <input type="checkbox" name="deferred_purchase" value="1" {% if client.deferred_purchase %}checked{% endif %} style="width:18px;height:18px;accent-color:#7e57c2;cursor:pointer;">
+          <div class="form-group mt-16">
+            <label class="check-label check-label-strong">
+              <input class="check-input-lg" type="checkbox" name="deferred_purchase" value="1" {% if client.deferred_purchase %}checked{% endif %}>
               🔄 Deferred Purchase সচল রাখুন
             </label>
             <div class="hint">COD ব্যবসার জন্য — Purchase event অর্ডার কনফার্মের পরে যাবে।</div>
@@ -70,7 +70,7 @@
 
         <!-- RIGHT COLUMN: Optional Integrations -->
         <div>
-          <div style="font-size:13px;color:#9575cd;font-weight:700;border-bottom:1px solid var(--border);padding-bottom:8px;margin-bottom:16px;">🎵 TikTok CAPI (Optional)</div>
+          <div class="section-title section-title-purple">🎵 TikTok CAPI (Optional)</div>
 
           <div class="form-group">
             <label>TikTok Pixel ID</label>
@@ -80,17 +80,17 @@
           <div class="form-group">
             <label>TikTok Access Token</label>
             <input type="text" name="tiktok_access_token" placeholder="{% if has_tiktok_token %}[Encrypted — paste new to update]{% else %}Paste TikTok token...{% endif %}">
-            <div class="hint" style="color:#facc15">⚠️ খালি রাখলে বর্তমান টোকেন রাখা থাকবে।</div>
+            <div class="hint hint-warning">⚠️ খালি রাখলে বর্তমান টোকেন রাখা থাকবে।</div>
           </div>
 
           <div class="form-group">
             <label>TikTok Test Event Code (Optional)</label>
             <input type="text" name="tiktok_test_event_code" value="{% if client.tiktok_test_event_code %}{{ client.tiktok_test_event_code }}{% endif %}" placeholder="TEST38483">
-            <label style="display:flex;align-items:center;gap:8px;margin-top:10px;color:#fff"><input type="checkbox" name="enable_tiktok" value="1" {% if client.enable_tiktok %}checked{% endif %}> TikTok CAPI delivery ON</label>
+            <label class="check-label"><input type="checkbox" name="enable_tiktok" value="1" {% if client.enable_tiktok %}checked{% endif %}> TikTok CAPI delivery ON</label>
             <div class="hint">TikTok Events Manager → Test Events থেকে কোড দিন। লাইভে খালি রাখুন।</div>
           </div>
 
-          <div style="font-size:13px;color:#00a1f1;font-weight:700;border-bottom:1px solid var(--border);padding-bottom:8px;margin-bottom:16px;margin-top:24px;">📊 GA4 Server-Side (Optional)</div>
+          <div class="section-title section-title-blue section-title-spaced">📊 GA4 Server-Side (Optional)</div>
 
           <div class="form-group">
             <label>GA4 Measurement ID</label>
@@ -100,14 +100,14 @@
           <div class="form-group">
             <label>GA4 API Secret</label>
             <input type="text" name="ga4_api_secret" placeholder="{% if has_ga4_secret %}[Encrypted — paste new to update]{% else %}Paste GA4 API Secret...{% endif %}">
-            <label style="display:flex;align-items:center;gap:8px;margin-top:10px;color:#fff"><input type="checkbox" name="enable_ga4" value="1" {% if client.enable_ga4 %}checked{% endif %}> GA4 server-side delivery ON</label>
-            <div class="hint" style="color:#facc15">⚠️ খালি রাখলে বর্তমান secret রাখা থাকবে।</div>
+            <label class="check-label"><input type="checkbox" name="enable_ga4" value="1" {% if client.enable_ga4 %}checked{% endif %}> GA4 server-side delivery ON</label>
+            <div class="hint hint-warning">⚠️ খালি রাখলে বর্তমান secret রাখা থাকবে।</div>
           </div>
         </div>
 
       </div>
 
-      <div style="margin-top:28px;border-top:1px solid var(--border);padding-top:20px;display:flex;justify-content:flex-end;gap:12px;">
+      <div class="form-actions">
         <a href="/api/v1/admin/clients" class="btn btn-outline">বাতিল করুন</a>
         <button type="submit" class="btn btn-primary">💾 পরিবর্তন সংরক্ষণ করুন</button>
       </div>

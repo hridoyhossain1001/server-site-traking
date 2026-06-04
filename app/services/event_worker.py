@@ -21,7 +21,7 @@ from app.models.event_log import EventLog
 from app.models.event_outbox import EventOutbox
 from app.models.pending_event import PendingEvent
 from app.schemas.event import EventData, UserData, _clean_and_hash
-from app.services.delivery_service import deliver_events_to_platforms
+from app.services.delivery_service import deliver_events_to_platforms, wait_for_secondary_tasks
 from app.services.event_quality import boost_event_quality
 from app.services.geoip_service import get_location_data
 from app.services.redis_pool import get_redis
@@ -393,6 +393,7 @@ async def process_outbox_row(row_id: int) -> None:
         delivery_res = await deliver_events_to_platforms(client, events, context)
         primary_platform = delivery_res["primary_platform"]
         result = delivery_res["result"]
+        await wait_for_secondary_tasks(delivery_res)
 
         async with AsyncSessionLocal() as db:
             row = await db.get(EventOutbox, row_id)
@@ -415,6 +416,8 @@ async def process_outbox_row(row_id: int) -> None:
                         event_data,
                         "filtered",
                         context.get("ip_address"),
+                        context.get("user_agent"),
+                        context.get("device"),
                         fb_response=json.dumps(result) if result else None,
                     )))
 
@@ -445,6 +448,8 @@ async def process_outbox_row(row_id: int) -> None:
                     event_data,
                     "success",
                     context.get("ip_address"),
+                    context.get("user_agent"),
+                    context.get("device"),
                     fb_response=json.dumps(result) if result else None,
                 )))
             await db.commit()
@@ -512,6 +517,7 @@ if __name__ == "__main__":
     from app.services.expiry_service import expire_old_pending_events
     from app.services.retry_service import retry_failed_events
     from app.services.courier_status_worker import poll_courier_statuses_forever
+    from app.services.courier_booking_service import process_courier_booking_jobs_forever
 
     async def main() -> None:
         await asyncio.gather(
@@ -521,6 +527,7 @@ if __name__ == "__main__":
             auto_cleanup_database(),
             expire_old_pending_events(),
             poll_courier_statuses_forever(),
+            process_courier_booking_jobs_forever(),
         )
 
     asyncio.run(main())

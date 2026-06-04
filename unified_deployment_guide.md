@@ -69,7 +69,7 @@ api.buykori.app      ──► Production Backend & Workers (DigitalOcean Drople
 
 ### 4. Production Backend (`app/` on DigitalOcean Droplet)
 * **Type:** Python FastAPI API server, SQLAlchemy, PostgreSQL, and background worker queues.
-* **IP Address:** `159.223.59.78`
+* **SSH Host:** set through `DO_SSH_HOST` in your secure local environment or CI secret store.
 * **Project Directory on Server:** `/var/www/buykori-adsync/`
 * **Python Environment on Server:** `/var/www/buykori-adsync/venv/`
 * **Service Manager:** Supervisor
@@ -82,9 +82,9 @@ api.buykori.app      ──► Production Backend & Workers (DigitalOcean Drople
 
 ---
 
-## 🛠️ Droplet Command Sheet (SSH via root)
+## 🛠️ Droplet Command Sheet (SSH via deploy user)
 
-Connect to the droplet via SSH (`ssh root@159.223.59.78`) to run operations directly:
+Connect using your least-privilege deploy user and a pinned known-hosts entry. Avoid root/password SSH for normal operations.
 
 ### 1. Database Migrations (Alembic)
 To upgrade the PostgreSQL database schema to the latest version:

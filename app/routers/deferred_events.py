@@ -12,7 +12,6 @@ Endpoints:
 """
 
 import logging
-import asyncio
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -27,11 +26,11 @@ from app.models.client import Client as ClientModel
 from app.models.courier_order import CourierOrder
 from app.models.pending_event import PendingEvent
 from app.schemas.event import EventData
-from app.security import decrypt_token
-from app.services.courier_service import CourierService
+from app.services.courier_booking_service import cancel_queued_booking, enqueue_courier_booking
 from app.services.event_quality import boost_event_quality
 from app.services.event_worker import enqueue_events
 from app.services.usage_service import check_and_reserve_usage
+from app.services.plan_service import has_growth_access
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -173,7 +172,7 @@ async def _queue_confirmed_event(
         event = EventData(**event_dict)
     except Exception as e:
         logger.error(f"[{client.name}] Pending event parse error (order: {pending.order_id}): {e}")
-        raise HTTPException(status_code=500, detail=f"Event data parse error: {e}")
+        raise HTTPException(status_code=500, detail="Stored event data could not be parsed.")
 
     user_data = event_dict.get("user_data", {}) or {}
     boost_event_quality(
@@ -203,149 +202,29 @@ async def _auto_book_courier_for_pending(
     db: AsyncSession,
 ) -> dict:
     """
-    Book a confirmed COD order with the client's default courier.
+    Queue a confirmed COD order for the client's default courier.
     Returns mode:
-      booked/already_booked = hold Purchase until courier delivery
+      queued/already_booked = hold Purchase until courier delivery
       not_configured = use direct Purchase fallback
       failed = keep the order pending and show an error
     """
     client_res = await db.execute(select(ClientModel).where(ClientModel.id == client_id))
     client_obj = client_res.scalar_one_or_none()
-    if not client_obj or not client_obj.courier_auto_send:
+    if not client_obj or not has_growth_access(client_obj) or not client_obj.courier_auto_send:
         return {"mode": "not_configured", "message": "Courier auto-booking is not configured."}
     if not client_obj.default_courier:
         return {"mode": "failed", "message": "Default courier provider is missing."}
 
-    raw = pending.raw_order_data or {}
-    missing = [
-        key
-        for key in ("recipient_name", "recipient_phone", "recipient_address")
-        if not str(raw.get(key) or "").strip()
-    ]
-    if missing:
-        return {
-            "mode": "failed",
-            "message": "Courier booking data missing: " + ", ".join(missing),
-        }
-
-    existing_res = await db.execute(
-        select(CourierOrder).where(
-            and_(
-                CourierOrder.client_id == client_id,
-                CourierOrder.order_id == pending.order_id,
-            )
-        )
-    )
-    if existing_res.scalar_one_or_none():
-        return {"mode": "already_booked", "message": "Order is already booked with courier."}
-
     provider = str(client_obj.default_courier or "").strip().lower()
-    cod_amount = float(raw.get("cod_amount") or 0)
-
     try:
-        if provider == "steadfast":
-            if not (client_obj.steadfast_api_key and client_obj.steadfast_secret_key):
-                return {"mode": "failed", "message": "SteadFast credentials are missing."}
-            result = await CourierService.send_to_steadfast(
-                api_key=client_obj.steadfast_api_key,
-                secret_key=decrypt_token(client_obj.steadfast_secret_key),
-                recipient_name=str(raw.get("recipient_name") or "").strip(),
-                recipient_phone=str(raw.get("recipient_phone") or "").strip(),
-                recipient_address=str(raw.get("recipient_address") or "").strip(),
-                cod_amount=cod_amount,
-                merchant_order_id=pending.order_id,
-            )
-        elif provider == "pathao":
-            if not (client_obj.pathao_api_key and client_obj.pathao_secret_key and client_obj.pathao_store_id):
-                return {"mode": "failed", "message": "Pathao credentials are missing."}
-            try:
-                pathao_client_id, email = client_obj.pathao_api_key.split("|", 1)
-                pathao_client_secret, password = decrypt_token(client_obj.pathao_secret_key).split("|", 1)
-            except ValueError:
-                return {"mode": "failed", "message": "Pathao credentials format is invalid."}
-            # Extract product names from event_data or raw_order_data
-            item_description_to_use = None
-            event_data_dict = pending.event_data or {}
-            custom_data_dict = event_data_dict.get("custom_data") or {}
-            contents_list = custom_data_dict.get("contents") or []
-
-            if not contents_list and pending.raw_order_data:
-                contents_list = pending.raw_order_data.get("products") or pending.raw_order_data.get("line_items") or []
-
-            if contents_list and isinstance(contents_list, list):
-                product_descriptions = []
-                for item in contents_list:
-                    if isinstance(item, dict):
-                        name = item.get("title") or item.get("name") or item.get("content_name")
-                        qty = item.get("quantity") or item.get("qty") or 1
-                        if name:
-                            product_descriptions.append(f"{name} x{qty}")
-                if product_descriptions:
-                    item_description_to_use = ", ".join(product_descriptions)
-
-            result = await CourierService.send_to_pathao(
-                client_id=pathao_client_id,
-                client_secret=pathao_client_secret,
-                email=email,
-                password=password,
-                store_id=client_obj.pathao_store_id,
-                recipient_name=str(raw.get("recipient_name") or "").strip(),
-                recipient_phone=str(raw.get("recipient_phone") or "").strip(),
-                recipient_address=str(raw.get("recipient_address") or "").strip(),
-                cod_amount=cod_amount,
-                merchant_order_id=pending.order_id,
-                item_description=item_description_to_use
-            )
-        elif provider == "redx":
-            if not (
-                client_obj.redx_access_token
-                and client_obj.redx_delivery_area_id
-                and client_obj.redx_delivery_area_name
-            ):
-                return {"mode": "failed", "message": "RedX credentials and default delivery area are missing."}
-            result = await CourierService.send_to_redx(
-                access_token=decrypt_token(client_obj.redx_access_token),
-                recipient_name=str(raw.get("recipient_name") or "").strip(),
-                recipient_phone=str(raw.get("recipient_phone") or "").strip(),
-                recipient_address=str(raw.get("recipient_address") or "").strip(),
-                cod_amount=cod_amount,
-                merchant_order_id=pending.order_id,
-                delivery_area_id=client_obj.redx_delivery_area_id,
-                delivery_area_name=client_obj.redx_delivery_area_name,
-                pickup_store_id=client_obj.redx_pickup_store_id,
-            )
-        else:
-            return {"mode": "failed", "message": f"Unsupported courier provider: {provider}"}
-    except Exception as exc:
-        logger.error("Auto courier booking failed for %s: %s", pending.order_id, exc)
-        return {"mode": "failed", "message": f"Courier booking failed: {exc}"}
-
-    if not result.get("success"):
-        return {
-            "mode": "failed",
-            "message": f"Courier booking failed: {result.get('error') or 'Unknown courier error'}",
-        }
-
-    courier_order = CourierOrder(
-        client_id=client_id,
-        pending_event_id=pending.id,
-        order_id=pending.order_id,
-        courier_provider=provider,
-        courier_order_id=result.get("courier_order_id"),
-        courier_tracking_id=result.get("tracking_id"),
-        courier_status="pending",
-        recipient_name=str(raw.get("recipient_name") or "").strip(),
-        recipient_phone=str(raw.get("recipient_phone") or "").strip(),
-        recipient_address=str(raw.get("recipient_address") or "").strip(),
-        cod_amount=cod_amount,
-        status_history=[{"status": "pending", "time": datetime.now(timezone.utc).isoformat()}],
-    )
-    db.add(courier_order)
-    return {
-        "mode": "booked",
-        "message": "Order booked with courier. Purchase event will fire after delivery.",
-        "tracking_id": result.get("tracking_id"),
-    }
+        return await enqueue_courier_booking(
+            db,
+            client=client_obj,
+            pending=pending,
+            provider=provider,
+        )
+    except ValueError as exc:
+        return {"mode": "failed", "message": str(exc)}
 
 
 # ─── POST /events/confirm — Single Order Confirm ─────────────────────────────
@@ -388,11 +267,17 @@ async def confirm_event(
         )
 
     # Resolve status-based misleading error codes
-    if pending.status == "courier_booked":
+    if pending.portal_state == "operations_only":
         return ConfirmResponse(
             status="success",
             order_id=payload.order_id,
-            message="Order is already booked with courier. Purchase event will fire after delivery.",
+            message="Purchase event was already sent. This order is available for manual courier booking.",
+        )
+    if pending.status in {"courier_booking_queued", "courier_booked"}:
+        return ConfirmResponse(
+            status="success",
+            order_id=payload.order_id,
+            message="Courier booking is already queued or completed. Purchase event will fire after delivery.",
         )
     elif pending.status == "confirmed":
         return ConfirmResponse(
@@ -416,37 +301,14 @@ async def confirm_event(
             detail=f"Cannot confirm order due to invalid status: {pending.status}",
         )
 
-    # The pending row is already locked for the booking attempt.
+    # The pending row is locked only while the durable booking intent is saved.
     booking = await _auto_book_courier_for_pending(client.id, pending, db)
-
-    # Now hold the row lock and verify the status is still 'pending' to prevent split-brain transaction commits
-    lock_res = await db.execute(
-        select(PendingEvent).where(
-            and_(
-                PendingEvent.id == pending.id,
-                PendingEvent.status == "pending",
-            )
-        ).with_for_update()
-    )
-    pending_locked = lock_res.scalar_one_or_none()
-
-    if not pending_locked:
-        # Rollback any additions to db session (like the CourierOrder) to ensure transaction protection
-        await db.rollback()
-        raise HTTPException(
-            status_code=400,
-            detail="Order status changed during booking.",
-        )
-
-    if booking["mode"] in {"booked", "already_booked"}:
-        pending_locked.status = "courier_booked"
-        pending_locked.portal_state = "processing"
-        pending_locked.is_confirmed = True
+    if booking["mode"] in {"queued", "already_booked"}:
         message = booking["message"]
-        logger.info(f"[{client.name}] Order confirmed and booked with courier: {payload.order_id}")
+        logger.info(f"[{client.name}] Order confirmed and queued for courier booking: {payload.order_id}")
     elif booking["mode"] == "not_configured":
         try:
-            await _queue_confirmed_event(client, pending_locked, db)
+            await _queue_confirmed_event(client, pending, db)
         except HTTPException:
             await db.rollback()
             raise
@@ -455,12 +317,12 @@ async def confirm_event(
             logger.error(f"[{client.name}] Confirm queue failed ({payload.order_id}): {e}")
             raise HTTPException(
                 status_code=500,
-                detail=f"Purchase event queue করতে সমস্যা: {e}",
+                detail="Purchase event could not be queued.",
             )
-        pending_locked.status = "confirmed"
-        pending_locked.portal_state = "confirmed"
-        pending_locked.is_confirmed = True
-        pending_locked.confirmed_at = datetime.now(timezone.utc)
+        pending.status = "confirmed"
+        pending.portal_state = "confirmed"
+        pending.is_confirmed = True
+        pending.confirmed_at = datetime.now(timezone.utc)
         message = "Purchase event delivery queue-তে রাখা হয়েছে."
         logger.info(f"[{client.name}] Order confirmed & queued directly: {payload.order_id}")
     else:
@@ -477,6 +339,69 @@ async def confirm_event(
 
 
 # ─── POST /events/confirm/bulk — Bulk Confirm ────────────────────────────────
+
+async def _queue_bulk_confirm_events(
+    payload: BulkConfirmRequest,
+    client: CachedClient,
+    db: AsyncSession,
+) -> BulkConfirmResponse:
+    result = await db.execute(
+        select(PendingEvent).where(
+            and_(
+                PendingEvent.client_id == client.id,
+                PendingEvent.order_id.in_(payload.order_ids),
+                PendingEvent.status == "pending",
+            )
+        ).with_for_update()
+    )
+    pending_events = result.scalars().all()
+    found_ids = {pending.order_id for pending in pending_events}
+    confirmed = 0
+    failed = 0
+    details = []
+
+    for pending in pending_events:
+        order_id = pending.order_id
+        try:
+            async with db.begin_nested():
+                if pending.portal_state == "operations_only":
+                    confirmed += 1
+                    details.append({"order_id": order_id, "status": "already_sent", "mode": "operations_only"})
+                    continue
+
+                booking = await _auto_book_courier_for_pending(client.id, pending, db)
+                if booking["mode"] in {"queued", "already_booked"}:
+                    confirmed += 1
+                    details.append({"order_id": order_id, "status": "queued", "mode": "courier"})
+                    continue
+                if booking["mode"] != "not_configured":
+                    raise HTTPException(status_code=400, detail=booking["message"])
+
+                await _queue_confirmed_event(client, pending, db)
+                pending.status = "confirmed"
+                pending.portal_state = "confirmed"
+                pending.is_confirmed = True
+                pending.confirmed_at = datetime.now(timezone.utc)
+                confirmed += 1
+                details.append({"order_id": order_id, "status": "queued", "mode": "direct"})
+        except HTTPException as exc:
+            failed += 1
+            details.append({"order_id": order_id, "status": "failed", "error": str(exc.detail)})
+            logger.error("[%s] Bulk confirm queue rejected (%s): %s", client.name, order_id, exc.detail)
+        except Exception as exc:
+            failed += 1
+            details.append({"order_id": order_id, "status": "failed", "error": f"Internal error: {exc}"})
+            logger.exception("[%s] Bulk confirm queue failed (%s)", client.name, order_id)
+
+    for order_id in payload.order_ids:
+        if order_id not in found_ids:
+            failed += 1
+            details.append({"order_id": order_id, "status": "not_found"})
+
+    await db.commit()
+    logger.info("[%s] Bulk confirm queued: %s confirmed, %s failed", client.name, confirmed, failed)
+    return BulkConfirmResponse(status="success", confirmed=confirmed, failed=failed, details=details)
+
 
 @router.post(
     "/events/confirm/bulk",
@@ -503,275 +428,7 @@ async def bulk_confirm_events(
     if len(payload.order_ids) > 100:
         raise HTTPException(status_code=400, detail="একবারে সর্বোচ্চ ১০০টি অর্ডার কনফার্ম করা যায়।")
 
-    # Lock before external booking so overlapping bulk/single confirms serialize per order.
-    result = await db.execute(
-        select(PendingEvent).where(
-            and_(
-                PendingEvent.client_id == client.id,
-                PendingEvent.order_id.in_(payload.order_ids),
-                PendingEvent.status == "pending",
-            )
-        ).with_for_update()
-    )
-    pending_events = result.scalars().all()
-
-    found_ids = {p.order_id for p in pending_events}
-    confirmed = 0
-    failed = 0
-    details = []
-
-    # Fetch ClientModel details once
-    client_res = await db.execute(select(ClientModel).where(ClientModel.id == client.id))
-    client_obj = client_res.scalar_one_or_none()
-
-    # Fetch existing courier orders for these order IDs once
-    existing_orders_res = await db.execute(
-        select(CourierOrder.order_id).where(
-            and_(
-                CourierOrder.client_id == client.id,
-                CourierOrder.order_id.in_(payload.order_ids),
-            )
-        )
-    )
-    existing_order_ids = set(existing_orders_res.scalars().all())
-
-    auto_send = client_obj and client_obj.courier_auto_send
-    default_provider = str(client_obj.default_courier or "").strip().lower() if client_obj else None
-
-    # Categorize and prepare tasks for external HTTP requests
-    tasks_to_run = []
-    event_actions = {}
-
-    for pending in pending_events:
-        oid = pending.order_id
-        if not auto_send:
-            event_actions[oid] = {"action": "direct"}
-            continue
-
-        if not default_provider:
-            event_actions[oid] = {"action": "fail", "error": "Default courier provider is missing."}
-            continue
-
-        if oid in existing_order_ids:
-            event_actions[oid] = {"action": "already_booked"}
-            continue
-
-        raw = pending.raw_order_data or {}
-        missing = [
-            key
-            for key in ("recipient_name", "recipient_phone", "recipient_address")
-            if not str(raw.get(key) or "").strip()
-        ]
-        if missing:
-            event_actions[oid] = {
-                "action": "fail",
-                "error": "Courier booking data missing: " + ", ".join(missing),
-            }
-            continue
-
-        cod_amount = float(raw.get("cod_amount") or 0)
-        recipient_name = str(raw.get("recipient_name") or "").strip()
-        recipient_phone = str(raw.get("recipient_phone") or "").strip()
-        recipient_address = str(raw.get("recipient_address") or "").strip()
-
-        if default_provider == "steadfast":
-            if not (client_obj.steadfast_api_key and client_obj.steadfast_secret_key):
-                event_actions[oid] = {"action": "fail", "error": "SteadFast credentials are missing."}
-                continue
-
-            task = CourierService.send_to_steadfast(
-                api_key=client_obj.steadfast_api_key,
-                secret_key=decrypt_token(client_obj.steadfast_secret_key),
-                recipient_name=recipient_name,
-                recipient_phone=recipient_phone,
-                recipient_address=recipient_address,
-                cod_amount=cod_amount,
-                merchant_order_id=oid,
-            )
-            tasks_to_run.append((oid, task))
-
-        elif default_provider == "pathao":
-            if not (client_obj.pathao_api_key and client_obj.pathao_secret_key and client_obj.pathao_store_id):
-                event_actions[oid] = {"action": "fail", "error": "Pathao credentials are missing."}
-                continue
-            try:
-                pathao_client_id, email = client_obj.pathao_api_key.split("|", 1)
-                pathao_client_secret, password = decrypt_token(client_obj.pathao_secret_key).split("|", 1)
-            except ValueError:
-                event_actions[oid] = {"action": "fail", "error": "Pathao credentials format is invalid."}
-                continue
-
-            # Extract product names from event_data or raw_order_data
-            item_description_to_use = None
-            event_data_dict = pending.event_data or {}
-            custom_data_dict = event_data_dict.get("custom_data") or {}
-            contents_list = custom_data_dict.get("contents") or []
-
-            if not contents_list and pending.raw_order_data:
-                contents_list = pending.raw_order_data.get("products") or pending.raw_order_data.get("line_items") or []
-
-            if contents_list and isinstance(contents_list, list):
-                product_descriptions = []
-                for item in contents_list:
-                    if isinstance(item, dict):
-                        name = item.get("title") or item.get("name") or item.get("content_name")
-                        qty = item.get("quantity") or item.get("qty") or 1
-                        if name:
-                            product_descriptions.append(f"{name} x{qty}")
-                if product_descriptions:
-                    item_description_to_use = ", ".join(product_descriptions)
-
-            task = CourierService.send_to_pathao(
-                client_id=pathao_client_id,
-                client_secret=pathao_client_secret,
-                email=email,
-                password=password,
-                store_id=client_obj.pathao_store_id,
-                recipient_name=recipient_name,
-                recipient_phone=recipient_phone,
-                recipient_address=recipient_address,
-                cod_amount=cod_amount,
-                merchant_order_id=oid,
-                item_description=item_description_to_use
-            )
-            tasks_to_run.append((oid, task))
-        elif default_provider == "redx":
-            if not (
-                client_obj.redx_access_token
-                and client_obj.redx_delivery_area_id
-                and client_obj.redx_delivery_area_name
-            ):
-                event_actions[oid] = {"action": "fail", "error": "RedX credentials and default delivery area are missing."}
-                continue
-            task = CourierService.send_to_redx(
-                access_token=decrypt_token(client_obj.redx_access_token),
-                recipient_name=recipient_name,
-                recipient_phone=recipient_phone,
-                recipient_address=recipient_address,
-                cod_amount=cod_amount,
-                merchant_order_id=oid,
-                delivery_area_id=client_obj.redx_delivery_area_id,
-                delivery_area_name=client_obj.redx_delivery_area_name,
-                pickup_store_id=client_obj.redx_pickup_store_id,
-            )
-            tasks_to_run.append((oid, task))
-        else:
-            event_actions[oid] = {"action": "fail", "error": f"Unsupported courier provider: {default_provider}"}
-
-    # Run provider calls in parallel while the matching pending rows remain locked.
-    if tasks_to_run:
-        order_ids_for_tasks = [item[0] for item in tasks_to_run]
-        tasks = [item[1] for item in tasks_to_run]
-
-        # Gather with return_exceptions=True to avoid one failure crashing the entire batch
-        api_results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        for oid, res in zip(order_ids_for_tasks, api_results):
-            if isinstance(res, Exception):
-                event_actions[oid] = {"action": "fail", "error": f"Network exception: {str(res)}"}
-            elif not res.get("success"):
-                event_actions[oid] = {
-                    "action": "fail",
-                    "error": res.get("error") or "Unknown courier error",
-                }
-            else:
-                event_actions[oid] = {
-                    "action": "book_success",
-                    "courier_order_id": res.get("courier_order_id"),
-                    "tracking_id": res.get("tracking_id"),
-                }
-
-    # Now persist the changes inside DB transaction blocks
-    for pending in pending_events:
-        oid = pending.order_id
-        action_info = event_actions.get(oid, {"action": "direct"})
-        action = action_info["action"]
-
-        try:
-            async with db.begin_nested():
-                # Re-fetch with row lock to prevent race conditions during updates
-                lock_res = await db.execute(
-                    select(PendingEvent).where(
-                        PendingEvent.id == pending.id
-                    ).with_for_update()
-                )
-                pending_locked = lock_res.scalar_one_or_none()
-                if not pending_locked or pending_locked.status != "pending":
-                    raise HTTPException(status_code=400, detail="Order status changed during booking.")
-
-                if action == "direct":
-                    await _queue_confirmed_event(client, pending_locked, db)
-                    pending_locked.status = "confirmed"
-                    pending_locked.portal_state = "confirmed"
-                    pending_locked.is_confirmed = True
-                    pending_locked.confirmed_at = datetime.now(timezone.utc)
-                    confirmed += 1
-                    details.append({"order_id": oid, "status": "queued", "mode": "direct"})
-
-                elif action == "already_booked":
-                    pending_locked.status = "courier_booked"
-                    pending_locked.portal_state = "processing"
-                    pending_locked.is_confirmed = True
-                    confirmed += 1
-                    details.append({"order_id": oid, "status": "queued", "mode": "courier"})
-
-                elif action == "book_success":
-                    raw = pending_locked.raw_order_data or {}
-                    cod_amount = float(raw.get("cod_amount") or 0)
-
-                    courier_order = CourierOrder(
-                        client_id=client.id,
-                        pending_event_id=pending_locked.id,
-                        order_id=oid,
-                        courier_provider=default_provider,
-                        courier_order_id=action_info.get("courier_order_id"),
-                        courier_tracking_id=action_info.get("tracking_id"),
-                        courier_status="pending",
-                        recipient_name=str(raw.get("recipient_name") or "").strip(),
-                        recipient_phone=str(raw.get("recipient_phone") or "").strip(),
-                        recipient_address=str(raw.get("recipient_address") or "").strip(),
-                        cod_amount=cod_amount,
-                        status_history=[{"status": "pending", "time": datetime.now(timezone.utc).isoformat()}],
-                    )
-                    db.add(courier_order)
-
-                    pending_locked.status = "courier_booked"
-                    pending_locked.portal_state = "processing"
-                    pending_locked.is_confirmed = True
-
-                    confirmed += 1
-                    details.append({"order_id": oid, "status": "queued", "mode": "courier"})
-
-                elif action == "fail":
-                    error_msg = action_info.get("error") or "Unknown error"
-                    raise HTTPException(status_code=400, detail=error_msg)
-
-        except HTTPException as e:
-            failed += 1
-            details.append({"order_id": oid, "status": "failed", "error": str(e.detail)})
-            logger.error(f"[{client.name}] Bulk confirm queue rejected ({oid}): {e.detail}")
-        except Exception as e:
-            failed += 1
-            details.append({"order_id": oid, "status": "failed", "error": f"Internal error: {str(e)}"})
-            logger.exception(f"[{client.name}] Bulk confirm queue failed ({oid})")
-
-    # Not found orders
-    for oid in payload.order_ids:
-        if oid not in found_ids:
-            failed += 1
-            details.append({"order_id": oid, "status": "not_found"})
-
-    await db.commit()
-
-    logger.info(f"[{client.name}] Bulk confirm queued: {confirmed} confirmed, {failed} failed")
-
-    return BulkConfirmResponse(
-        status="success",
-        confirmed=confirmed,
-        failed=failed,
-        details=details,
-    )
-
+    return await _queue_bulk_confirm_events(payload, client, db)
 
 # ─── POST /events/cancel — Cancel ────────────────────────────────────────────
 
@@ -821,6 +478,27 @@ async def cancel_event(
         raise HTTPException(
             status_code=400,
             detail=f"Cannot cancel order because it is already confirmed: {payload.order_id}",
+        )
+    elif pending.status == "courier_booking_queued":
+        order_result = await db.execute(
+            select(CourierOrder).where(
+                and_(
+                    CourierOrder.client_id == client.id,
+                    CourierOrder.order_id == payload.order_id,
+                )
+            ).with_for_update()
+        )
+        courier_order = order_result.scalar_one_or_none()
+        if not courier_order or not await cancel_queued_booking(db, courier_order):
+            raise HTTPException(
+                status_code=409,
+                detail="Courier booking is being processed. Refresh shortly before cancelling.",
+            )
+        await db.commit()
+        return ConfirmResponse(
+            status="success",
+            order_id=payload.order_id,
+            message="Courier booking cancelled before provider dispatch.",
         )
     elif pending.status == "courier_booked":
         raise HTTPException(
@@ -886,6 +564,28 @@ async def bulk_cancel_events(
         ).with_for_update()
     )
     found_ids = set(result.scalars().all())
+    queued_result = await db.execute(
+        select(PendingEvent).where(
+            and_(
+                PendingEvent.client_id == client.id,
+                PendingEvent.order_id.in_(order_ids),
+                PendingEvent.status == "courier_booking_queued",
+            )
+        ).with_for_update()
+    )
+    queued_cancelled_ids = set()
+    for pending in queued_result.scalars().all():
+        order_result = await db.execute(
+            select(CourierOrder).where(
+                and_(
+                    CourierOrder.client_id == client.id,
+                    CourierOrder.order_id == pending.order_id,
+                )
+            ).with_for_update()
+        )
+        courier_order = order_result.scalar_one_or_none()
+        if courier_order and await cancel_queued_booking(db, courier_order):
+            queued_cancelled_ids.add(pending.order_id)
 
     if found_ids:
         await db.execute(
@@ -902,11 +602,12 @@ async def bulk_cancel_events(
 
     await db.commit()
 
+    cancelled_ids = found_ids | queued_cancelled_ids
     details = [
-        {"order_id": oid, "status": "cancelled" if oid in found_ids else "not_found"}
+        {"order_id": oid, "status": "cancelled" if oid in cancelled_ids else "not_found"}
         for oid in order_ids
     ]
-    cancelled = len(found_ids)
+    cancelled = len(cancelled_ids)
     failed = len(order_ids) - cancelled
 
     logger.info(f"[{client.name}] Bulk cancel completed: {cancelled} cancelled, {failed} failed")
@@ -942,7 +643,7 @@ async def deferred_purchase_summary(
     counts = {status: int(count or 0) for status, count in status_result}
 
     sum_and_min_stmt = select(
-        sql_func.sum(cast(PendingEvent.event_data['custom_data']['value'].astext, Numeric)),
+        sql_func.sum(cast(PendingEvent.event_data["custom_data"]["value"].as_string(), Numeric)),
         sql_func.min(PendingEvent.created_at)
     ).where(
         and_(

@@ -3,7 +3,7 @@ import time
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.responses import HTMLResponse, ORJSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -42,6 +42,87 @@ ALLOWED_HOSTS = _csv_env(
     "ALLOWED_HOSTS",
     "localhost,127.0.0.1,testserver,buykori.app,www.buykori.app,client.buykori.app,admin.buykori.app,api.buykori.app,track.buykori.app",
 )
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.getenv(name, str(default))))
+    except ValueError:
+        return default
+
+
+TRACKING_BODY_LIMIT_BYTES = _positive_int_env("TRACKING_BODY_LIMIT_BYTES", 256 * 1024)
+WEBHOOK_BODY_LIMIT_BYTES = _positive_int_env("WEBHOOK_BODY_LIMIT_BYTES", 2 * 1024 * 1024)
+BODY_LIMIT_PATHS = (
+    ("/c", TRACKING_BODY_LIMIT_BYTES),
+    ("/api/v1/events", TRACKING_BODY_LIMIT_BYTES),
+    ("/api/v1/incomplete-checkouts", TRACKING_BODY_LIMIT_BYTES),
+    ("/api/v1/webhook", WEBHOOK_BODY_LIMIT_BYTES),
+    ("/api/webhooks", WEBHOOK_BODY_LIMIT_BYTES),
+)
+
+
+def _body_limit_for_path(path: str) -> int | None:
+    for prefix, limit in BODY_LIMIT_PATHS:
+        if path == prefix or path.startswith(prefix + "/"):
+            return limit
+    return None
+
+
+SECURITY_HEADERS_ENABLED = os.getenv("SECURITY_HEADERS_ENABLED", "true").lower() in ("true", "1", "yes")
+SECURITY_HSTS_ENABLED = os.getenv("SECURITY_HSTS_ENABLED", "true").lower() in ("true", "1", "yes")
+CSP_CONNECT_SRC_EXTRA = _csv_env("CSP_CONNECT_SRC_EXTRA", "")
+DEFAULT_CSP_CONNECT_SRC = [
+    "'self'",
+    "https://api.buykori.app",
+    "https://buykori.app",
+    "https://www.buykori.app",
+    "https://client.buykori.app",
+    "https://admin.buykori.app",
+    "https://track.buykori.app",
+    "http://localhost:3000",
+    "http://localhost:8000",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:8000",
+]
+
+
+def _default_content_security_policy() -> str:
+    connect_src = " ".join(DEFAULT_CSP_CONNECT_SRC + CSP_CONNECT_SRC_EXTRA)
+    return "; ".join([
+        "default-src 'self'",
+        "base-uri 'self'",
+        "object-src 'none'",
+        "frame-ancestors 'none'",
+        "form-action 'self'",
+        "script-src 'self' 'unsafe-inline'",
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+        "font-src 'self' https://fonts.gstatic.com data:",
+        "img-src 'self' data: blob: https:",
+        f"connect-src {connect_src}",
+        "worker-src 'self' blob:",
+        "manifest-src 'self'",
+        "frame-src 'none'",
+    ])
+
+
+CONTENT_SECURITY_POLICY = os.getenv("CONTENT_SECURITY_POLICY") or _default_content_security_policy()
+SECURITY_HEADERS = {
+    "content-security-policy": CONTENT_SECURITY_POLICY,
+    "referrer-policy": os.getenv("REFERRER_POLICY", "strict-origin-when-cross-origin"),
+    "permissions-policy": os.getenv(
+        "PERMISSIONS_POLICY",
+        "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()",
+    ),
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "cross-origin-opener-policy": os.getenv("CROSS_ORIGIN_OPENER_POLICY", "same-origin"),
+}
+if SECURITY_HSTS_ENABLED:
+    SECURITY_HEADERS["strict-transport-security"] = os.getenv(
+        "STRICT_TRANSPORT_SECURITY",
+        "max-age=31536000; includeSubDomains",
+    )
 
 # ─── Logging Setup (Structured JSON — systemd/Supervisor/Datadog-friendly) ────
 _log_handler = logging.StreamHandler()
@@ -155,7 +236,7 @@ async def lifespan(app: FastAPI):
     await engine.dispose()
 
 
-# ─── FastAPI App (ORJSONResponse = 2-3x faster JSON serialization) ────────
+# ─── FastAPI App ───────────────────────────────────────────────────────────
 app = FastAPI(
     title="Buykori AdSync",
     description="Multi-tenant ad tracking and conversion sync platform",
@@ -164,12 +245,12 @@ app = FastAPI(
     docs_url="/docs" if ENABLE_DOCS else None,
     redoc_url="/redoc" if ENABLE_DOCS else None,
     openapi_url="/openapi.json" if ENABLE_DOCS else None,
-    default_response_class=ORJSONResponse,  # 🚀 orjson = C-based, 2-3x faster!
 )
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.mount("/static/css", StaticFiles(directory="app/static/css"), name="static-css")
+app.mount("/static/js", StaticFiles(directory="app/static/js"), name="static-js")
 app.mount(
     "/static/client-portal/assets",
     StaticFiles(directory="app/static/client-portal/assets"),
@@ -180,6 +261,67 @@ app.add_middleware(
     TrustedHostMiddleware,
     allowed_hosts=ALLOWED_HOSTS,
 )
+
+
+class RequestSizeLimitMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        limit = _body_limit_for_path(scope.get("path", ""))
+        if not limit:
+            await self.app(scope, receive, send)
+            return
+
+        headers = dict(scope.get("headers") or [])
+        content_length = headers.get(b"content-length")
+        if content_length:
+            from starlette.responses import PlainTextResponse
+            try:
+                body_size = int(content_length.decode("latin1"))
+            except ValueError:
+                response = PlainTextResponse("Invalid Content-Length", status_code=400)
+                await response(scope, receive, send)
+                return
+            if body_size > limit:
+                response = PlainTextResponse("Request body too large", status_code=413)
+                await response(scope, receive, send)
+                return
+
+        await self.app(scope, receive, send)
+
+
+app.add_middleware(RequestSizeLimitMiddleware)
+
+
+class SecurityHeadersMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or not SECURITY_HEADERS_ENABLED:
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_security_headers(message):
+            if message["type"] == "http.response.start":
+                response_headers = list(message.get("headers", []))
+                existing = {name.lower() for name, _ in response_headers}
+                for name, value in SECURITY_HEADERS.items():
+                    header_name = name.encode("latin1")
+                    if header_name not in existing:
+                        response_headers.append((header_name, value.encode("latin1")))
+                message = {**message, "headers": response_headers}
+            await send(message)
+
+        await self.app(scope, receive, send_with_security_headers)
+
+
+app.add_middleware(SecurityHeadersMiddleware)
 
 # ─── Domain Redirect Middleware ───────────────────────────────────────────────
 # buykori.app / www.buykori.app এ /client রিকোয়েস্ট হলে client.buykori.app-এ redirect করো
@@ -279,8 +421,8 @@ class SplitCORSMiddleware:
                 headers={
                     "Access-Control-Allow-Origin": allow_origin,
                     "Access-Control-Allow-Credentials": allow_credentials,
-                    "Access-Control-Allow-Methods": "GET, POST, PATCH, OPTIONS",
-                    "Access-Control-Allow-Headers": "X-API-Key, X-Admin-API-Key, X-CAPI-Origin, X-CAPI-Timestamp, X-CAPI-Signature, Content-Type, Authorization",
+                    "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
+                    "Access-Control-Allow-Headers": "X-API-Key, X-Admin-API-Key, X-Admin-CSRF-Token, X-CAPI-Origin, X-CAPI-Timestamp, X-CAPI-Signature, Content-Type, Authorization",
                     "Access-Control-Max-Age": "600",
                     "Vary": "Origin",
                 },
@@ -334,6 +476,9 @@ app.include_router(courier_webhook_router, prefix="/api", tags=["Courier Webhook
 
 from app.routers.client_health import router as client_health_router
 app.include_router(client_health_router, prefix="/api/v1", tags=["Client Health"])
+
+from app.routers.incomplete_checkouts import router as incomplete_checkouts_router
+app.include_router(incomplete_checkouts_router, prefix="/api/v1", tags=["Incomplete Checkout Recovery"])
 
 
 # ─── Health Check ─────────────────────────────────────────────────────────────

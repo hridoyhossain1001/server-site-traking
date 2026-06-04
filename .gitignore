@@ -1,6 +1,7 @@
 .env
 .env.*
 !.env.example
+.initial-credentials
 
 __pycache__/
 *.py[cod]
@@ -27,6 +28,7 @@ tmp_*.json
 *.diff
 scratch/
 marketing-site/
+langchain/
 GeoLite2-City.mmdb
 *.mmdb.part
 

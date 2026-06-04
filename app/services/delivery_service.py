@@ -12,6 +12,14 @@ from app.utils.event_log_helpers import build_event_log_kwargs
 
 logger = logging.getLogger(__name__)
 
+
+async def wait_for_secondary_tasks(delivery_result: dict) -> None:
+    """Keep worker-owned secondary sends alive until their logging completes."""
+    tasks = delivery_result.get("_tasks") or []
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
 async def _log_secondary_failure(
     client_id: int,
     channel: str,

@@ -2,6 +2,7 @@ import time
 import logging
 import os
 from dataclasses import dataclass
+from datetime import datetime
 from urllib.parse import urlparse
 from fastapi import Header, HTTPException, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,6 +12,7 @@ from app.models.client import Client
 from app.models.client_session import ClientSession
 from app.security import decrypt_token
 from app.services.auth_service import hash_session_token
+from app.services.plan_service import effective_monthly_event_limit, has_growth_access
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +48,9 @@ class CachedClient:
     ga4_api_secret: str | None
     deferred_purchase: bool
     webhook_url: str | None
+    plan_tier: str
+    trial_started_at: datetime | None
+    trial_ends_at: datetime | None
     shopify_shared_secret: str | None = None
     event_rules: dict | list | None = None
 
@@ -123,16 +128,19 @@ def _snapshot(client: Client) -> CachedClient:
         domain=client.domain,
         rate_limit=client.rate_limit or 5000,
         daily_quota=client.daily_quota or 100000,
-        monthly_limit=getattr(client, 'monthly_limit', None),
+        monthly_limit=effective_monthly_event_limit(client),
         enable_facebook=getattr(client, 'enable_facebook', True),
-        enable_tiktok=getattr(client, 'enable_tiktok', True),
-        enable_ga4=getattr(client, 'enable_ga4', True),
+        enable_tiktok=has_growth_access(client) and getattr(client, 'enable_tiktok', True),
+        enable_ga4=has_growth_access(client) and getattr(client, 'enable_ga4', True),
         tiktok_pixel_id=getattr(client, 'tiktok_pixel_id', None),
         tiktok_access_token=getattr(client, 'tiktok_access_token', None),
         ga4_measurement_id=getattr(client, 'ga4_measurement_id', None),
         ga4_api_secret=getattr(client, 'ga4_api_secret', None),
-        deferred_purchase=getattr(client, 'deferred_purchase', False) or False,
+        deferred_purchase=has_growth_access(client) and (getattr(client, 'deferred_purchase', False) or False),
         webhook_url=getattr(client, 'webhook_url', None),
+        plan_tier=getattr(client, 'plan_tier', 'growth') or 'growth',
+        trial_started_at=getattr(client, 'trial_started_at', None),
+        trial_ends_at=getattr(client, 'trial_ends_at', None),
         shopify_shared_secret=getattr(client, 'shopify_shared_secret', None),
         event_rules=getattr(client, 'event_rules', None),
     )

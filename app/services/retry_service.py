@@ -16,7 +16,7 @@ from app.models.client import Client
 from app.models.event_log import EventLog
 from app.models.failed_event import FailedEvent
 from app.schemas.event import EventData
-from app.services.delivery_service import deliver_events_to_platforms
+from app.services.delivery_service import deliver_events_to_platforms, wait_for_secondary_tasks
 from app.services.usage_service import increment_usage_counters_db
 
 logger = logging.getLogger(__name__)
@@ -154,6 +154,7 @@ async def retry_failed_events():
                         delivery_res = await deliver_events_to_platforms(client, events, context)
                         primary_platform = delivery_res["primary_platform"]
                         result = delivery_res["result"]
+                        await wait_for_secondary_tasks(delivery_res)
 
                         # সফল! স্ট্যাটাস আপডেট করো
                         failed.status = "success"

@@ -44,15 +44,20 @@ ENCRYPTION_KEY=your-32-byte-fernet-key
 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
 
-### 4. Database Migrations
-Initialize and upgrade your database schema:
+### 4. Database Bootstrap and Migrations
+Initialize a brand-new database once:
 ```bash
-# If using Alembic migrations
-alembic upgrade head
-
-# For initial schema creation in development only (alternative)
-# Set ENABLE_CREATE_ALL=true in .env
+python deploy/init_db.py
 ```
+
+Apply migrations after pulling future application updates:
+```bash
+alembic upgrade head
+```
+
+`deploy/init_db.py` creates the current schema and stamps the Alembic head. Do
+not run `alembic upgrade head` directly against an empty database: the retained
+historical migration chain assumes the original schema already exists.
 
 ### 5. Running the Application
 Start the FastAPI server locally:

@@ -11,38 +11,26 @@ Please follow these guidelines automatically whenever making changes to this cod
 ---
 
 ## 2. Client Portal Build & Local Static Sync
-* If you edit any code in `client-portal/src/`, you **must** build the production bundle and copy it to the static fallback folder of the backend:
+* If you edit any code in `client-portal/src/`, build the production bundle and copy it to the static fallback folder of the backend:
   1. Run `npm run build` inside `client-portal/`.
-  2. Clear old assets: `Remove-Item -Recurse -Force "app\static\client-portal\assets\*"`
-  3. Copy new build: `Copy-Item -Recurse -Force "client-portal\dist\*" "app\static\client-portal\"`
+  2. Clear old assets with a reviewed PowerShell remove command scoped to `app\static\client-portal\assets\*`.
+  3. Copy new build output from `client-portal\dist\*` to `app\static\client-portal\`.
 
 ---
 
 ## 3. Server Deployments (DigitalOcean Droplet - Backend & Migrations)
-* To deploy python backend code (`app/`), database migrations (`migrations/`), and static assets to the live DigitalOcean Droplet, you **MUST** run:
-  ```powershell
-  python scratch/deploy_updates.py
-  ```
-  from the workspace root. This syncs changes, applies PostgreSQL migrations, and restarts the web/worker services. 
-* Do **NOT** assume pushing to the root `full-project-` repository deploys backend changes. Backend deployment is strictly done via this command.
+* Backend deployment is not triggered by pushing the root repository.
+* Deploy credentials must never be stored in this file or in git.
+* Required deploy environment values are `DO_SSH_HOST`, `DO_SSH_USER`, and `DO_REMOTE_DIR`.
+* Prefer SSH key auth with a pinned `DO_SSH_KNOWN_HOSTS` file and a least-privilege deploy user.
+* Password and root deploys are blocked by default in `deploy/changed_deploy.py`; only use temporary override flags during a controlled migration window.
 
 ---
 
-## 4. ⛔ STRICT RULE — Do NOT Push `client-portal/` Source to Main Backup Repo
-* The main backup repository (`just-demo-file-` / `full-project-`) must **NEVER** receive raw source code from `client-portal/src/`, `admin-portal/`, or `marketing-site/` unless the user **explicitly** says: **"push to the backup repo"**.
-* When client-portal code changes, push **only** to:
-  - `buykori-client-portal` repo (for Vercel auto-deploy via `git push` inside `client-portal/`)
-  - DigitalOcean (for static fallback via `python scratch/deploy_updates.py`)
-* The root repo push (`just-demo-file-`) is **only** for backend files: `app/`, `migrations/`, `scripts/`, `wordpress-plugin/` etc.
-* **Never** auto-push `client-portal/` source to the backup root repo without explicit user instruction.
-
----
-
-## 5. DigitalOcean Server Credentials
-* **Host:** `159.223.59.78`
-* **User:** `root`
-* **SSH Password:** `1122334455Hk`
-* When running `python scratch/deploy_updates.py`, always set the environment variable first:
-  ```powershell
-  $env:DO_SSH_PASSWORD = "1122334455Hk"; python scratch/deploy_updates.py
-  ```
+## 4. Strict Rule - Do Not Push Portal Source To Main Backup Repo
+* The main backup repository (`just-demo-file-` / `full-project-`) must **NEVER** receive raw source code from `client-portal/src/`, `admin-portal/`, or `marketing-site/` unless the user explicitly says: **"push to the backup repo"**.
+* When client-portal code changes, push only to:
+  - `buykori-client-portal` repo for Vercel auto-deploy via `git push` inside `client-portal/`
+  - DigitalOcean for static fallback deploy after the local build/sync step
+* The root repo push (`just-demo-file-`) is only for backend files such as `app/`, `migrations/`, `scripts/`, and `wordpress-plugin/`.
+* Never auto-push `client-portal/` source to the backup root repo without explicit user instruction.

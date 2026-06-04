@@ -49,13 +49,22 @@ class Client(Base):
     pathao_api_key = Column(String, nullable=True)                 # Pathao Merchant API Key
     pathao_secret_key = Column(String, nullable=True)              # Pathao Secret (encrypted)
     pathao_store_id = Column(String, nullable=True)                # Pathao Store ID
+    pathao_environment = Column(String, default="live", nullable=False) # live / sandbox
+    pathao_webhook_secret = Column(String, nullable=True)          # Pathao webhook secret (encrypted)
+    pathao_webhook_verified_at = Column(DateTime(timezone=True), nullable=True)
     steadfast_api_key = Column(String, nullable=True)              # SteadFast API Key
     steadfast_secret_key = Column(String, nullable=True)            # SteadFast Secret (encrypted)
+    steadfast_webhook_token = Column(String, nullable=True)        # SteadFast webhook bearer token (encrypted)
     redx_access_token = Column(String, nullable=True)              # RedX bearer token (encrypted)
+    redx_webhook_secret = Column(String, nullable=True)             # RedX callback query token (encrypted)
     redx_pickup_store_id = Column(String, nullable=True)           # RedX default pickup store ID
     redx_delivery_area_id = Column(String, nullable=True)          # RedX default delivery area ID
     redx_delivery_area_name = Column(String, nullable=True)        # RedX default delivery area name
     courier_auto_send = Column(Boolean, default=False, nullable=False) # Confirm করলেই অটো Courier-এ পাঠাবে?
     default_courier = Column(String, nullable=True)                # 'pathao' / 'steadfast' / 'redx'
+    plan_tier = Column(String, default="growth", nullable=False)   # free / growth / scale / agency
+    billing_status = Column(String, default="paid", nullable=False) # trial / paid / pending_payment / overdue / manual_invoice / free
+    trial_started_at = Column(DateTime(timezone=True), nullable=True)
+    trial_ends_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

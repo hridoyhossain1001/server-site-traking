@@ -34,7 +34,7 @@
 SSH দিয়ে Droplet-এ ঢুকুন এবং setup script চালান:
 
 ```bash
-ssh root@YOUR_DROPLET_IP
+ssh deploy@YOUR_DROPLET_HOST
 
 # প্রজেক্ট clone করুন
 git clone https://github.com/YOUR_USERNAME/buykori-adsync.git /var/www/buykori-adsync
@@ -181,15 +181,18 @@ bash deploy/deploy.sh
 Local workspace theke fast hotfix deploy korte changed-file helper chalan:
 
 ```powershell
-python deploy\changed_deploy.py --base origin/main
+python deploy\changed_deploy.py --base origin/main --working-tree
 ```
 
 If SSH key auth is not configured yet, set `DO_SSH_PASSWORD` for that command only.
 Preview the planned upload/delete list first:
 
 ```powershell
-python deploy\changed_deploy.py --base origin/main --dry-run
+python deploy\changed_deploy.py --base origin/main --working-tree --dry-run
 ```
+
+`--working-tree` includes staged, unstaged, and untracked production files. The helper
+uploads only `app/`, `migrations/`, `requirements.txt`, and `alembic.ini`.
 
 Use `--skip-migrations` or `--skip-restart` only when you are sure that step is not needed.
 

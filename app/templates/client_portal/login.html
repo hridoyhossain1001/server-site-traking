@@ -338,6 +338,7 @@
 
         <form class="auth-panel {% if active_tab != 'signup' %}active{% endif %}" id="login-panel"
           action="/client/login" method="post" autocomplete="on">
+          <input type="hidden" name="next_url" value="{{ next_url or '' }}">
           <div class="field-group">
             <input class="glass-input" type="email" name="email" placeholder="Email address" autocomplete="email"
               required>
@@ -355,6 +356,7 @@
 
         <form class="auth-panel {% if active_tab == 'signup' %}active{% endif %}" id="signup-panel"
           action="/client/signup" method="post" autocomplete="on">
+          <input type="hidden" name="next_url" value="{{ next_url or '' }}">
           <div class="field-group">
             <input class="glass-input" type="text" name="full_name" placeholder="Full name" autocomplete="name"
               required>
@@ -362,6 +364,8 @@
               autocomplete="organization" required>
             <input class="glass-input" type="email" name="email" placeholder="Email address" autocomplete="email"
               required>
+            <input class="glass-input" type="tel" name="phone_number" placeholder="Phone number for trial support"
+              autocomplete="tel" required>
             <input class="glass-input" type="password" name="password" id="signup-password" placeholder="Create password"
               autocomplete="new-password" minlength="8" required>
             <input class="glass-input" type="password" name="confirm_password" id="signup-confirm-password" placeholder="Confirm password"

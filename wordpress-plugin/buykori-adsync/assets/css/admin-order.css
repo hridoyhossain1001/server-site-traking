@@ -1,0 +1,42 @@
+.buykorigw-order-status {
+  font-size: 13px;
+  line-height: 1.8;
+}
+
+.buykorigw-order-ok {
+  color: #2e7d32;
+}
+
+.buykorigw-order-muted {
+  color: #737373;
+}
+
+.buykorigw-order-note {
+  font-size: 11px;
+}
+
+.buykorigw-order-danger {
+  color: #c62828;
+}
+
+.buykorigw-order-warning {
+  color: #f57c00;
+}
+
+.buykorigw-order-info {
+  color: #1565c0;
+}
+
+.buykorigw-order-divider {
+  border: 0;
+  border-top: 1px solid #eeeeee;
+  margin: 8px 0;
+}
+
+.buykorigw-order-actions {
+  margin-top: 6px;
+}
+
+.buykorigw-manual-confirm-sent {
+  color: #2e7d32;
+}

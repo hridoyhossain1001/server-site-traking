@@ -7,13 +7,13 @@
     <p class="page-sub">Manage all CAPI client integrations and monthly quotas.</p>
   </div>
   <div class="header-actions">
-    <button class="btn btn-primary" onclick="window.location.href='/api/v1/admin'">
-      <svg style="width:16px;height:16px" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg> Add Client
-    </button>
+    <a class="btn btn-primary" href="/api/v1/admin">
+      <svg class="icon-16" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg> Add Client
+    </a>
   </div>
 </div>
 
-<div class="metrics-grid" style="grid-template-columns: repeat(3, 1fr); margin-bottom: 24px;">
+<div class="metrics-grid metrics-grid-three">
   <div class="metric-card">
     <div class="metric-header">
       <div class="m-icon bg-blue"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg></div>
@@ -26,14 +26,14 @@
       <div class="m-icon bg-purple"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg></div>
       <span class="m-title">Active</span>
     </div>
-    <div class="metric-value" style="color:#34d399">{{ active_count }}</div>
+    <div class="metric-value metric-value-success">{{ active_count }}</div>
   </div>
   <div class="metric-card">
     <div class="metric-header">
       <div class="m-icon bg-red"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg></div>
       <span class="m-title">Inactive</span>
     </div>
-    <div class="metric-value" style="color:#f87171">{{ inactive_count }}</div>
+    <div class="metric-value metric-value-danger">{{ inactive_count }}</div>
   </div>
 </div>
 
@@ -43,15 +43,16 @@
     {% set m_limit = c.monthly_limit or 50000 %}
     {% set usage_pct = ((m_usage / m_limit * 100)|round(1)) if m_limit > 0 else 0 %}
     {% if usage_pct > 100 %}{% set usage_pct = 100 %}{% endif %}
-    {% set bar_color = "#34d399" if usage_pct < 70 else ("#facc15" if usage_pct < 90 else "#ef4444") %}
+    {% set usage_level = "ok" if usage_pct < 70 else ("warn" if usage_pct < 90 else "danger") %}
+    {% set plan = plan_summary(c) %}
 
-    <div class="card" style="margin-bottom:16px;">
+    <div class="card client-card">
       <div class="card-header">
         <div>
-          <h2 class="card-title" style="margin-bottom:4px">{{ c.name }}</h2>
-          <span style="font-size:12px;color:var(--text-muted)">Pixel: {{ c.pixel_id }} · Created: {% if c.created_at %}<span class="local-datetime" data-utc="{{ c.created_at.isoformat() }}" data-format="date">{{ c.created_at.strftime('%Y-%m-%d') }}</span>{% else %}—{% endif %}</span>
+          <h2 class="card-title mb-4">{{ c.name }}</h2>
+          <span class="client-meta">Pixel: {{ c.pixel_id }} · Created: {% if c.created_at %}<span class="local-datetime" data-utc="{{ c.created_at.isoformat() }}" data-format="date">{{ c.created_at.strftime('%Y-%m-%d') }}</span>{% else %}—{% endif %}</span>
         </div>
-        <div style="display:flex;align-items:center;gap:8px">
+        <div class="inline-status-row">
           {% if c.is_active %}
             <span class="status-badge status-healthy">Active</span>
           {% else %}
@@ -59,59 +60,107 @@
           {% endif %}
         </div>
       </div>
-      <div style="padding:20px;">
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:20px;">
-          <div><div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;margin-bottom:4px">Events Today</div><div style="font-size:18px;font-weight:700;color:#34d399">{{ "{:,}".format(client_events_map.get(c.id, 0)) }}</div></div>
-          <div><div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;margin-bottom:4px">Domain</div><div style="font-size:13px;color:#fff">{% if c.domain %}{{ c.domain }}{% else %}—{% endif %}</div></div>
-          <div><div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;margin-bottom:4px">API Key</div>
-            <div class="api-key-cell" style="max-width:100%">
+      <div class="client-card-body">
+        <div class="client-detail-grid">
+          <div><div class="client-detail-label">Events Today</div><div class="client-detail-value-strong metric-value-success">{{ "{:,}".format(client_events_map.get(c.id, 0)) }}</div></div>
+          <div><div class="client-detail-label">Domain</div><div class="client-detail-value">{% if c.domain %}{{ c.domain }}{% else %}—{% endif %}</div></div>
+          <div><div class="client-detail-label">API Key</div>
+            <div class="api-key-cell api-key-cell-full">
               <span id="ck_{{ c.id }}" data-secret="{{ c.api_key }}" data-masked="{{ mask_secret(c.api_key) }}" data-hidden="1">{{ mask_secret(c.api_key) }}</span>
-              <button class="copy-icon" onclick="copyText('ck_{{ c.id }}')" title="Copy">📋</button>
+              <button class="copy-icon" data-copy-target="ck_{{ c.id }}" title="Copy">📋</button>
             </div>
           </div>
         </div>
 
-        <!-- Monthly Usage Section -->
-        <div style="background:rgba(0,0,0,0.2);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-            <span style="font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase">📊 Monthly Usage</span>
-            <span style="font-size:13px;font-weight:700;color:{{ bar_color }}">{{ "{:,}".format(m_usage) }} / {{ "{:,}".format(m_limit) }} <span style="font-size:11px;color:var(--text-muted)">({{ usage_pct }}%)</span></span>
-          </div>
-          <div style="width:100%;height:8px;background:rgba(255,255,255,0.06);border-radius:4px;overflow:hidden">
-            <div style="width:{{ usage_pct }}%;height:100%;background:{{ bar_color }};border-radius:4px;transition:width 0.5s ease"></div>
-          </div>
-          <div style="display:flex;justify-content:space-between;margin-top:10px;align-items:center">
-            <span style="font-size:11px;color:var(--text-muted)">Resets on 1st of next month</span>
-            <form method="post" action="/api/v1/admin/client/{{ c.id }}/update-monthly-limit" style="display:flex;gap:6px;align-items:center;margin:0">
+        <!-- Plan Control Section -->
+        <div class="plan-panel">
+          <div class="plan-panel-head">
+            <div>
+              <div class="plan-label">Plan Control</div>
+              <div class="plan-name">{{ plan.name }}</div>
+              <div class="plan-meta">
+                {% if plan.isTrial %}
+                  Trial ends in {{ plan.trialDaysRemaining }} day{% if plan.trialDaysRemaining != 1 %}s{% endif %}
+                {% else %}
+                  Growth access: {% if plan.growthFeaturesEnabled %}Enabled{% else %}Disabled{% endif %}
+                {% endif %}
+                &middot; Billing: {{ plan.billingStatus.replace('_', ' ').title() }}
+                Â· Order quota: {{ "{:,}".format(plan.ordersQuota) if plan.ordersQuota else "Unlimited" }}
+              </div>
+            </div>
+            <form method="post" action="/api/v1/admin/client/{{ c.id }}/plan" class="compact-form">
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-              <input type="number" name="monthly_limit" value="{{ m_limit }}" min="0" step="1000" style="width:100px;padding:4px 8px;background:rgba(0,0,0,0.3);border:1px solid var(--border);border-radius:4px;color:#fff;font-size:12px;text-align:right">
-              <button type="submit" class="btn btn-outline" style="font-size:11px;padding:4px 10px">Update</button>
+              <input type="hidden" name="action" value="confirm">
+              <select name="plan_tier" class="compact-select compact-select-sm">
+                <option value="growth" {% if plan.tier == "growth" %}selected{% endif %}>Growth</option>
+                <option value="scale" {% if plan.tier == "scale" %}selected{% endif %}>Scale</option>
+                <option value="agency" {% if plan.tier == "agency" %}selected{% endif %}>Agency</option>
+              </select>
+              <input type="number" name="monthly_limit" value="{{ c.monthly_limit or 0 }}" min="0" step="1000" title="0 means unlimited" class="compact-input">
+              <select name="billing_status" class="compact-select compact-select-md">
+                <option value="paid" {% if plan.billingStatus == "paid" %}selected{% endif %}>Paid</option>
+                <option value="pending_payment" {% if plan.billingStatus == "pending_payment" %}selected{% endif %}>Pending Payment</option>
+                <option value="overdue" {% if plan.billingStatus == "overdue" %}selected{% endif %}>Overdue</option>
+                <option value="manual_invoice" {% if plan.billingStatus == "manual_invoice" %}selected{% endif %}>Manual Invoice</option>
+              </select>
+              <button type="submit" class="btn btn-primary btn-xs">Confirm Plan</button>
+            </form>
+          </div>
+          <div class="inline-actions">
+            <form method="post" action="/api/v1/admin/client/{{ c.id }}/plan" class="form-zero" data-confirm="Start a 14-day Growth trial? This will fail if the domain or Meta pixel already used a trial.">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <input type="hidden" name="action" value="start_trial">
+              <button type="submit" class="btn btn-outline btn-xs">Start Trial</button>
+            </form>
+            <form method="post" action="/api/v1/admin/client/{{ c.id }}/plan" class="form-zero" data-confirm="Cancel paid/trial access and move this client to Free?">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <input type="hidden" name="action" value="cancel">
+              <button type="submit" class="btn btn-outline btn-xs danger-soft">Cancel to Free</button>
             </form>
           </div>
         </div>
 
-        <div style="display:flex;gap:8px;flex-wrap:wrap;border-top:1px solid var(--border);padding-top:16px">
+        <!-- Monthly Usage Section -->
+        <div class="usage-panel">
+          <div class="usage-header">
+            <span class="usage-label">📊 Monthly Usage</span>
+            <span class="usage-total usage-total-{{ usage_level }}">{{ "{:,}".format(m_usage) }} / {{ "{:,}".format(m_limit) }} <span class="usage-muted">({{ usage_pct }}%)</span></span>
+          </div>
+          <div class="usage-bar">
+            <div class="usage-bar-fill usage-bar-fill-{{ usage_level }}" data-progress-width="{{ usage_pct }}"></div>
+          </div>
+          <div class="usage-footer">
+            <span class="usage-muted">Resets on 1st of next month</span>
+            <form method="post" action="/api/v1/admin/client/{{ c.id }}/update-monthly-limit" class="quota-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <input type="number" name="monthly_limit" value="{{ m_limit }}" min="0" step="1000" class="quota-input">
+              <button type="submit" class="btn btn-outline btn-xs">Update</button>
+            </form>
+          </div>
+        </div>
+
+        <div class="action-row">
           <a href="/api/v1/admin/client/{{ c.id }}/instructions" class="btn btn-outline">📋 Instructions</a>
           <a href="/api/v1/admin/client/{{ c.id }}/edit" class="btn btn-primary">✏️ Edit</a>
-          <form method="post" action="/api/v1/admin/client/{{ c.id }}/{% if c.is_active %}deactivate{% else %}activate{% endif %}" style="margin:0">
+          <form method="post" action="/api/v1/admin/client/{{ c.id }}/{% if c.is_active %}deactivate{% else %}activate{% endif %}" class="form-zero">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <button type="submit" class="btn btn-outline" style="color:var(--danger);border-color:var(--danger-bg);background:rgba(239,68,68,0.05)">{% if c.is_active %}Deactivate{% else %}Activate{% endif %}</button>
+            <button type="submit" class="btn btn-outline danger-soft">{% if c.is_active %}Deactivate{% else %}Activate{% endif %}</button>
           </form>
-          <form method="post" action="/api/v1/admin/client/{{ c.id }}/rotate-api-key" style="margin:0" onsubmit="return confirm('Rotate server API key? Plugin/server integrations must be updated.')">
+          <form method="post" action="/api/v1/admin/client/{{ c.id }}/rotate-api-key" class="form-zero" data-confirm="Rotate server API key? Plugin/server integrations must be updated.">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <button type="submit" class="btn btn-outline" style="color:var(--danger);border-color:var(--danger-bg);background:rgba(239,68,68,0.05)">Rotate API Key</button>
+            <button type="submit" class="btn btn-outline danger-soft">Rotate API Key</button>
           </form>
-          <form method="post" action="/api/v1/admin/client/{{ c.id }}/rotate-public-key" style="margin:0" onsubmit="return confirm('Rotate browser tracker public key? t.js URLs must be updated.')">
+          <form method="post" action="/api/v1/admin/client/{{ c.id }}/rotate-public-key" class="form-zero" data-confirm="Rotate browser tracker public key? t.js URLs must be updated.">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <button type="submit" class="btn btn-outline">Rotate Public Key</button>
           </form>
-          <form method="post" action="/api/v1/admin/client/{{ c.id }}/rotate-portal-key" style="margin:0" onsubmit="return confirm('Rotate client portal login key?')">
+          <form method="post" action="/api/v1/admin/client/{{ c.id }}/rotate-portal-key" class="form-zero" data-confirm="Rotate client portal login key?">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <button type="submit" class="btn btn-outline">Rotate Portal Key</button>
           </form>
-          <form method="post" action="/api/v1/admin/client/{{ c.id }}/delete" style="margin:0" onsubmit="return confirm('Permanently delete this client? This will remove logs, outbox, pending orders and usage data for this client.')">
+          <form method="post" action="/api/v1/admin/client/{{ c.id }}/delete" class="form-zero" data-confirm="Permanently delete this client? This will remove logs, outbox, pending orders and usage data for this client.">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <button type="submit" class="btn btn-outline" style="color:var(--danger);border-color:var(--danger-bg);background:rgba(239,68,68,0.05)">Delete Client</button>
+            <button type="submit" class="btn btn-outline danger-soft">Delete Client</button>
           </form>
         </div>
       </div>
@@ -119,8 +168,8 @@
   {% endfor %}
 {% else %}
   <div class="card">
-    <div style="padding:40px 20px;text-align:center;color:var(--text-muted)">
-      <div style="font-size:32px;margin-bottom:12px">📭</div>
+    <div class="empty-card-body">
+      <div class="empty-icon">📭</div>
       <p>No clients found. Add one from the Dashboard.</p>
     </div>
   </div>

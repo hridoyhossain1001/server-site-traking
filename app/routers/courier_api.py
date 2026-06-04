@@ -1,4 +1,5 @@
 import logging
+import secrets
 from typing import List, Optional
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, Request, HTTPException, Query
@@ -12,7 +13,9 @@ from app.models.pending_event import PendingEvent
 from app.models.courier_order import CourierOrder
 from app.routers.client_api import get_current_portal_client
 from app.security import encrypt_token, decrypt_token
+from app.services.courier_booking_service import cancel_queued_booking, enqueue_courier_booking
 from app.services.courier_service import CourierService
+from app.services.plan_service import has_growth_access, require_growth_access
 from app.utils.display import mask_secret
 
 logger = logging.getLogger(__name__)
@@ -27,9 +30,15 @@ class CourierSettingsResponse(BaseModel):
     pathao_client_secret: Optional[str] = None
     pathao_password: Optional[str] = None
     pathao_store_id: Optional[str] = None
+    pathao_environment: str = "live"
+    pathao_webhook_secret: Optional[str] = None
+    pathao_webhook_secret_configured: bool = False
+    pathao_webhook_verified_at: Optional[str] = None
     steadfast_api_key: Optional[str] = None
     steadfast_secret_key: Optional[str] = None
+    steadfast_webhook_token_configured: bool = False
     redx_access_token: Optional[str] = None
+    redx_webhook_secret_configured: bool = False
     redx_pickup_store_id: Optional[str] = None
     redx_delivery_area_id: Optional[str] = None
     redx_delivery_area_name: Optional[str] = None
@@ -44,6 +53,8 @@ class CourierSettingsUpdate(BaseModel):
     pathao_client_secret: Optional[str] = None
     pathao_password: Optional[str] = None
     pathao_store_id: Optional[str] = None
+    pathao_environment: Optional[str] = None
+    pathao_webhook_secret: Optional[str] = None
     steadfast_api_key: Optional[str] = None
     steadfast_secret_key: Optional[str] = None
     redx_access_token: Optional[str] = None
@@ -112,13 +123,19 @@ async def get_courier_settings(client: Client = Depends(get_current_portal_clien
         pathao_client_secret=pathao_client_secret,
         pathao_password=pathao_password,
         pathao_store_id=client.pathao_store_id,
+        pathao_environment=client.pathao_environment or "live",
+        pathao_webhook_secret=mask_secret(decrypt_token(client.pathao_webhook_secret)) if client.pathao_webhook_secret else None,
+        pathao_webhook_secret_configured=bool(client.pathao_webhook_secret),
+        pathao_webhook_verified_at=client.pathao_webhook_verified_at.isoformat() if client.pathao_webhook_verified_at else None,
         steadfast_api_key=client.steadfast_api_key,
         steadfast_secret_key=mask_secret(decrypt_token(client.steadfast_secret_key)) if client.steadfast_secret_key else None,
+        steadfast_webhook_token_configured=bool(client.steadfast_webhook_token),
         redx_access_token=mask_secret(decrypt_token(client.redx_access_token)) if client.redx_access_token else None,
+        redx_webhook_secret_configured=bool(client.redx_webhook_secret),
         redx_pickup_store_id=client.redx_pickup_store_id,
         redx_delivery_area_id=client.redx_delivery_area_id,
         redx_delivery_area_name=client.redx_delivery_area_name,
-        courier_auto_send=client.courier_auto_send,
+        courier_auto_send=has_growth_access(client) and client.courier_auto_send,
         default_courier=client.default_courier
     )
 
@@ -144,6 +161,14 @@ async def update_courier_settings(
         client.pathao_api_key = settings.pathao_api_key.strip() or None
     if settings.pathao_store_id is not None:
         client.pathao_store_id = settings.pathao_store_id.strip() or None
+    if settings.pathao_environment is not None:
+        environment = settings.pathao_environment.strip().lower()
+        if environment not in ("live", "sandbox"):
+            raise HTTPException(status_code=400, detail="Pathao environment must be live or sandbox.")
+        client.pathao_environment = environment
+    if settings.pathao_webhook_secret is not None and not looks_masked(settings.pathao_webhook_secret):
+        client.pathao_webhook_secret = encrypt_token(settings.pathao_webhook_secret.strip()) if settings.pathao_webhook_secret.strip() else None
+        client.pathao_webhook_verified_at = None
     if settings.steadfast_api_key is not None:
         client.steadfast_api_key = settings.steadfast_api_key.strip() or None
     if settings.default_courier is not None:
@@ -155,7 +180,9 @@ async def update_courier_settings(
     if settings.redx_delivery_area_name is not None:
         client.redx_delivery_area_name = settings.redx_delivery_area_name.strip() or None
         
-    client.courier_auto_send = settings.courier_auto_send
+    if settings.courier_auto_send:
+        require_growth_access(client, "Automatic courier booking")
+    client.courier_auto_send = has_growth_access(client) and settings.courier_auto_send
     
     # Encrypt credentials if they are newly updated and not masked
     if settings.pathao_client_secret is not None or settings.pathao_password is not None:
@@ -196,7 +223,59 @@ async def update_courier_settings(
     
     return {"message": "Courier settings updated successfully."}
 
-@router.post("/courier/send")
+
+@router.post("/courier/pathao/webhook-secret")
+async def get_or_create_pathao_webhook_secret(
+    client: Client = Depends(get_current_portal_client),
+    db: AsyncSession = Depends(get_db),
+):
+    if client.pathao_webhook_secret:
+        secret = decrypt_token(client.pathao_webhook_secret)
+    else:
+        secret = secrets.token_urlsafe(32)
+        client.pathao_webhook_secret = encrypt_token(secret)
+        client.pathao_webhook_verified_at = None
+        db.add(client)
+        await db.commit()
+
+    return {
+        "secret": secret,
+        "configured": True,
+        "verified_at": client.pathao_webhook_verified_at.isoformat() if client.pathao_webhook_verified_at else None,
+    }
+
+
+@router.post("/courier/{provider}/webhook-secret")
+async def get_or_create_courier_webhook_secret(
+    provider: str,
+    client: Client = Depends(get_current_portal_client),
+    db: AsyncSession = Depends(get_db),
+):
+    provider = provider.strip().lower()
+    fields = {
+        "steadfast": "steadfast_webhook_token",
+        "redx": "redx_webhook_secret",
+    }
+    field = fields.get(provider)
+    if not field:
+        raise HTTPException(status_code=400, detail="Unsupported courier webhook provider.")
+
+    encrypted_secret = getattr(client, field)
+    if encrypted_secret:
+        secret = decrypt_token(encrypted_secret)
+    else:
+        secret = secrets.token_urlsafe(32)
+        setattr(client, field, encrypt_token(secret))
+        db.add(client)
+        await db.commit()
+
+    callback_url = f"https://api.buykori.app/api/v1/webhook/{provider}"
+    if provider == "redx":
+        callback_url += f"?token={secret}"
+    return {"secret": secret, "configured": True, "callback_url": callback_url}
+
+
+@router.post("/courier/send", status_code=202)
 async def send_order_to_courier(
     req: SendToCourierRequest,
     client: Client = Depends(get_current_portal_client),
@@ -211,158 +290,41 @@ async def send_order_to_courier(
     pending_event = event_result.scalar_one_or_none()
     if not pending_event:
         raise HTTPException(status_code=404, detail="Order (pending event) not found.")
-        
-    # Check if this order is already sent — with_for_update() দিয়ে race condition রোধ করা হচ্ছে
-    # (concurrent request দুটি একই সাথে pass করে double booking করতে পারবে না)
-    order_exist = await db.execute(
-        select(CourierOrder).where(
-            (CourierOrder.client_id == client.id) & (CourierOrder.order_id == pending_event.order_id)
-        ).with_for_update(skip_locked=False)
-    )
-    if order_exist.scalar_one_or_none():
-        raise HTTPException(status_code=400, detail="This order has already been sent to a courier.")
 
-    result = {}
-    
-    if req.courier_provider == "steadfast":
-        if not client.steadfast_api_key or not client.steadfast_secret_key:
-            raise HTTPException(status_code=400, detail="SteadFast API credentials are not configured.")
-            
-        api_key = client.steadfast_api_key
-        secret_key = decrypt_token(client.steadfast_secret_key)
-        
-        result = await CourierService.send_to_steadfast(
-            api_key=api_key,
-            secret_key=secret_key,
-            recipient_name=req.recipient_name,
-            recipient_phone=req.recipient_phone,
-            recipient_address=req.recipient_address,
-            cod_amount=req.cod_amount,
-            merchant_order_id=pending_event.order_id
+    try:
+        booking = await enqueue_courier_booking(
+            db,
+            client=client,
+            pending=pending_event,
+            provider=req.courier_provider,
+            overrides={
+                "recipient_name": req.recipient_name,
+                "recipient_phone": req.recipient_phone,
+                "recipient_address": req.recipient_address,
+                "cod_amount": req.cod_amount,
+                "store_id": req.store_id,
+                "item_weight": req.item_weight,
+                "item_quantity": req.item_quantity,
+                "delivery_area_id": req.delivery_area_id,
+                "delivery_area_name": req.delivery_area_name,
+                "pickup_store_id": req.pickup_store_id,
+            },
+            purchase_event_sent=pending_event.portal_state == "operations_only",
         )
-        
-    elif req.courier_provider == "pathao":
-        # Pathao credentials format:
-        # pathao_api_key = "client_id|email"
-        # pathao_secret_key = "client_secret|password" (encrypted)
-        # pathao_store_id = store_id
-        if not client.pathao_api_key or not client.pathao_secret_key:
-            raise HTTPException(status_code=400, detail="Pathao API credentials are not configured.")
-            
-        store_id_to_use = str(req.store_id) if req.store_id is not None else client.pathao_store_id
-        if not store_id_to_use:
-            raise HTTPException(status_code=400, detail="Pathao Store ID is not configured.")
-            
-        try:
-            client_id, email = client.pathao_api_key.split("|", 1)
-            decrypted_secret_pass = decrypt_token(client.pathao_secret_key)
-            client_secret, password = decrypted_secret_pass.split("|", 1)
-        except ValueError:
-            raise HTTPException(
-                status_code=400, 
-                detail="Pathao credentials format incorrect. Expected client_id|email and client_secret|password."
-            )
-            
-        weight_to_use = req.item_weight if req.item_weight is not None else 0.5
-        qty_to_use = req.item_quantity if req.item_quantity is not None else 1
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-        # Extract product names from event_data or raw_order_data
-        item_description_to_use = None
-        event_data_dict = pending_event.event_data or {}
-        custom_data_dict = event_data_dict.get("custom_data") or {}
-        contents_list = custom_data_dict.get("contents") or []
-
-        if not contents_list and pending_event.raw_order_data:
-            contents_list = pending_event.raw_order_data.get("products") or pending_event.raw_order_data.get("line_items") or []
-
-        if contents_list and isinstance(contents_list, list):
-            product_descriptions = []
-            for item in contents_list:
-                if isinstance(item, dict):
-                    name = item.get("title") or item.get("name") or item.get("content_name")
-                    qty = item.get("quantity") or item.get("qty") or 1
-                    if name:
-                        product_descriptions.append(f"{name} x{qty}")
-            if product_descriptions:
-                item_description_to_use = ", ".join(product_descriptions)
-            
-        result = await CourierService.send_to_pathao(
-            client_id=client_id,
-            client_secret=client_secret,
-            email=email,
-            password=password,
-            store_id=store_id_to_use,
-            recipient_name=req.recipient_name,
-            recipient_phone=req.recipient_phone,
-            recipient_address=req.recipient_address,
-            cod_amount=req.cod_amount,
-            merchant_order_id=pending_event.order_id,
-            item_quantity=qty_to_use,
-            item_weight=weight_to_use,
-            item_description=item_description_to_use
-        )
-
-    elif req.courier_provider == "redx":
-        if not client.redx_access_token:
-            raise HTTPException(status_code=400, detail="RedX access token is not configured.")
-        delivery_area_id = str(req.delivery_area_id or client.redx_delivery_area_id or "").strip()
-        delivery_area_name = str(req.delivery_area_name or client.redx_delivery_area_name or "").strip()
-        pickup_store_id = str(req.pickup_store_id or client.redx_pickup_store_id or "").strip()
-        if not delivery_area_id or not delivery_area_name:
-            raise HTTPException(status_code=400, detail="RedX delivery area ID and name are required.")
-        result = await CourierService.send_to_redx(
-            access_token=decrypt_token(client.redx_access_token),
-            recipient_name=req.recipient_name,
-            recipient_phone=req.recipient_phone,
-            recipient_address=req.recipient_address,
-            cod_amount=req.cod_amount,
-            merchant_order_id=pending_event.order_id,
-            delivery_area_id=delivery_area_id,
-            delivery_area_name=delivery_area_name,
-            pickup_store_id=pickup_store_id or None,
-            item_weight=req.item_weight or 0.5,
-        )
-        
-    else:
-        raise HTTPException(status_code=400, detail="Unsupported courier provider.")
-
-    if not result.get("success"):
-        raise HTTPException(
-            status_code=400, 
-            detail=f"Courier service error: {result.get('error', 'Unknown error')}"
-        )
-        
-    # Save the courier order
-    courier_order = CourierOrder(
-        client_id=client.id,
-        pending_event_id=pending_event.id,
-        order_id=pending_event.order_id,
-        courier_provider=req.courier_provider,
-        courier_order_id=result.get("courier_order_id"),
-        courier_tracking_id=result.get("tracking_id"),
-        courier_status="pending",
-        recipient_name=req.recipient_name,
-        recipient_phone=req.recipient_phone,
-        recipient_address=req.recipient_address,
-        cod_amount=req.cod_amount,
-        status_history=[{"status": "pending", "time": datetime.now(timezone.utc).isoformat()}]
-    )
-    
-    # Update pending event state (to show it has been processed and sent to courier)
-    pending_event.status = "courier_booked"
-    pending_event.portal_state = "processing"
-    pending_event.is_confirmed = True
-    
-    db.add(courier_order)
-    db.add(pending_event)
+    courier_order = booking["courier_order"]
     await db.commit()
-    
     return {
         "success": True,
-        "message": f"Order successfully sent to {req.courier_provider.capitalize()}.",
-        "tracking_id": result.get("tracking_id"),
-        "courier_order_id": result.get("courier_order_id")
+        "queued": booking["mode"] == "queued",
+        "message": booking["message"],
+        "courier_order_db_id": courier_order.id,
+        "tracking_id": courier_order.courier_tracking_id,
+        "courier_order_id": courier_order.courier_order_id,
     }
+
 
 @router.get("/courier/orders", response_model=List[CourierOrderResponse])
 async def get_courier_orders(
@@ -486,7 +448,7 @@ async def cancel_courier_order(
     result = await db.execute(
         select(CourierOrder).where(
             (CourierOrder.id == order_db_id) & (CourierOrder.client_id == client.id)
-        )
+        ).with_for_update()
     )
     courier_order = result.scalar_one_or_none()
     if not courier_order:
@@ -499,6 +461,26 @@ async def cancel_courier_order(
             status_code=400,
             detail=f"Order cannot be cancelled — current status is '{current_status}'."
         )
+
+    if current_status == "booking_processing":
+        raise HTTPException(
+            status_code=409,
+            detail="Courier booking is being processed. Refresh shortly before cancelling.",
+        )
+    if current_status == "booking_queued":
+        if not await cancel_queued_booking(db, courier_order):
+            raise HTTPException(
+                status_code=409,
+                detail="Courier booking status changed. Refresh and try again.",
+            )
+        await db.commit()
+        return {
+            "success": True,
+            "message": "Queued courier booking cancelled before provider dispatch.",
+            "local_only": False,
+            "order_id": courier_order.order_id,
+            "courier_provider": courier_order.courier_provider,
+        }
 
     cancel_result: dict = {}
     local_only = False
@@ -524,6 +506,7 @@ async def cancel_courier_order(
             email=email,
             password=password,
             consignment_id=consignment_id,
+            base_url=CourierService.pathao_base_url(client.pathao_environment),
         )
         local_only = cancel_result.get("local_only", False)
 
@@ -625,7 +608,8 @@ async def get_pathao_stores(
         client_id=client_id,
         client_secret=client_secret,
         email=email,
-        password=password
+        password=password,
+        base_url=CourierService.pathao_base_url(client.pathao_environment),
     )
     return stores
 

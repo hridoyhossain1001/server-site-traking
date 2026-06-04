@@ -1,10 +1,12 @@
 import os
 import pytest
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 from fastapi.testclient import TestClient
 
 # Set up environment variables required by the app before importing it
-os.environ["ADMIN_PASSWORD"] = "test-admin-password"
+os.environ["ADMIN_PASSWORD"] = "pbkdf2_sha256$210000$dGVzdC1hZG1pbi1zYWx0LTE=$9gwSQUsI_uzxaNpdvx_cOcpF4opgO7Ma_Hcmq3z4kSU="
 os.environ["ADMIN_API_KEY"] = "test-admin-api-key"
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
 os.environ["ENCRYPTION_KEY"] = "ZFhnf1szwemka8kBbH9jPTC7oKBRTEv0EqWt1J8AD0M="
@@ -18,8 +20,12 @@ from app.database import Base
 from app.models.client import Client
 from app.models.client_session import ClientSession
 from app.models.client_user import ClientUser
+from app.models.courier_booking_job import CourierBookingJob
+from app.models.courier_order import CourierOrder
+from app.models.pending_event import PendingEvent
 from app.security import encrypt_token
 from app.services.auth_service import hash_password, hash_session_token
+from app.utils.plugin_connect import pkce_challenge
 
 # Setup clean async database engine for testing
 engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
@@ -53,6 +59,21 @@ async def cleanup_database_engine():
 
 @pytest.mark.anyio
 async def test_admin_dashboard_render():
+    async with TestingSessionLocal() as session:
+        test_client = Client(
+            name="Dashboard Store",
+            api_key="dashboard-api-key",
+            portal_key="dashboard-portal-key",
+            pixel_id="99887766",
+            access_token=encrypt_token("fb-token"),
+            domain="dashboard.example.com",
+            is_active=True,
+        )
+        session.add(test_client)
+        await session.commit()
+        await session.refresh(test_client)
+        client_id = test_client.id
+
     client = TestClient(app)
     response = client.get(
         "/api/v1/admin",
@@ -62,10 +83,29 @@ async def test_admin_dashboard_render():
     assert "Dashboard" in response.text
     assert "Buykori" in response.text
     assert "Client Management" not in response.text
+    assert "style=" not in response.text
+    assert '<script src="/static/js/admin.js" defer></script>' in response.text
+    assert f'href="/api/v1/admin/client/{client_id}/edit"' in response.text
+    assert "onclick=" not in response.text
+    assert "function copyText" not in response.text
+    dashboard_template = (Path(__file__).resolve().parents[1] / "app" / "templates" / "admin" / "dashboard.html").read_text(encoding="utf-8")
+    assert "style=" not in dashboard_template
 
 
 @pytest.mark.anyio
 async def test_admin_clients_render():
+    async with TestingSessionLocal() as session:
+        test_client = Client(
+            name="Client List Store",
+            api_key="client-list-api-key",
+            portal_key="client-list-portal-key",
+            pixel_id="11223344",
+            access_token=encrypt_token("fb-token"),
+            is_active=True,
+        )
+        session.add(test_client)
+        await session.commit()
+
     client = TestClient(app)
     response = client.get(
         "/api/v1/admin/clients",
@@ -74,6 +114,14 @@ async def test_admin_clients_render():
     assert response.status_code == 200
     assert "Client Management" in response.text
     assert "Total Clients" in response.text
+    assert 'data-copy-target="ck_' in response.text
+    assert 'data-confirm="Rotate server API key?' in response.text
+    assert 'data-progress-width="' in response.text
+    assert "onclick=" not in response.text
+    assert "onsubmit=" not in response.text
+    assert "confirm(" not in response.text
+    clients_template = (Path(__file__).resolve().parents[1] / "app" / "templates" / "admin" / "clients.html").read_text(encoding="utf-8")
+    assert "style=" not in clients_template
 
 
 @pytest.mark.anyio
@@ -86,6 +134,13 @@ async def test_admin_logs_render():
     assert response.status_code == 200
     assert "API Event Logs" in response.text
     assert "Recent Events" in response.text
+    assert "data-reload-page" in response.text
+    assert "onclick=" not in response.text
+    assert "style=" not in response.text
+    base_template = (Path(__file__).resolve().parents[1] / "app" / "templates" / "base.html").read_text(encoding="utf-8")
+    logs_template = (Path(__file__).resolve().parents[1] / "app" / "templates" / "admin" / "logs.html").read_text(encoding="utf-8")
+    assert "style=" not in base_template
+    assert "style=" not in logs_template
 
 
 @pytest.mark.anyio
@@ -98,6 +153,11 @@ async def test_admin_settings_render():
     assert response.status_code == 200
     assert "System Settings" in response.text
     assert "System Information" in response.text
+    assert 'data-toast-message="Settings saved"' in response.text
+    assert "onclick=" not in response.text
+    assert "style=" not in response.text
+    settings_template = (Path(__file__).resolve().parents[1] / "app" / "templates" / "admin" / "settings.html").read_text(encoding="utf-8")
+    assert "style=" not in settings_template
 
 
 @pytest.mark.anyio
@@ -125,6 +185,16 @@ async def test_admin_client_instructions_render():
     assert "Setup Guide" in response.text
     assert 'data-secret="instr-api-key"' in response.text
     assert "GTM Server Container" in response.text
+    assert '<script src="/static/js/admin-instructions.js" defer></script>' in response.text
+    assert 'data-reveal-target="api_key"' in response.text
+    assert 'data-copy-target="gtm_settings"' in response.text
+    assert 'data-tab-target="tab-generator"' in response.text
+    assert "onclick=" not in response.text
+    assert "style=" not in response.text
+    assert "function openTab" not in response.text
+    assert "function generateEventCode" not in response.text
+    instructions_template = (Path(__file__).resolve().parents[1] / "app" / "templates" / "admin" / "instructions.html").read_text(encoding="utf-8")
+    assert "style=" not in instructions_template
 
 
 @pytest.mark.anyio
@@ -151,6 +221,12 @@ async def test_admin_client_edit_render():
     assert response.status_code == 200
     assert "Edit Client" in response.text
     assert "Test Store Edit" in response.text
+    assert '<script src="/static/js/admin.js" defer></script>' in response.text
+    assert response.text.count("<script") == 1
+    assert "onclick=" not in response.text
+    assert "onsubmit=" not in response.text
+    edit_template = (Path(__file__).resolve().parents[1] / "app" / "templates" / "admin" / "edit.html").read_text(encoding="utf-8")
+    assert "style=" not in edit_template
 
 
 # ─── CLIENT PORTAL TESTS ─────────────────────────────────────────────────────
@@ -263,6 +339,7 @@ async def test_static_mounts_do_not_expose_client_portal_root():
     mount_paths = {getattr(route, "path", None) for route in app.routes}
     assert "/static" not in mount_paths
     assert "/static/css" in mount_paths
+    assert "/static/js" in mount_paths
     assert "/static/client-portal/assets" in mount_paths
 
     client = TestClient(app)
@@ -270,6 +347,12 @@ async def test_static_mounts_do_not_expose_client_portal_root():
     assert client.get("/static/client-portal/server.cjs.map").status_code == 404
     assert client.get("/static/client-portal/index.html").status_code == 404
     assert client.get("/static/css/portal.css").status_code == 200
+    admin_js = client.get("/static/js/admin.js")
+    assert admin_js.status_code == 200
+    assert "window.copyText" in admin_js.text
+    instructions_js = client.get("/static/js/admin-instructions.js")
+    assert instructions_js.status_code == 200
+    assert "data-tab-target" in instructions_js.text
 
 
 @pytest.mark.anyio
@@ -281,6 +364,7 @@ async def test_client_signup_form_creates_email_user():
             "full_name": "New Owner",
             "business_name": "New Signup Store",
             "email": "new-owner@example.com",
+            "phone_number": "01837224409",
             "password": "strong-password-123",
             "confirm_password": "strong-password-123",
             "domain": "example.com",
@@ -296,6 +380,23 @@ async def test_client_signup_form_creates_email_user():
         )
         user = user_r.scalar_one_or_none()
         assert user is not None
+        assert user.phone_number == "+8801837224409"
+
+
+@pytest.mark.anyio
+async def test_client_signup_api_requires_phone_number():
+    client = TestClient(app)
+    response = client.post(
+        "/api/v1/auth/client/signup",
+        json={
+            "full_name": "API Owner",
+            "business_name": "API Signup Store",
+            "email": "api-owner@example.com",
+            "password": "strong-password-123",
+            "domain": "api-example.com",
+        },
+    )
+    assert response.status_code == 422
 
 
 @pytest.mark.anyio
@@ -346,6 +447,7 @@ async def test_plugin_download_with_query_param(tmp_path, monkeypatch):
 
     from app.routers import plugin
     monkeypatch.setattr(plugin, "PLUGIN_SOURCE_DIR", mock_src)
+    monkeypatch.setattr(plugin, "PLUGIN_PRECONFIGURED_DOWNLOADS", True)
 
     client = TestClient(app)
     response = client.get("/api/v1/plugin/download?api_key=query-api-key")
@@ -382,6 +484,7 @@ async def test_plugin_download_with_session_cookie(tmp_path, monkeypatch):
 
     from app.routers import plugin
     monkeypatch.setattr(plugin, "PLUGIN_SOURCE_DIR", mock_src)
+    monkeypatch.setattr(plugin, "PLUGIN_PRECONFIGURED_DOWNLOADS", True)
 
     session_value = f"client:{client_id}:cookie-portal-key"
     encrypted_session = encrypt_token(session_value)
@@ -401,6 +504,71 @@ async def test_plugin_download_with_session_cookie(tmp_path, monkeypatch):
 # ─── ADMIN API LOGIN TESTS ───────────────────────────────────────────────────
 
 @pytest.mark.anyio
+async def test_plugin_connect_authorize_and_exchange():
+    async with TestingSessionLocal() as session:
+        test_client = Client(
+            name="Connect Store",
+            api_key="connect-api-key",
+            public_key="connect-public-key",
+            portal_key="connect-portal-key",
+            domain="example.com",
+            pixel_id="33333333",
+            access_token=encrypt_token("fb-token"),
+            is_active=True,
+        )
+        session.add(test_client)
+        await session.commit()
+        await session.refresh(test_client)
+        client_id = test_client.id
+
+    verifier = "A" * 64
+    state = "state-1234567890abcdef"
+    portal_session = encrypt_token(f"client:{client_id}:connect-portal-key")
+
+    client = TestClient(app)
+    client.cookies.set("client_session", portal_session)
+    authorize = client.post(
+        "/api/plugin-connect/authorize",
+        json={
+            "siteUrl": "https://example.com",
+            "returnUrl": "https://example.com/wp-admin/admin-post.php?action=buykorigw_connect_callback",
+            "state": state,
+            "codeChallenge": pkce_challenge(verifier),
+        },
+    )
+    assert authorize.status_code == 200
+    redirect_url = authorize.json()["redirectUrl"]
+    parsed = urlparse(redirect_url)
+    code = parse_qs(parsed.query)["code"][0]
+    assert parse_qs(parsed.query)["state"][0] == state
+
+    exchange = client.post(
+        "/api/v1/plugin/connect/exchange",
+        json={
+            "code": code,
+            "codeVerifier": verifier,
+            "state": state,
+            "siteUrl": "https://example.com",
+        },
+    )
+    assert exchange.status_code == 200
+    body = exchange.json()
+    assert body["api_key"] == "connect-api-key"
+    assert body["public_key"] == "connect-public-key"
+
+    replay = client.post(
+        "/api/v1/plugin/connect/exchange",
+        json={
+            "code": code,
+            "codeVerifier": verifier,
+            "state": state,
+            "siteUrl": "https://example.com",
+        },
+    )
+    assert replay.status_code == 409
+
+
+@pytest.mark.anyio
 async def test_admin_api_login_success():
     client = TestClient(app)
     response = client.post(
@@ -410,12 +578,59 @@ async def test_admin_api_login_success():
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "success"
+    assert data["csrf_token"]
     
     # Verify it is a valid JWT
     jwt_token = data["admin_api_key"]
     from app.routers.admin_api import decode_jwt
     payload = decode_jwt(jwt_token, "test-admin-api-key")
     assert payload["sub"] == "admin"
+    set_cookie = response.headers.get("set-cookie", "")
+    assert "buykori_admin_session=" in set_cookie
+    assert "buykori_admin_csrf=" in set_cookie
+
+
+@pytest.mark.anyio
+async def test_admin_api_cookie_session_and_logout():
+    from app.routers import admin_api
+
+    admin_api.ADMIN_COOKIE_SECURE = False
+    client = TestClient(app)
+    try:
+        login = client.post(
+            "/api/v1/admin/api/login",
+            json={"username": "admin", "password": "test-admin-password"},
+        )
+        assert login.status_code == 200
+        csrf_token = login.json()["csrf_token"]
+
+        summary = client.get("/api/v1/admin/api/summary")
+        assert summary.status_code == 200
+
+        create_payload = {
+            "name": "CSRF Protected Store",
+            "pixel_id": "1234567890",
+            "access_token": "test-access-token",
+            "domain": "csrf.example.com",
+        }
+        blocked = client.post("/api/v1/admin/api/clients", json=create_payload)
+        assert blocked.status_code == 403
+        assert "CSRF" in blocked.json()["detail"]
+
+        created = client.post(
+            "/api/v1/admin/api/clients",
+            json=create_payload,
+            headers={"X-Admin-CSRF-Token": csrf_token},
+        )
+        assert created.status_code == 200
+
+        logout = client.post("/api/v1/admin/api/logout")
+        assert logout.status_code == 200
+        logout_cookie = logout.headers.get("set-cookie", "")
+        assert "buykori_admin_session=" in logout_cookie
+        assert "buykori_admin_csrf=" in logout_cookie
+    finally:
+        admin_api.ADMIN_COOKIE_SECURE = True
 
 @pytest.mark.anyio
 async def test_admin_api_login_failed_wrong_credentials():
@@ -426,6 +641,73 @@ async def test_admin_api_login_failed_wrong_credentials():
     )
     assert response.status_code == 401
     assert "Incorrect username or password" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_admin_api_client_intelligence_support_notes_and_server_health():
+    from app.models.event_log import EventLog
+
+    async with TestingSessionLocal() as session:
+        client_row = Client(
+            name="Intel Store",
+            api_key="intel-api-key",
+            portal_key="intel-portal-key",
+            pixel_id="123456789",
+            access_token=encrypt_token("fb-token"),
+            domain="intel.example.com",
+            is_active=True,
+            billing_status="trial",
+            plan_tier="free",
+            trial_started_at=datetime.now(timezone.utc) - timedelta(days=12),
+            trial_ends_at=datetime.now(timezone.utc) + timedelta(days=2),
+        )
+        session.add(client_row)
+        await session.flush()
+        session.add(ClientUser(
+            client_id=client_row.id,
+            email="intel-owner@example.com",
+            phone_number="+8801837224409",
+            password_hash=hash_password("strong-password-123"),
+            full_name="Intel Owner",
+            role="owner",
+            is_active=True,
+        ))
+        session.add(EventLog(client_id=client_row.id, event_name="PageView", event_count=5, status="success"))
+        session.add(EventLog(client_id=client_row.id, event_name="Purchase", event_count=2, status="success"))
+        await session.commit()
+        client_id = client_row.id
+
+    api_client = TestClient(app)
+    headers = {"X-Admin-API-Key": "test-admin-api-key"}
+    note = api_client.post(
+        f"/api/v1/admin/api/clients/{client_id}/support-notes",
+        headers=headers,
+        json={"note": "Called owner; wants setup help."},
+    )
+    assert note.status_code == 200
+    assert note.json()["note"]["note"] == "Called owner; wants setup help."
+
+    notes = api_client.get(f"/api/v1/admin/api/clients/{client_id}/support-notes", headers=headers)
+    assert notes.status_code == 200
+    assert len(notes.json()["notes"]) == 1
+
+    intel = api_client.get("/api/v1/admin/api/client-intelligence", headers=headers)
+    assert intel.status_code == 200
+    intel_row = next(row for row in intel.json()["clients"] if row["client"]["id"] == client_id)
+    assert intel_row["owner"]["phone_number"] == "+8801837224409"
+    assert intel_row["health_score"]["score"] > 0
+    assert intel_row["trial_followup"]["priority"] == "high"
+    assert any(step["key"] == "first_purchase" and step["done"] for step in intel_row["onboarding_funnel"])
+    assert intel_row["support_note_count"] == 1
+
+    server_health = api_client.get("/api/v1/admin/api/server-health", headers=headers)
+    assert server_health.status_code == 200
+    payload = server_health.json()
+    assert "server" in payload
+    assert "worker_monitor" in payload
+    assert "memory" in payload["server"]
+    assert "cpu" in payload["server"]
+    assert "used_percent" in payload["server"]["cpu"]
 
 
 @pytest.mark.anyio
@@ -662,3 +944,163 @@ async def test_admin_views_delete_client_with_users_and_sessions():
 
         sess_check = (await session.execute(select(ClientSession).where(ClientSession.client_id == client_id))).scalars().all()
         assert len(sess_check) == 0
+
+
+@pytest.mark.anyio
+async def test_admin_api_courier_booking_queue_summary_and_retry():
+    async with TestingSessionLocal() as session:
+        booking_client = Client(
+            name="Courier Queue Client",
+            api_key="courier-queue-api-key",
+            pixel_id="333333",
+            access_token=encrypt_token("courier-queue-token"),
+            is_active=True,
+        )
+        session.add(booking_client)
+        await session.flush()
+
+        pending = PendingEvent(
+            client_id=booking_client.id,
+            order_id="QUEUE-1001",
+            event_data={},
+            raw_order_data={},
+            status="pending",
+            portal_state="pending",
+            is_confirmed=False,
+        )
+        session.add(pending)
+        await session.flush()
+
+        order = CourierOrder(
+            client_id=booking_client.id,
+            pending_event_id=pending.id,
+            order_id=pending.order_id,
+            courier_provider="steadfast",
+            courier_status="booking_failed",
+            status_history=[],
+        )
+        session.add(order)
+        await session.flush()
+
+        job = CourierBookingJob(
+            client_id=booking_client.id,
+            pending_event_id=pending.id,
+            courier_order_id=order.id,
+            provider="steadfast",
+            request_payload={"recipient_phone": "01837224409"},
+            status="dead",
+            attempts=8,
+            max_attempts=8,
+            next_attempt_at=datetime.now(timezone.utc),
+            last_error="provider timeout",
+        )
+        session.add(job)
+        await session.commit()
+        job_id = job.id
+        order_id = order.id
+        pending_id = pending.id
+
+    api_client = TestClient(app)
+    headers = {"X-Admin-API-Key": "test-admin-api-key"}
+
+    summary = api_client.get("/api/v1/admin/api/summary", headers=headers)
+    assert summary.status_code == 200
+    assert summary.json()["courier_booking_queue"]["dead"] == 1
+    assert summary.json()["courier_booking_queue"]["alert_status"] == "critical"
+    assert summary.json()["courier_booking_queue"]["alerts"][0]["code"] == "dead_letter_jobs"
+
+    queue = api_client.get("/api/v1/admin/api/courier-booking-queue", headers=headers)
+    assert queue.status_code == 200
+    queue_data = queue.json()
+    assert queue_data["counts"]["dead"] == 1
+    assert queue_data["jobs"][0]["order_id"] == "QUEUE-1001"
+    assert queue_data["jobs"][0]["last_error"] == "provider timeout"
+    assert "request_payload" not in queue_data["jobs"][0]
+
+    retry = api_client.post(f"/api/v1/admin/api/courier-booking-queue/{job_id}/retry", headers=headers)
+    assert retry.status_code == 200
+    assert retry.json() == {"status": "success", "job_id": job_id, "job_status": "queued"}
+
+    async with TestingSessionLocal() as session:
+        retried_job = await session.get(CourierBookingJob, job_id)
+        retried_order = await session.get(CourierOrder, order_id)
+        retried_pending = await session.get(PendingEvent, pending_id)
+        assert retried_job.status == "queued"
+        assert retried_job.attempts == 0
+        assert retried_job.last_error is None
+        assert retried_order.courier_status == "booking_queued"
+        assert retried_pending.status == "courier_booking_queued"
+        assert retried_pending.portal_state == "processing"
+        assert retried_pending.is_confirmed is True
+
+
+@pytest.mark.anyio
+async def test_admin_api_courier_booking_queue_warns_for_delayed_job(monkeypatch):
+    monkeypatch.setenv("COURIER_BOOKING_QUEUE_WARN_SECONDS", "30")
+    monkeypatch.setenv("COURIER_BOOKING_PROCESSING_WARN_SECONDS", "invalid")
+    async with TestingSessionLocal() as session:
+        booking_client = Client(
+            name="Delayed Courier Queue Client",
+            api_key="delayed-courier-queue-api-key",
+            pixel_id="444444",
+            access_token=encrypt_token("delayed-courier-queue-token"),
+            is_active=True,
+        )
+        session.add(booking_client)
+        await session.flush()
+
+        pending = PendingEvent(
+            client_id=booking_client.id,
+            order_id="QUEUE-DELAYED-1001",
+            event_data={},
+            raw_order_data={},
+            status="courier_booking_queued",
+            portal_state="processing",
+            is_confirmed=True,
+        )
+        session.add(pending)
+        await session.flush()
+
+        order = CourierOrder(
+            client_id=booking_client.id,
+            pending_event_id=pending.id,
+            order_id=pending.order_id,
+            courier_provider="steadfast",
+            courier_status="booking_queued",
+            status_history=[],
+        )
+        session.add(order)
+        await session.flush()
+
+        session.add(CourierBookingJob(
+            client_id=booking_client.id,
+            pending_event_id=pending.id,
+            courier_order_id=order.id,
+            provider="steadfast",
+            request_payload={},
+            status="queued",
+            attempts=0,
+            max_attempts=8,
+            next_attempt_at=datetime.now(timezone.utc),
+            created_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+        ))
+        await session.commit()
+
+    api_client = TestClient(app)
+    response = api_client.get(
+        "/api/v1/admin/api/courier-booking-queue",
+        headers={"X-Admin-API-Key": "test-admin-api-key"},
+    )
+
+    assert response.status_code == 200
+    counts = response.json()["counts"]
+    assert counts["queued"] == 1
+    assert counts["oldest_queued_age_seconds"] >= 299
+    assert counts["queued_warn_seconds"] == 30
+    assert counts["processing_warn_seconds"] == 600
+    assert counts["alert_status"] == "warning"
+    assert counts["alerts"] == [{
+        "code": "queued_delayed",
+        "severity": "warning",
+        "age_seconds": counts["oldest_queued_age_seconds"],
+    }]

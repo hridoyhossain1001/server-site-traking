@@ -26,6 +26,13 @@ from app.dependencies import get_current_client, CachedClient
 from app.models.event_log import EventLog
 from app.models.client import Client
 from app.routers.admin_api import verify_admin_api_key
+from app.services.plan_service import (
+    has_growth_access,
+    plan_summary,
+    record_trial_identity,
+    require_growth_access,
+    require_trial_available,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -386,7 +393,7 @@ async def client_get_setup(
     return {
         "status": "success",
         "api_key": c.api_key,
-        "monthly_limit": getattr(c, "monthly_limit", 2000),
+        "monthly_limit": plan_summary(c)["eventsQuota"],
         "domain": c.domain or "",
         "pixel_id": c.pixel_id if c.pixel_id and c.pixel_id != "0" else "",
         "access_token_set": bool(raw_token),
@@ -395,9 +402,9 @@ async def client_get_setup(
         "tiktok_test_event_code_set": bool((getattr(c, "tiktok_test_event_code", "") or "").strip()),
         "ga4_measurement_id": getattr(c, "ga4_measurement_id", "") or "",
         "enable_facebook": getattr(c, "enable_facebook", False),
-        "enable_tiktok": getattr(c, "enable_tiktok", False),
-        "enable_ga4": getattr(c, "enable_ga4", False),
-        "deferred_purchase": getattr(c, "deferred_purchase", False),
+        "enable_tiktok": has_growth_access(c) and getattr(c, "enable_tiktok", False),
+        "enable_ga4": has_growth_access(c) and getattr(c, "enable_ga4", False),
+        "deferred_purchase": has_growth_access(c) and getattr(c, "deferred_purchase", False),
         "auto_confirm_days": min(max(0, getattr(c, "auto_confirm_days", 0)), 7),
         "auto_confirm_status": getattr(c, "auto_confirm_status", "completed"),
     }
@@ -437,6 +444,17 @@ async def client_update_setup(
     c = client_r.scalar_one_or_none()
     if not c:
         raise HTTPException(status_code=404, detail="Client not found")
+    growth_enabled = has_growth_access(c)
+
+    if not growth_enabled and any((
+        payload.tiktok_pixel_id,
+        payload.tiktok_access_token,
+        payload.ga4_measurement_id,
+        payload.ga4_api_secret,
+        payload.deferred_purchase,
+        payload.auto_confirm_days,
+    )):
+        require_growth_access(c, "TikTok, GA4, and Deferred Purchase setup")
 
     # Domain validation (supports comma-separated multiple domains)
     if payload.domain is not None:
@@ -472,10 +490,10 @@ async def client_update_setup(
         if clean_tiktok_pixel_id and not clean_tiktok_pixel_id.isdigit():
             raise HTTPException(status_code=400, detail="TikTok Pixel ID must be numeric.")
         c.tiktok_pixel_id = clean_tiktok_pixel_id or None
-        c.enable_tiktok = bool(clean_tiktok_pixel_id)
+        c.enable_tiktok = growth_enabled and bool(clean_tiktok_pixel_id)
     if payload.tiktok_access_token is not None and payload.tiktok_access_token.strip():
         c.tiktok_access_token = encrypt_token(payload.tiktok_access_token.strip())
-        c.enable_tiktok = True
+        c.enable_tiktok = growth_enabled
     if payload.tiktok_test_event_code is not None:
         c.tiktok_test_event_code = payload.tiktok_test_event_code.strip() or None
 
@@ -485,20 +503,24 @@ async def client_update_setup(
         if clean_measurement_id and not clean_measurement_id.startswith("G-"):
             raise HTTPException(status_code=400, detail="GA4 Measurement ID must start with G-.")
         c.ga4_measurement_id = clean_measurement_id or None
-        c.enable_ga4 = bool(clean_measurement_id)
+        c.enable_ga4 = growth_enabled and bool(clean_measurement_id)
     if payload.ga4_api_secret is not None and payload.ga4_api_secret.strip():
         c.ga4_api_secret = encrypt_token(payload.ga4_api_secret.strip())
-        c.enable_ga4 = True
+        c.enable_ga4 = growth_enabled
 
     # Deferred Purchase
     if payload.deferred_purchase is not None:
-        c.deferred_purchase = payload.deferred_purchase
+        c.deferred_purchase = growth_enabled and payload.deferred_purchase
 
     # COD Automation
     if payload.auto_confirm_days is not None:
-        c.auto_confirm_days = min(max(0, payload.auto_confirm_days), 7)
+        c.auto_confirm_days = min(max(0, payload.auto_confirm_days), 7) if growth_enabled else 0
     if payload.auto_confirm_status is not None:
         c.auto_confirm_status = payload.auto_confirm_status.strip() or "completed"
+
+    if getattr(c, "trial_started_at", None):
+        await require_trial_available(db, domain=c.domain, pixel_id=c.pixel_id, exclude_client_id=c.id)
+        await record_trial_identity(db, c, source="setup")
 
     await db.commit()
 

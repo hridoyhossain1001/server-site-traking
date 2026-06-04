@@ -66,6 +66,21 @@ class CampaignRow(BaseModel):
     revenue: float
 
 
+class AudienceBreakdownRow(BaseModel):
+    label: str
+    count: int
+    percentage: float
+
+
+class DistrictFunnelRow(BaseModel):
+    district: str
+    page_view: int
+    add_to_cart: int
+    initiate_checkout: int
+    purchase: int
+    revenue: float
+
+
 class OverviewResponse(BaseModel):
     status: str
     period_days: int
@@ -92,6 +107,18 @@ class TopProductsResponse(BaseModel):
 class CampaignsResponse(BaseModel):
     status: str
     campaigns: list[CampaignRow]
+
+
+class AudienceResponse(BaseModel):
+    status: str
+    period_days: int
+    total_events: int
+    top_districts: list[AudienceBreakdownRow]
+    device_mix: list[AudienceBreakdownRow]
+    browser_mix: list[AudienceBreakdownRow]
+    district_funnel: list[DistrictFunnelRow]
+    visitor_district_funnel: list[DistrictFunnelRow] = []
+    notice: str
 
 
 class SignalIssue(BaseModel):
@@ -413,6 +440,138 @@ async def analytics_campaigns(
         for row in result
     ]
     return CampaignsResponse(status="success", campaigns=campaigns)
+
+
+@router.get(
+    "/analytics/audience",
+    response_model=AudienceResponse,
+    summary="Estimated district and device breakdown",
+)
+async def analytics_audience(
+    client: CachedClient = Depends(get_current_client),
+    db: AsyncSession = Depends(get_db),
+    days: int = Query(30, ge=1, le=180),
+    limit: int = Query(10, ge=1, le=50),
+):
+    """Approximate geo/device analytics from EventLog enrichment."""
+    start = datetime.now(timezone.utc) - timedelta(days=days)
+    base_filter = and_(
+        EventLog.client_id == client.id,
+        EventLog.status == "success",
+        EventLog.created_at >= start,
+        EventLog.event_count > 0,
+    )
+
+    total_r = await db.execute(
+        select(sql_func.coalesce(sql_func.sum(EventLog.event_count), 0)).where(base_filter)
+    )
+    total = int(total_r.scalar() or 0)
+
+    district_expr = sql_func.coalesce(EventLog.geo_district, EventLog.geo_city, "Unknown")
+    district_r = await db.execute(
+        select(district_expr.label("district"), sql_func.coalesce(sql_func.sum(EventLog.event_count), 0))
+        .where(base_filter)
+        .group_by(district_expr)
+        .order_by(sql_func.coalesce(sql_func.sum(EventLog.event_count), 0).desc())
+        .limit(limit)
+    )
+    top_districts = [
+        AudienceBreakdownRow(label=row[0] or "Unknown", count=int(row[1] or 0), percentage=_pct(int(row[1] or 0), total))
+        for row in district_r
+    ]
+
+    device_expr = sql_func.coalesce(EventLog.device_type, "unknown")
+    device_r = await db.execute(
+        select(device_expr.label("device"), sql_func.coalesce(sql_func.sum(EventLog.event_count), 0))
+        .where(base_filter)
+        .group_by(device_expr)
+        .order_by(sql_func.coalesce(sql_func.sum(EventLog.event_count), 0).desc())
+    )
+    device_mix = [
+        AudienceBreakdownRow(label=(row[0] or "unknown").title(), count=int(row[1] or 0), percentage=_pct(int(row[1] or 0), total))
+        for row in device_r
+    ]
+
+    browser_expr = sql_func.coalesce(EventLog.device_browser, "Unknown")
+    browser_r = await db.execute(
+        select(browser_expr.label("browser"), sql_func.coalesce(sql_func.sum(EventLog.event_count), 0))
+        .where(base_filter)
+        .group_by(browser_expr)
+        .order_by(sql_func.coalesce(sql_func.sum(EventLog.event_count), 0).desc())
+        .limit(limit)
+    )
+    browser_mix = [
+        AudienceBreakdownRow(label=row[0] or "Unknown", count=int(row[1] or 0), percentage=_pct(int(row[1] or 0), total))
+        for row in browser_r
+    ]
+
+    district_total_expr = sql_func.coalesce(sql_func.sum(EventLog.event_count), 0)
+    funnel_r = await db.execute(
+        select(
+            district_expr.label("district"),
+            sql_func.coalesce(sql_func.sum(case((EventLog.event_name == "PageView", EventLog.event_count), else_=0)), 0),
+            sql_func.coalesce(sql_func.sum(case((EventLog.event_name == "AddToCart", EventLog.event_count), else_=0)), 0),
+            sql_func.coalesce(sql_func.sum(case((EventLog.event_name == "InitiateCheckout", EventLog.event_count), else_=0)), 0),
+            sql_func.coalesce(sql_func.sum(case((EventLog.event_name == "Purchase", EventLog.event_count), else_=0)), 0),
+            sql_func.coalesce(sql_func.sum(case((EventLog.event_name == "Purchase", EventLog.value), else_=0)), 0.0),
+            district_total_expr,
+        )
+        .where(base_filter)
+        .group_by(district_expr)
+        .order_by(district_total_expr.desc())
+        .limit(limit)
+    )
+    district_funnel = [
+        DistrictFunnelRow(
+            district=row[0] or "Unknown",
+            page_view=int(row[1] or 0),
+            add_to_cart=int(row[2] or 0),
+            initiate_checkout=int(row[3] or 0),
+            purchase=int(row[4] or 0),
+            revenue=float(row[5] or 0),
+        )
+        for row in funnel_r
+    ]
+
+    visitor_base_filter = and_(base_filter, EventLog.visitor_key.is_not(None))
+    visitor_funnel_r = await db.execute(
+        select(
+            district_expr.label("district"),
+            sql_func.count(sql_func.distinct(case((EventLog.event_name == "PageView", EventLog.visitor_key), else_=None))),
+            sql_func.count(sql_func.distinct(case((EventLog.event_name == "AddToCart", EventLog.visitor_key), else_=None))),
+            sql_func.count(sql_func.distinct(case((EventLog.event_name == "InitiateCheckout", EventLog.visitor_key), else_=None))),
+            sql_func.count(sql_func.distinct(case((EventLog.event_name == "Purchase", EventLog.visitor_key), else_=None))),
+            sql_func.coalesce(sql_func.sum(case((EventLog.event_name == "Purchase", EventLog.value), else_=0)), 0.0),
+            sql_func.count(sql_func.distinct(EventLog.visitor_key)),
+        )
+        .where(visitor_base_filter)
+        .group_by(district_expr)
+        .order_by(sql_func.count(sql_func.distinct(EventLog.visitor_key)).desc())
+        .limit(limit)
+    )
+    visitor_district_funnel = [
+        DistrictFunnelRow(
+            district=row[0] or "Unknown",
+            page_view=int(row[1] or 0),
+            add_to_cart=int(row[2] or 0),
+            initiate_checkout=int(row[3] or 0),
+            purchase=int(row[4] or 0),
+            revenue=float(row[5] or 0),
+        )
+        for row in visitor_funnel_r
+    ]
+
+    return AudienceResponse(
+        status="success",
+        period_days=days,
+        total_events=total,
+        top_districts=top_districts,
+        device_mix=device_mix,
+        browser_mix=browser_mix,
+        district_funnel=district_funnel,
+        visitor_district_funnel=visitor_district_funnel,
+        notice="City and district data is estimated from IP/checkout information. It is not 100% accurate and should be used for trend and targeting decisions, not exact user location.",
+    )
 
 
 @router.get(

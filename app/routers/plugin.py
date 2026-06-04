@@ -53,7 +53,7 @@ class PluginDisconnectRequest(BaseModel):
 
 # Plugin version এই ফাইলে hardcoded — PLUGIN_VERSION env var দিয়ে override করা যায়।
 # Update করার সময় এখানে version change করুন এবং WP plugin-এও update করুন।
-PLUGIN_VERSION = "1.2.33"
+PLUGIN_VERSION = "1.2.36"
 PLUGIN_SOURCE_DIR = Path(__file__).resolve().parents[2] / "wordpress-plugin" / "buykori-adsync"
 PLUGIN_ZIP_PATH = Path(
     os.getenv(
@@ -122,7 +122,7 @@ async def plugin_info(request: Request):
         "requires": "5.8",
         "tested": "6.7",
         "requires_php": "7.4",
-        "last_updated": "2026-06-03",
+        "last_updated": "2026-06-04",
     })
 
 
@@ -168,9 +168,22 @@ def _plugin_update_response(download_url: str, package_sha256: str, signature: s
         "requires": "5.8",
         "tested": "6.7",
         "requires_php": "7.4",
-        "last_updated": "2026-06-03",
+        "last_updated": "2026-06-04",
         "description": "Official Buykori AdSync WordPress plugin for server-side Facebook CAPI, TikTok, and GA4 tracking with one-page landing support and deferred purchase control.",
         "changelog": (
+            "<h4>v1.2.36</h4><ul>"
+            "<li>Fixed COD/deferred purchase summary compatibility with SQLAlchemy 2 JSON value extraction</li>"
+            "</ul>"
+            "<h4>v1.2.35</h4><ul>"
+            "<li>Added theme-agnostic WooCommerce page detection for product listings, shortcode cart pages, and custom checkout pages</li>"
+            "<li>Improved AddToCart detection across classic WooCommerce buttons, block buttons, and add-to-cart URLs</li>"
+            "<li>Restored checkout page-load surface checks so multi-page checkout can send InitiateCheckout reliably</li>"
+            "</ul>"
+            "<h4>v1.2.34</h4><ul>"
+            "<li>Moved WordPress plugin admin UI scripts and styles into packaged asset files</li>"
+            "<li>Removed inline handlers, inline scripts, and inline styles from plugin admin screens and widgets</li>"
+            "<li>Moved frontend tracker config to a data attribute and loaded tracker scripts through WordPress enqueue APIs</li>"
+            "</ul>"
             "<h4>v1.2.33</h4><ul>"
             "<li>Set optional events off by default for cleaner tracking: Lead, Search, ViewCart, RemoveFromCart, and AddPaymentInfo</li>"
             "<li>Kept PageView, ViewContent, AddToCart, InitiateCheckout, and Purchase as the recommended default event set</li>"

@@ -26,12 +26,44 @@ from app.dependencies import CachedClient
 from app.services.event_worker import enqueue_events
 from app.services.event_quality import boost_event_quality
 from app.services.usage_service import check_and_reserve_usage
+from app.services.plan_service import has_growth_access
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 REQUIRE_COURIER_WEBHOOK_SECRET = os.getenv("REQUIRE_COURIER_WEBHOOK_SECRET", "true").lower() in ("1", "true", "yes")
 COURIER_WEBHOOK_SECRET = os.getenv("COURIER_WEBHOOK_SECRET", "")
+STEADFAST_BEARER_TOKEN = os.getenv("STEADFAST_BEARER_TOKEN", "")
+PATHAO_MERCHANT_WEBHOOK_INTEGRATION_SECRET = os.getenv("PATHAO_MERCHANT_WEBHOOK_INTEGRATION_SECRET", "")
+
+
+def _bearer_token(request: Request) -> str:
+    authorization = request.headers.get("authorization") or ""
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() == "bearer" and token:
+        return token.strip()
+    return ""
+
+
+def _webhook_secret_from_request(request: Request, *, provider: str) -> str:
+    provided = (
+        request.headers.get("x-courier-webhook-secret")
+        or request.headers.get("x-webhook-secret")
+        or request.headers.get("x-buykori-webhook-secret")
+        or request.headers.get("x-redx-webhook-secret")
+        or _bearer_token(request)
+        or ""
+    ).strip()
+    if provided:
+        return provided
+
+    legacy = (request.query_params.get("secret") or request.query_params.get("token") or "").strip()
+    if legacy:
+        logger.warning(
+            "%s webhook authenticated with legacy query token. Move the secret to a header or Authorization bearer token.",
+            provider,
+        )
+    return legacy
 
 
 def _official_tracking_url(provider: str, tracking_code: str) -> Optional[str]:
@@ -45,9 +77,11 @@ def _official_tracking_url(provider: str, tracking_code: str) -> Optional[str]:
     return None
 
 
+@router.get("/track/{provider}/{tracking_code}", response_class=HTMLResponse, include_in_schema=False)
 @router.get("/track/{tracking_code}", response_class=HTMLResponse, include_in_schema=False)
 async def public_courier_tracking(
     tracking_code: str,
+    provider: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -56,15 +90,24 @@ async def public_courier_tracking(
     The QR contains the courier-issued unique ID. Public scans intentionally do
     not expose recipient contact details or the delivery address.
     """
-    result = await db.execute(
-        select(CourierOrder).where(
-            or_(
-                CourierOrder.courier_tracking_id == tracking_code,
-                CourierOrder.courier_order_id == tracking_code,
-            )
+    filters = [
+        or_(
+            CourierOrder.courier_tracking_id == tracking_code,
+            CourierOrder.courier_order_id == tracking_code,
         )
+    ]
+    if provider:
+        normalized_provider = provider.strip().lower()
+        if normalized_provider not in {"steadfast", "pathao", "redx"}:
+            raise HTTPException(status_code=404, detail="Courier provider not found")
+        filters.append(CourierOrder.courier_provider == normalized_provider)
+    result = await db.execute(
+        select(CourierOrder)
+        .where(*filters)
+        .limit(2)
     )
-    courier_order = result.scalar_one_or_none()
+    matches = result.scalars().all()
+    courier_order = matches[0] if len(matches) == 1 else None
 
     if not courier_order:
         return HTMLResponse(
@@ -75,7 +118,7 @@ async def public_courier_tracking(
               <body style="font-family:Arial,sans-serif;background:#f8fafc;color:#0f172a;padding:32px">
                 <main style="max-width:560px;margin:auto;background:white;border:1px solid #e2e8f0;border-radius:16px;padding:24px">
                   <h1 style="margin-top:0">Tracking reference not found</h1>
-                  <p>Please check the consignment ID printed on the invoice.</p>
+                  <p>Please scan the QR code again or check the consignment ID printed on the invoice.</p>
                 </main>
               </body>
             </html>
@@ -128,14 +171,21 @@ async def public_courier_tracking(
 def _verify_courier_webhook_secret(request: Request) -> None:
     if not REQUIRE_COURIER_WEBHOOK_SECRET:
         return
-    provided = (
-        request.headers.get("x-courier-webhook-secret")
-        or request.headers.get("x-webhook-secret")
-        or request.query_params.get("secret")
-        or ""
-    )
+    provided = _webhook_secret_from_request(request, provider="Courier")
     if not COURIER_WEBHOOK_SECRET or not hmac.compare_digest(provided, COURIER_WEBHOOK_SECRET):
         raise HTTPException(status_code=401, detail="Invalid courier webhook secret")
+
+
+def _verify_steadfast_bearer_token(request: Request, expected_token: str | None = None) -> None:
+    authorization = request.headers.get("authorization") or ""
+    scheme, _, provided = authorization.partition(" ")
+    if (
+        scheme.lower() != "bearer"
+        or not (expected_token or STEADFAST_BEARER_TOKEN)
+        or not hmac.compare_digest(provided, expected_token or STEADFAST_BEARER_TOKEN)
+    ):
+        raise HTTPException(status_code=401, detail="Invalid SteadFast webhook bearer token")
+
 
 # ─── Helper: Queue Refund event for worker delivery ──────────────────────────
 async def _queue_refund_event(
@@ -180,31 +230,92 @@ async def _queue_refund_event(
     return event_dict
 
 # ─── Common Status Processing Logic ──────────────────────────────────────────
+def _append_status_history(
+    courier_order: CourierOrder,
+    *,
+    mapped_status: str,
+    raw_status: str,
+    outcome: str = "applied",
+    reason: str | None = None,
+) -> None:
+    history = list(courier_order.status_history or [])
+    if not isinstance(history, list):
+        history = []
+    entry = {
+        "status": mapped_status,
+        "raw_status": str(raw_status),
+        "outcome": outcome,
+        "time": datetime.now(timezone.utc).isoformat(),
+    }
+    if reason:
+        entry["reason"] = reason
+    history.append(entry)
+    courier_order.status_history = history[-100:]
+
+
 async def process_courier_status_change(
     db: AsyncSession,
     courier_order: CourierOrder,
     new_raw_status: str
-) -> None:
+) -> dict:
     provider = courier_order.courier_provider
     mapped_status = CourierService.map_status(provider, new_raw_status)
     old_status = courier_order.courier_status
 
+    if not CourierService.is_known_status(provider, new_raw_status):
+        logger.warning(
+            "Ignoring unknown courier status provider=%s order=%s raw_status=%r",
+            provider,
+            courier_order.order_id,
+            new_raw_status,
+        )
+        _append_status_history(
+            courier_order,
+            mapped_status=old_status,
+            raw_status=new_raw_status,
+            outcome="ignored",
+            reason="unknown_status",
+        )
+        db.add(courier_order)
+        return {"status": "ignored", "reason": "unknown_status", "current_status": old_status}
+
     if old_status == mapped_status:
-        return # No change
+        logger.info(
+            "Ignoring duplicate courier status provider=%s order=%s status=%s",
+            provider,
+            courier_order.order_id,
+            mapped_status,
+        )
+        return {"status": "duplicate", "current_status": old_status}
+
+    if not CourierService.should_apply_status_transition(old_status, mapped_status):
+        logger.warning(
+            "Ignoring stale courier status provider=%s order=%s old=%s new=%s raw_status=%r",
+            provider,
+            courier_order.order_id,
+            old_status,
+            mapped_status,
+            new_raw_status,
+        )
+        _append_status_history(
+            courier_order,
+            mapped_status=old_status,
+            raw_status=new_raw_status,
+            outcome="ignored",
+            reason=f"stale_transition:{old_status}->{mapped_status}",
+        )
+        db.add(courier_order)
+        return {"status": "ignored", "reason": "stale_transition", "current_status": old_status}
 
     # Update order details
     courier_order.courier_status = mapped_status
 
     # Append to history
-    history = courier_order.status_history or []
-    if not isinstance(history, list):
-        history = []
-    history.append({
-        "status": mapped_status,
-        "raw_status": new_raw_status,
-        "time": datetime.now(timezone.utc).isoformat()
-    })
-    courier_order.status_history = history
+    _append_status_history(
+        courier_order,
+        mapped_status=mapped_status,
+        raw_status=new_raw_status,
+    )
 
     client_result = await db.execute(select(Client).where(Client.id == courier_order.client_id))
     client = client_result.scalar_one_or_none()
@@ -222,7 +333,7 @@ async def process_courier_status_change(
         client_snapshot = _snapshot(client)
 
         # 1. Handle DELIVERED (trigger auto Purchase event)
-        if mapped_status == "delivered" and not courier_order.purchase_event_sent:
+        if mapped_status == "delivered" and not courier_order.purchase_event_sent and has_growth_access(client):
             logger.info(f"Order {courier_order.order_id} delivered! Queueing auto Purchase event.")
             try:
                 await _queue_confirmed_event(client_snapshot, pending_event, db)
@@ -239,7 +350,7 @@ async def process_courier_status_change(
         elif mapped_status in ("returned", "cancelled"):
             # Refund event goes if it was already delivered/purchased, or if we want to log the cancel event.
             # Usually, Facebook expects Refund for already sent Purchases.
-            if courier_order.purchase_event_sent and not courier_order.refund_event_sent:
+            if has_growth_access(client) and courier_order.purchase_event_sent and not courier_order.refund_event_sent:
                 logger.info(f"Order {courier_order.order_id} was returned/cancelled after delivery. Queueing Refund event.")
                 try:
                     await _queue_refund_event(client_snapshot, pending_event, db)
@@ -253,6 +364,7 @@ async def process_courier_status_change(
     db.add(courier_order)
     if pending_event:
         db.add(pending_event)
+    return {"status": "applied", "previous_status": old_status, "current_status": mapped_status}
 
 # ─── Webhooks ────────────────────────────────────────────────────────────────
 
@@ -261,7 +373,6 @@ async def steadfast_webhook(request: Request, db: AsyncSession = Depends(get_db)
     """
     SteadFast Courier Webhook Endpoint.
     """
-    _verify_courier_webhook_secret(request)
     try:
         raw_body = await request.body()
         payload = json.loads(raw_body.decode("utf-8"))
@@ -269,53 +380,56 @@ async def steadfast_webhook(request: Request, db: AsyncSession = Depends(get_db)
         raise HTTPException(status_code=400, detail="Invalid JSON payload.")
 
     tracking_code = payload.get("tracking_code")
+    consignment_id = payload.get("consignment_id")
     status = payload.get("status")
     invoice = payload.get("invoice")
 
-    if not tracking_code or not status:
+    if not (tracking_code or consignment_id) or not status:
         logger.warning(f"SteadFast webhook received invalid data: {payload}")
-        return {"status": "ignored", "reason": "missing tracking_code or status"}
+        return {"status": "ignored", "reason": "missing consignment_id/tracking_code or status"}
 
-    logger.info(f"SteadFast webhook received for {tracking_code}: status={status}, invoice={invoice}")
+    logger.info(
+        "SteadFast webhook received for consignment=%s tracking=%s: status=%s, invoice=%s",
+        consignment_id,
+        tracking_code,
+        status,
+        invoice,
+    )
 
     # Find matching courier order
+    identifier_filters = []
+    if tracking_code:
+        identifier_filters.append(CourierOrder.courier_tracking_id == str(tracking_code))
+    if consignment_id:
+        identifier_filters.append(CourierOrder.courier_order_id == str(consignment_id))
+
     result = await db.execute(
-        select(CourierOrder).where(CourierOrder.courier_tracking_id == str(tracking_code))
+        select(CourierOrder)
+        .where(
+            CourierOrder.courier_provider == "steadfast",
+            or_(*identifier_filters),
+        )
+        .with_for_update()
     )
     courier_order = result.scalar_one_or_none()
 
     if not courier_order:
-        logger.warning(f"SteadFast courier order not found for tracking: {tracking_code}")
+        logger.warning(
+            "SteadFast courier order not found for consignment=%s tracking=%s",
+            consignment_id,
+            tracking_code,
+        )
         return {"status": "ignored", "reason": "order not found"}
 
-    # Get associated client and decrypt secret key to verify HMAC-SHA256 signature
     client_result = await db.execute(select(Client).where(Client.id == courier_order.client_id))
     client = client_result.scalar_one_or_none()
-    if not client or not client.steadfast_secret_key:
-        raise HTTPException(status_code=401, detail="Client steadfast secret key not configured")
+    client_token = decrypt_token(client.steadfast_webhook_token) if client and client.steadfast_webhook_token else None
+    _verify_steadfast_bearer_token(request, client_token)
 
-    try:
-        decrypted_secret = decrypt_token(client.steadfast_secret_key, allow_legacy_plaintext=True)
-    except Exception:
-        raise HTTPException(status_code=401, detail="Failed to decrypt client secret key")
-
-    received_sig = request.headers.get("x-steadfast-signature") or request.headers.get("x-signature")
-    if not received_sig:
-        raise HTTPException(status_code=401, detail="Missing signature header")
-
-    computed_sig = hmac.new(
-        decrypted_secret.encode("utf-8"),
-        msg=raw_body,
-        digestmod=hashlib.sha256
-    ).hexdigest()
-
-    if not hmac.compare_digest(computed_sig, received_sig):
-        raise HTTPException(status_code=401, detail="Invalid signature")
-
-    await process_courier_status_change(db, courier_order, status)
+    processing = await process_courier_status_change(db, courier_order, status)
     await db.commit()
 
-    return {"status": "success"}
+    return processing
 
 @router.post("/v1/webhook/pathao")
 async def pathao_webhook(request: Request, db: AsyncSession = Depends(get_db)):
@@ -333,7 +447,6 @@ async def pathao_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     Note: Pathao X-PATHAO-Signature header-এ configured secret verbatim পাঠায়
     (hashed HMAC নয়)। তাই আমরা প্রথমে verbatim check করি, তারপর HMAC fallback।
     """
-    _verify_courier_webhook_secret(request)
     try:
         raw_body = await request.body()
         payload = json.loads(raw_body.decode("utf-8"))
@@ -345,50 +458,81 @@ async def pathao_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     # সঠিকভাবে respond না করলে webhook save হয় না।
     event_type = payload.get("event") or payload.get("type") or ""
     received_sig = request.headers.get("x-pathao-signature") or request.headers.get("x-signature") or ""
+    integration_response_secret = PATHAO_MERCHANT_WEBHOOK_INTEGRATION_SECRET or received_sig
+
+    def pathao_response(content: dict, *, status_code: int = 200, secret: str | None = None) -> JSONResponse:
+        response = JSONResponse(status_code=status_code, content=content)
+        if secret:
+            response.headers["X-Pathao-Merchant-Webhook-Integration-Secret"] = secret
+        return response
 
     if event_type == "webhook_integration":
+        if not received_sig:
+            raise HTTPException(status_code=400, detail="Missing Pathao integration secret")
         logger.info("Pathao webhook_integration handshake received — sending verification response")
         # Pathao expects us to echo back the secret in the response header
-        response = JSONResponse(
+        return pathao_response(
+            secret=integration_response_secret,
             status_code=202,
             content={"status": "verified", "message": "Webhook integration verified"}
         )
-        response.headers["X-Pathao-Merchant-Webhook-Integration-Secret"] = received_sig
-        return response
 
     # ─── ধাপ ২: Normal status update ────────────────────────────────────────────
     consignment_id = payload.get("consignment_id")
-    status = payload.get("status")
+    status = payload.get("status") or {
+        "order.created": "pending",
+        "order.updated": "pending",
+        "pickup.requested": "pickup_requested",
+        "assigned.for.pickup": "assigned_for_pickup",
+        "pickup": "picked_up",
+        "in.transit": "in_transit",
+        "order.delivered": "delivered",
+        "return": "returned",
+        "paid.return": "returned",
+        "pickup.cancelled": "cancelled",
+        "delivery.failed": "delivery_failed",
+    }.get(str(event_type).strip().lower())
     merchant_order_id = payload.get("merchant_order_id")
 
     if not consignment_id or not status:
         logger.warning(f"Pathao webhook received invalid data: {payload}")
-        return {"status": "ignored", "reason": "missing consignment_id or status"}
+        return pathao_response(
+            {"status": "ignored", "reason": "missing consignment_id or status"},
+            secret=integration_response_secret,
+        )
 
     logger.info(f"Pathao webhook received for {consignment_id}: status={status}")
 
     # Find matching courier order
     result = await db.execute(
-        select(CourierOrder).where(CourierOrder.courier_order_id == str(consignment_id))
+        select(CourierOrder)
+        .where(
+            CourierOrder.courier_provider == "pathao",
+            CourierOrder.courier_order_id == str(consignment_id),
+        )
+        .with_for_update()
     )
     courier_order = result.scalar_one_or_none()
 
     if not courier_order:
         logger.warning(f"Pathao courier order not found for consignment: {consignment_id}")
-        return {"status": "ignored", "reason": "order not found"}
+        return pathao_response(
+            {"status": "ignored", "reason": "order not found"},
+            secret=integration_response_secret,
+        )
 
     # Get associated client and decrypt secret key
     client_result = await db.execute(select(Client).where(Client.id == courier_order.client_id))
     client = client_result.scalar_one_or_none()
-    if not client or not client.pathao_secret_key:
-        raise HTTPException(status_code=401, detail="Client pathao secret key not configured")
+    if not client or not client.pathao_webhook_secret:
+        raise HTTPException(status_code=401, detail="Client Pathao webhook secret not configured")
 
     try:
-        raw_secret = decrypt_token(client.pathao_secret_key, allow_legacy_plaintext=True)
-        # pathao_secret_key format: "client_secret|password" — শুধু client_secret দিয়ে verify হবে
-        client_secret = raw_secret.split("|", 1)[0] if "|" in raw_secret else raw_secret
+        raw_secret = decrypt_token(client.pathao_webhook_secret, allow_legacy_plaintext=True)
+        # Webhook integration secret is separate from the Pathao API credentials.
+        webhook_secret = raw_secret
     except Exception:
-        raise HTTPException(status_code=401, detail="Failed to decrypt client pathao secret key")
+        raise HTTPException(status_code=401, detail="Failed to decrypt client Pathao webhook secret")
 
     if not received_sig:
         raise HTTPException(status_code=401, detail="Missing signature header")
@@ -397,14 +541,14 @@ async def pathao_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     # Pathao-র actual mechanism: X-PATHAO-Signature header-এ configured secret verbatim থাকে।
     # তাই আমরা প্রথমে verbatim compare করি।
     verbatim_match = hmac.compare_digest(
-        client_secret.encode("utf-8"),
+        webhook_secret.encode("utf-8"),
         received_sig.encode("utf-8")
     )
 
     if not verbatim_match:
         # Fallback: কিছু implementation HMAC-SHA256 ব্যবহার করে — সেটিও চেক করি
         computed_hmac = hmac.new(
-            client_secret.encode("utf-8"),
+            webhook_secret.encode("utf-8"),
             msg=raw_body,
             digestmod=hashlib.sha256
         ).hexdigest()
@@ -412,19 +556,18 @@ async def pathao_webhook(request: Request, db: AsyncSession = Depends(get_db)):
             logger.warning(f"Pathao webhook signature mismatch for consignment {consignment_id}")
             raise HTTPException(status_code=401, detail="Invalid signature")
 
-    await process_courier_status_change(db, courier_order, status)
+    client.pathao_webhook_verified_at = datetime.now(timezone.utc)
+    db.add(client)
+    processing = await process_courier_status_change(db, courier_order, status)
     await db.commit()
 
     # Pathao expects the integration secret in response header for every webhook call too
-    response = JSONResponse(status_code=200, content={"status": "success"})
-    response.headers["X-Pathao-Merchant-Webhook-Integration-Secret"] = client_secret
-    return response
+    return pathao_response(processing, secret=webhook_secret)
 
 
 @router.post("/v1/webhook/redx")
 async def redx_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     """Receive RedX parcel status callbacks."""
-    _verify_courier_webhook_secret(request)
     try:
         payload = await request.json()
     except Exception:
@@ -436,12 +579,27 @@ async def redx_webhook(request: Request, db: AsyncSession = Depends(get_db)):
         return {"status": "ignored", "reason": "missing tracking_number or status"}
 
     result = await db.execute(
-        select(CourierOrder).where(CourierOrder.courier_tracking_id == str(tracking_id))
+        select(CourierOrder)
+        .where(
+            CourierOrder.courier_provider == "redx",
+            CourierOrder.courier_tracking_id == str(tracking_id),
+        )
+        .with_for_update()
     )
     courier_order = result.scalar_one_or_none()
     if not courier_order:
         return {"status": "ignored", "reason": "order not found"}
 
-    await process_courier_status_change(db, courier_order, str(status))
+    client_result = await db.execute(select(Client).where(Client.id == courier_order.client_id))
+    client = client_result.scalar_one_or_none()
+    if client and client.redx_webhook_secret:
+        provided = _webhook_secret_from_request(request, provider="RedX")
+        expected = decrypt_token(client.redx_webhook_secret)
+        if not hmac.compare_digest(provided, expected):
+            raise HTTPException(status_code=401, detail="Invalid courier webhook secret")
+    else:
+        _verify_courier_webhook_secret(request)
+
+    processing = await process_courier_status_change(db, courier_order, str(status))
     await db.commit()
-    return {"status": "success"}
+    return processing
