@@ -4,7 +4,7 @@ Tags: facebook, capi, server-side tracking, woocommerce, pixel, ga4, tiktok
 Requires at least: 5.8
 Tested up to: 6.7
 Requires PHP: 7.4
-Stable tag: 1.2.39
+Stable tag: 1.2.40
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -43,6 +43,10 @@ Buykori AdSync প্লাগইন আপনার WooCommerce স্টোর
 ক্যাশ-অন-ডেলিভারি (COD) অর্ডারের ক্ষেত্রে Purchase ইভেন্ট তখনই Facebook-এ পাঠানো হয় যখন আপনি অর্ডারটি "Completed" করেন। এতে ফেক অর্ডারের ডাটা Facebook-এ যায় না।
 
 == Changelog ==
+
+= 1.2.40 =
+* Restored multi-step checkout InitiateCheckout firing when a valid customer phone or email is entered.
+* Broadened checkout field selectors for shipping/modern checkout forms and clears old checkout markers after a new AddToCart.
 
 = 1.2.39 =
 * Restored smart one-page landing ViewContent detection when product and checkout surfaces live on the same page.

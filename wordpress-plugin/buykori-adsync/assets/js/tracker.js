@@ -514,6 +514,7 @@
     function markAddToCartIntent() {
         lastAddToCartIntentAt = Math.floor(Date.now() / 1000);
         setCookieLocal('_buykorigw_atc_intent', String(Math.floor(Date.now() / 1000)), 0.0014); // About 2 minutes
+        clearCheckoutMarkers();
     }
 
     function hasRecentAddToCartIntent() {
@@ -664,8 +665,8 @@
         triggerHybridPixel(eventName, eventData, eventId);
 
         var piiSelectors = {
-            em: ['#billing_email', 'input[name="billing_email"]', 'input[type="email"]', 'input[id^="email"]', 'input[autocomplete="email"]', '#email'],
-            ph: ['#billing_phone', 'input[name="billing_phone"]', 'input[type="tel"]', 'input[id^="tel"]', 'input[autocomplete="tel"]', '#phone'],
+            em: ['#billing_email', '#shipping_email', 'input[name="billing_email"]', 'input[name="shipping_email"]', 'input[type="email"]', 'input[id^="email"]', 'input[autocomplete="email"]', '#email'],
+            ph: ['#billing_phone', '#shipping_phone', 'input[name="billing_phone"]', 'input[name="shipping_phone"]', 'input[name*="phone"]', 'input[type="tel"]', 'input[id*="phone"]', 'input[id^="tel"]', 'input[autocomplete="tel"]', '#phone'],
             fn: ['#billing_first_name', 'input[name="billing_first_name"]', 'input[autocomplete="given-name"]', '#first-name'],
             ln: ['#billing_last_name', 'input[name="billing_last_name"]', 'input[autocomplete="family-name"]', '#last-name'],
             ct: ['#billing_city', 'input[name="billing_city"]'],
@@ -961,8 +962,8 @@
 
     function getCustomerData() {
         var fields = {
-            em: ['#billing_email', 'input[name="billing_email"]', 'input[type="email"]'],
-            ph: ['#billing_phone', 'input[name="billing_phone"]', 'input[type="tel"]'],
+            em: ['#billing_email', '#shipping_email', 'input[name="billing_email"]', 'input[name="shipping_email"]', 'input[type="email"]', 'input[id^="email"]', 'input[autocomplete="email"]', '#email'],
+            ph: ['#billing_phone', '#shipping_phone', 'input[name="billing_phone"]', 'input[name="shipping_phone"]', 'input[name*="phone"]', 'input[type="tel"]', 'input[id*="phone"]', 'input[id^="tel"]', 'input[autocomplete="tel"]', '#phone'],
             fn: ['#billing_first_name', 'input[name="billing_first_name"]'],
             ln: ['#billing_last_name', 'input[name="billing_last_name"]'],
             ct: ['#billing_city', 'input[name="billing_city"]'],
@@ -981,6 +982,17 @@
     function hasStrongCustomerData() {
         var data = getCustomerData();
         return !!normalizeRecoveryPhone(data.ph || '');
+    }
+
+    function hasTrustedCheckoutInput(target) {
+        if (!target || !target.matches) return false;
+        var value = String(target.value || '').trim();
+        if (!value) return false;
+        var phoneSelector = '#billing_phone, #shipping_phone, input[name="billing_phone"], input[name="shipping_phone"], input[name*="phone"], input[type="tel"], input[id*="phone"], input[id^="tel"], input[autocomplete="tel"], #phone';
+        var emailSelector = '#billing_email, #shipping_email, input[name="billing_email"], input[name="shipping_email"], input[type="email"], input[autocomplete="email"], #email';
+        if (target.matches(phoneSelector) && normalizeRecoveryPhone(value)) return true;
+        if (target.matches(emailSelector) && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) return true;
+        return hasStrongCustomerData();
     }
 
     function appendCustomerData(formData) {
@@ -1643,7 +1655,9 @@
             var target = e.target;
             if (!target || !target.matches || !target.matches(intentSelector)) return;
             if (target.type === 'hidden' || target.type === 'checkbox' || target.type === 'radio') return;
-            sendInitiateCheckoutWhenReady('checkout_field_input', false);
+            if (hasTrustedCheckoutInput(target)) {
+                sendInitiateCheckoutOnce('checkout_field_input');
+            }
             scheduleIncompleteCheckoutCapture();
         }
 
@@ -1675,14 +1689,16 @@
         document.addEventListener('blur', function(e) {
             var target = e.target;
             if (!target || !target.matches) return;
-            var isEmail = target.matches('#billing_email, input[name="billing_email"], input[type="email"]');
-            var isPhone = target.matches('#billing_phone, input[name="billing_phone"], input[type="tel"]');
+            var isEmail = target.matches('#billing_email, #shipping_email, input[name="billing_email"], input[name="shipping_email"], input[type="email"], input[autocomplete="email"], #email');
+            var isPhone = target.matches('#billing_phone, #shipping_phone, input[name="billing_phone"], input[name="shipping_phone"], input[name*="phone"], input[type="tel"], input[id*="phone"], input[id^="tel"], input[autocomplete="tel"], #phone');
             if (isEmail || isPhone) {
                 var val = String(target.value).trim();
                 if (isEmail && validateEmail(val)) {
                     sendEvent('Identify', { em: val });
+                    sendInitiateCheckoutOnce('checkout_email_blur');
                 } else if (isPhone && validatePhone(val)) {
                     sendEvent('Identify', { ph: val });
+                    sendInitiateCheckoutOnce('checkout_phone_blur');
                     scheduleIncompleteCheckoutCapture();
                 }
             }

@@ -53,7 +53,7 @@ class PluginDisconnectRequest(BaseModel):
 
 # Plugin version এই ফাইলে hardcoded — PLUGIN_VERSION env var দিয়ে override করা যায়।
 # Update করার সময় এখানে version change করুন এবং WP plugin-এও update করুন।
-PLUGIN_VERSION = "1.2.39"
+PLUGIN_VERSION = "1.2.40"
 PLUGIN_SOURCE_DIR = Path(__file__).resolve().parents[2] / "wordpress-plugin" / "buykori-adsync"
 PLUGIN_ZIP_PATH = Path(
     os.getenv(
@@ -171,6 +171,10 @@ def _plugin_update_response(download_url: str, package_sha256: str, signature: s
         "last_updated": "2026-06-04",
         "description": "Official Buykori AdSync WordPress plugin for server-side Facebook CAPI, TikTok, and GA4 tracking with one-page landing support and deferred purchase control.",
         "changelog": (
+            "<h4>v1.2.40</h4><ul>"
+            "<li>Restored multi-step checkout InitiateCheckout firing when a valid customer phone or email is entered</li>"
+            "<li>Broadened checkout field selectors for shipping/modern checkout forms and clears old checkout markers after a new AddToCart</li>"
+            "</ul>"
             "<h4>v1.2.39</h4><ul>"
             "<li>Restored smart one-page landing ViewContent detection when product and checkout surfaces live on the same page</li>"
             "<li>Kept multi-step checkout and shipping pages from firing InitiateCheckout before customer intent</li>"
