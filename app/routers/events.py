@@ -104,6 +104,36 @@ def _strip_internal_custom_data(event_dict: dict) -> dict:
     return event_dict
 
 
+def _device_quality(device: dict | None) -> int:
+    if not isinstance(device, dict):
+        return 0
+    score = 0
+    if device.get("device_type"):
+        score += 1
+    if device.get("device_os") and str(device.get("device_os")).lower() != "unknown":
+        score += 2
+    if device.get("device_browser") and str(device.get("device_browser")).lower() != "unknown":
+        score += 3
+    if device.get("screen_width") or device.get("screen_height"):
+        score += 1
+    return score
+
+
+def _best_request_device(events, user_agent: str | None) -> dict:
+    best_device: dict = {}
+    best_score = 0
+    for event in events:
+        custom_data = event.custom_data.model_dump() if event.custom_data else {}
+        device = extract_device_metadata(custom_data, user_agent=user_agent)
+        score = _device_quality(device)
+        if score > best_score:
+            best_device = device
+            best_score = score
+            if score >= 7:
+                break
+    return best_device
+
+
 def _event_order_id(event) -> str:
     if event.custom_data and getattr(event.custom_data, "order_id", None):
         return str(event.custom_data.order_id)
@@ -524,22 +554,15 @@ async def receive_events(
                         remaining_orders -= 1
 
         if queue_events:
-            request_device = {}
-            for event in queue_events:
-                custom_data = event.custom_data.model_dump() if event.custom_data else {}
-                request_device = extract_device_metadata(
-                    custom_data,
-                    user_agent=request.headers.get("user-agent"),
-                )
-                if request_device:
-                    break
+            request_user_agent = request.headers.get("user-agent", "")
+            request_device = _best_request_device(queue_events, request_user_agent)
             events_as_dicts = [
                 _strip_internal_custom_data(event.model_dump(exclude_none=True))
                 for event in queue_events
             ]
             request_context = {
                 "ip_address": client_ip,
-                "user_agent": request.headers.get("user-agent", ""),
+                "user_agent": request_user_agent,
                 "device": request_device,
                 "cookies": {
                     key: value

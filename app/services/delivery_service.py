@@ -27,17 +27,23 @@ async def _log_secondary_failure(
     event_count: int,
     error_message: str,
     ip_address: str | None,
+    user_agent: str | None = None,
+    device_metadata: dict | None = None,
 ) -> None:
     try:
         async with AsyncSessionLocal() as db:
-            db.add(EventLog(
-                client_id=client_id,
-                event_name=f"{channel}:{event_names}"[:255],
-                event_count=event_count,
-                status="failed",
+            kwargs = build_event_log_kwargs(
+                client_id,
+                {"event_name": event_names, "custom_data": {}},
+                "failed",
+                ip_address,
+                user_agent,
+                device_metadata,
                 error_message=str(error_message)[:500],
-                ip_address=ip_address,
-            ))
+            )
+            kwargs["event_name"] = f"{channel}:{event_names}"[:255]
+            kwargs["event_count"] = event_count
+            db.add(EventLog(**kwargs))
             await db.commit()
     except Exception as log_error:
         logger.warning(f"Secondary failure logging failed: {log_error}")
@@ -48,6 +54,8 @@ async def _log_secondary_success(
     events: list[EventData],
     response_payload: object,
     ip_address: str | None,
+    user_agent: str | None = None,
+    device_metadata: dict | None = None,
 ) -> None:
     """Record non-primary platform delivery while preserving per-event dedup keys."""
     try:
@@ -59,6 +67,8 @@ async def _log_secondary_success(
                     event_data,
                     "success",
                     ip_address,
+                    user_agent,
+                    device_metadata,
                     fb_response=json.dumps({
                         "channel": channel,
                         "response": response_payload,
@@ -71,7 +81,10 @@ async def _log_secondary_success(
     except Exception as log_error:
         logger.warning(f"Secondary success logging failed: {log_error}")
 
-async def _send_tiktok_secondary(client, events: list[EventData], event_names: str, ip_address: str | None) -> None:
+async def _send_tiktok_secondary(client, events: list[EventData], event_names: str, context: dict) -> None:
+    ip_address = context.get("ip_address")
+    user_agent = context.get("user_agent")
+    device_metadata = context.get("device")
     try:
         tiktok_result = await send_to_tiktok(client, events)
         if not tiktok_result or tiktok_result.get("code") not in (0, None):
@@ -82,6 +95,8 @@ async def _send_tiktok_secondary(client, events: list[EventData], event_names: s
                 len(events),
                 tiktok_result or "TikTok send failed",
                 ip_address,
+                user_agent,
+                device_metadata,
             )
             return
 
@@ -97,6 +112,8 @@ async def _send_tiktok_secondary(client, events: list[EventData], event_names: s
             events,
             tiktok_result,
             ip_address,
+            user_agent,
+            device_metadata,
         )
     except Exception as secondary_error:
         logger.warning(f"[{client.name}] TikTok secondary send failed: {secondary_error}")
@@ -107,6 +124,8 @@ async def _send_tiktok_secondary(client, events: list[EventData], event_names: s
             len(events),
             str(secondary_error),
             ip_address,
+            user_agent,
+            device_metadata,
         )
 
 async def _send_ga4_secondary(
@@ -132,6 +151,8 @@ async def _send_ga4_secondary(
                 len(events_data),
                 ga4_result.get("error") or ga4_result,
                 context.get("ip_address"),
+                context.get("user_agent"),
+                context.get("device"),
             )
     except Exception as secondary_error:
         logger.warning(f"[{client.name}] GA4 secondary send failed: {secondary_error}")
@@ -142,6 +163,8 @@ async def _send_ga4_secondary(
             len(events_data),
             str(secondary_error),
             context.get("ip_address"),
+            context.get("user_agent"),
+            context.get("device"),
         )
 
 async def _send_webhook_secondary(client, events_data: list[dict], context: dict) -> None:
@@ -165,6 +188,8 @@ async def _send_webhook_secondary(client, events_data: list[dict], context: dict
                     1,
                     "Webhook send failed",
                     context.get("ip_address"),
+                    context.get("user_agent"),
+                    context.get("device"),
                 )
         except Exception as secondary_error:
             logger.warning(f"[{client.name}] Outbound webhook failed: {secondary_error}")
@@ -175,6 +200,8 @@ async def _send_webhook_secondary(client, events_data: list[dict], context: dict
                 1,
                 str(secondary_error),
                 context.get("ip_address"),
+                context.get("user_agent"),
+                context.get("device"),
             )
 
 def is_event_enabled_for_platform(client, event_name: str, platform: str) -> bool:
@@ -297,7 +324,7 @@ async def deliver_events_to_platforms(
                 client,
                 tiktok_events,
                 ", ".join(sorted({e.event_name for e in tiktok_events})),
-                context.get("ip_address")
+                context,
             )
         )
 

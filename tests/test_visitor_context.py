@@ -1,3 +1,4 @@
+from app.routers.events import _best_request_device
 from app.services.visitor_context import extract_device_metadata, normalize_bd_district
 
 
@@ -36,3 +37,39 @@ def test_extract_device_metadata_accepts_tracker_endpoint_names():
     assert metadata["device_type"] == "desktop"
     assert metadata["device_os"] == "Windows"
     assert metadata["device_browser"] == "Chrome"
+
+
+class _CustomData:
+    def __init__(self, data):
+        self._data = data
+
+    def model_dump(self):
+        return dict(self._data)
+
+
+class _Event:
+    def __init__(self, custom_data):
+        self.custom_data = _CustomData(custom_data) if custom_data is not None else None
+
+
+def test_best_request_device_prefers_enriched_tracker_payload_over_unknown_user_agent():
+    device = _best_request_device(
+        [
+            _Event({}),
+            _Event(
+                {
+                    "_bk_device_type": "desktop",
+                    "_bk_device_os": "Windows",
+                    "_bk_device_browser": "Chrome",
+                    "_bk_screen_width": 1680,
+                    "_bk_screen_height": 1050,
+                }
+            ),
+        ],
+        user_agent="WordPress/6.7; https://example.com",
+    )
+
+    assert device["device_type"] == "desktop"
+    assert device["device_os"] == "Windows"
+    assert device["device_browser"] == "Chrome"
+    assert device["screen_width"] == 1680
