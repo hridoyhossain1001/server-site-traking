@@ -719,7 +719,11 @@
             fbq('track', eventName, browserParams, { eventID: eventId });
         }
         if (window.ttq && cfg.tt_pixel_id) {
-            ttq.track(eventName, browserParams, { event_id: eventId });
+            if (eventName === 'PageView' && typeof ttq.page === 'function') {
+                ttq.page();
+            } else {
+                ttq.track(eventName, browserParams, { event_id: eventId });
+            }
         }
     }
 
