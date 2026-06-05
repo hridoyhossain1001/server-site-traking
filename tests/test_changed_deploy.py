@@ -1,7 +1,7 @@
 from deploy import changed_deploy
 
 
-def test_changed_files_working_tree_includes_untracked_deployables(monkeypatch):
+def test_changed_files_working_tree_excludes_untracked_deployables_by_default(monkeypatch):
     outputs = {
         ("diff", "--name-status", "origin/main"): "M\tapp/main.py\nD\tapp/old.py",
         ("ls-files", "--others", "--exclude-standard"): (
@@ -13,6 +13,30 @@ def test_changed_files_working_tree_includes_untracked_deployables(monkeypatch):
     monkeypatch.setattr(changed_deploy, "run_git", lambda args: outputs.get(tuple(args), ""))
 
     changes = changed_deploy.changed_files("origin/main", include_working_tree=True)
+
+    assert ("M", "app/main.py") in changes
+    assert ("D", "app/old.py") in changes
+    assert ("A", "app/services/new_queue.py") not in changes
+    assert ("A", "migrations/versions/new_queue.py") not in changes
+    assert all(path != "client-portal/src/App.tsx" for _, path in changes)
+
+
+def test_changed_files_can_include_untracked_deployables(monkeypatch):
+    outputs = {
+        ("diff", "--name-status", "origin/main"): "M\tapp/main.py\nD\tapp/old.py",
+        ("ls-files", "--others", "--exclude-standard"): (
+            "app/services/new_queue.py\n"
+            "migrations/versions/new_queue.py\n"
+            "client-portal/src/App.tsx"
+        ),
+    }
+    monkeypatch.setattr(changed_deploy, "run_git", lambda args: outputs.get(tuple(args), ""))
+
+    changes = changed_deploy.changed_files(
+        "origin/main",
+        include_working_tree=True,
+        include_untracked=True,
+    )
 
     assert ("M", "app/main.py") in changes
     assert ("D", "app/old.py") in changes

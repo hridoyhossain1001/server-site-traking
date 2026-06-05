@@ -127,7 +127,7 @@ def _int_or_none(value: Any) -> int | None:
 
 def _device_type(value: Any) -> str | None:
     key = _clean_key(value)
-    if not key:
+    if not key or key in {"unknown", "not set", "n a", "na", "none", "null"}:
         return None
     if key in {"mobile", "phone", "smartphone"}:
         return "mobile"
@@ -193,28 +193,40 @@ def extract_device_metadata(
     context_device = context_device or {}
     parsed = parse_user_agent(user_agent)
 
+    def _known_text(*values: Any) -> str | None:
+        for value in values:
+            text = _text(value, 40)
+            if text and text.strip().lower() not in {"unknown", "not set", "n/a", "na", "none", "null"}:
+                return text
+        return None
+
+    def _known_device_type(*values: Any) -> str | None:
+        for value in values:
+            device_type = _device_type(value)
+            if device_type:
+                return device_type
+        return None
+
     return {
-        "device_type": _device_type(
-            context_device.get("device_type")
-            or custom_data.get("_bk_device_type")
-            or custom_data.get("device_type")
-            or parsed["device_type"],
+        "device_type": _known_device_type(
+            context_device.get("device_type"),
+            custom_data.get("_bk_device_type"),
+            custom_data.get("device_type"),
+            parsed["device_type"],
         ),
-        "device_os": _text(
-            context_device.get("device_os")
-            or custom_data.get("_bk_device_os")
-            or custom_data.get("device_os")
-            or custom_data.get("os_name")
-            or parsed["device_os"],
-            40,
+        "device_os": _known_text(
+            context_device.get("device_os"),
+            custom_data.get("_bk_device_os"),
+            custom_data.get("device_os"),
+            custom_data.get("os_name"),
+            parsed["device_os"],
         ),
-        "device_browser": _text(
-            context_device.get("device_browser")
-            or custom_data.get("_bk_device_browser")
-            or custom_data.get("device_browser")
-            or custom_data.get("browser_name")
-            or parsed["device_browser"],
-            40,
+        "device_browser": _known_text(
+            context_device.get("device_browser"),
+            custom_data.get("_bk_device_browser"),
+            custom_data.get("device_browser"),
+            custom_data.get("browser_name"),
+            parsed["device_browser"],
         ),
         "screen_width": _int_or_none(
             context_device.get("screen_width")

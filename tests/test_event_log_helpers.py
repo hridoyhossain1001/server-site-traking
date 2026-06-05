@@ -100,3 +100,42 @@ def test_event_log_uses_browser_cookie_for_visitor_key(monkeypatch):
 
     assert first["visitor_key"] == second["visitor_key"]
     assert first["visitor_key"].startswith("fbp:")
+
+
+def test_event_log_uses_payload_user_agent_for_device_fallback(monkeypatch):
+    monkeypatch.setattr(
+        "app.utils.event_log_helpers.geo_context_from_ip",
+        lambda ip_address: {
+            "geo_country": None,
+            "geo_region": None,
+            "geo_city": None,
+            "geo_district": None,
+        },
+    )
+
+    kwargs = build_event_log_kwargs(
+        client_id=1,
+        event_data={
+            "event_name": "PageView",
+            "user_data": {
+                "client_ip_address": "103.111.222.10",
+                "client_user_agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36"
+                ),
+            },
+            "custom_data": {
+                "_bk_device_type": "unknown",
+                "_bk_device_os": "Unknown",
+                "_bk_device_browser": "Unknown",
+            },
+        },
+        status="success",
+        ip_address=None,
+        user_agent=None,
+    )
+
+    assert kwargs["visitor_key"].startswith("net:")
+    assert kwargs["device_type"] == "desktop"
+    assert kwargs["device_os"] == "Windows"
+    assert kwargs["device_browser"] == "Chrome"

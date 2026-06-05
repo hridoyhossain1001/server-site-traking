@@ -4,6 +4,7 @@ Usage:
     set DO_SSH_PASSWORD=...
     python deploy/changed_deploy.py --base origin/main
     python deploy/changed_deploy.py --base origin/main --working-tree
+    python deploy/changed_deploy.py --base origin/main --working-tree --include-untracked
     python deploy/changed_deploy.py --base origin/main --dry-run
 
 Environment:
@@ -52,7 +53,12 @@ def run_git(args: list[str]) -> str:
     return subprocess.check_output(["git", *args], text=True).strip()
 
 
-def changed_files(base: str, *, include_working_tree: bool = False) -> list[tuple[str, str]]:
+def changed_files(
+    base: str,
+    *,
+    include_working_tree: bool = False,
+    include_untracked: bool = False,
+) -> list[tuple[str, str]]:
     diff_target = base if include_working_tree else f"{base}..HEAD"
     output = run_git(["diff", "--name-status", diff_target])
     changes: list[tuple[str, str]] = []
@@ -66,7 +72,7 @@ def changed_files(base: str, *, include_working_tree: bool = False) -> list[tupl
             continue
         changes.append((status, path))
 
-    if include_working_tree:
+    if include_working_tree and include_untracked:
         untracked = run_git(["ls-files", "--others", "--exclude-standard"])
         known_paths = {path for _, path in changes}
         for path in untracked.splitlines() if untracked else []:
@@ -154,7 +160,8 @@ def run_remote(ssh: paramiko.SSHClient, command: str) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", default="HEAD~1", help="Git ref to diff against")
-    parser.add_argument("--working-tree", action="store_true", help="Include staged, unstaged, and untracked production files")
+    parser.add_argument("--working-tree", action="store_true", help="Include staged and unstaged tracked production files")
+    parser.add_argument("--include-untracked", action="store_true", help="Also include untracked production files when --working-tree is set")
     parser.add_argument("--dry-run", action="store_true", help="Print planned upload/delete/restart steps without connecting")
     parser.add_argument("--skip-migrations", action="store_true")
     parser.add_argument("--skip-restart", action="store_true")
@@ -166,7 +173,7 @@ def main() -> int:
     username = os.environ.get("DO_SSH_USER")
     password = os.environ.get("DO_SSH_PASSWORD")
 
-    changes = changed_files(args.base, include_working_tree=args.working_tree)
+    changes = changed_files(args.base, include_working_tree=args.working_tree, include_untracked=args.include_untracked)
     if not args.working_tree:
         local_changes = local_deployable_changes()
         if local_changes:
@@ -177,16 +184,6 @@ def main() -> int:
     if not changes:
         print("No deployable tracked file changes found.")
         return 0
-
-    if not host or not username:
-        print("Set DO_SSH_HOST and DO_SSH_USER before running a live deploy.")
-        return 2
-    if username == "root" and os.environ.get("ALLOW_ROOT_DEPLOY", "").lower() not in ("true", "1", "yes"):
-        print("Refusing root deploy by default. Use a limited deploy user or set ALLOW_ROOT_DEPLOY=true for a controlled migration window.")
-        return 2
-    if password and os.environ.get("ALLOW_SSH_PASSWORD_DEPLOY", "").lower() not in ("true", "1", "yes"):
-        print("Refusing password-based SSH deploy by default. Use SSH keys or set ALLOW_SSH_PASSWORD_DEPLOY=true temporarily.")
-        return 2
 
     if args.dry_run:
         print(f"Dry run against base {args.base}")
@@ -200,6 +197,16 @@ def main() -> int:
         if not args.skip_restart:
             print("remote: restart buykori-web and buykori-worker:*")
         return 0
+
+    if not host or not username:
+        print("Set DO_SSH_HOST and DO_SSH_USER before running a live deploy.")
+        return 2
+    if username == "root" and os.environ.get("ALLOW_ROOT_DEPLOY", "").lower() not in ("true", "1", "yes"):
+        print("Refusing root deploy by default. Use a limited deploy user or set ALLOW_ROOT_DEPLOY=true for a controlled migration window.")
+        return 2
+    if password and os.environ.get("ALLOW_SSH_PASSWORD_DEPLOY", "").lower() not in ("true", "1", "yes"):
+        print("Refusing password-based SSH deploy by default. Use SSH keys or set ALLOW_SSH_PASSWORD_DEPLOY=true temporarily.")
+        return 2
 
     ssh = paramiko.SSHClient()
     known_hosts_path = Path(os.environ.get("DO_SSH_KNOWN_HOSTS", str(Path.home() / ".ssh" / "known_hosts")))

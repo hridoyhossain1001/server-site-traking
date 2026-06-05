@@ -39,6 +39,24 @@ def test_extract_device_metadata_accepts_tracker_endpoint_names():
     assert metadata["device_browser"] == "Chrome"
 
 
+def test_extract_device_metadata_falls_back_when_tracker_values_are_unknown():
+    metadata = extract_device_metadata(
+        {
+            "_bk_device_type": "unknown",
+            "_bk_device_os": "Unknown",
+            "_bk_device_browser": "Unknown",
+        },
+        user_agent=(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36"
+        ),
+    )
+
+    assert metadata["device_type"] == "desktop"
+    assert metadata["device_os"] == "Windows"
+    assert metadata["device_browser"] == "Chrome"
+
+
 class _CustomData:
     def __init__(self, data):
         self._data = data

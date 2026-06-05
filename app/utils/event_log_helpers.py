@@ -33,6 +33,15 @@ def _first_scalar(value) -> str:
     return str(value).strip()
 
 
+def _user_agent_from_event(event_data: dict, fallback_user_agent: str | None) -> str | None:
+    if fallback_user_agent:
+        return fallback_user_agent
+    user_data = event_data.get("user_data") or {}
+    if not isinstance(user_data, dict):
+        return None
+    return _first_scalar(user_data.get("client_user_agent")) or None
+
+
 def _visitor_key_from_event(event_data: dict, visitor_ip: str | None, user_agent: str | None) -> str | None:
     user_data = event_data.get("user_data") or {}
     if not isinstance(user_data, dict):
@@ -79,12 +88,13 @@ def build_event_log_kwargs(
 
     custom_data = extract_event_custom_data(event_data)
     utm_source = custom_data.get("utm_source")
+    resolved_user_agent = _user_agent_from_event(event_data, user_agent)
     visitor_ip = _visitor_ip_from_event(event_data, ip_address)
-    visitor_key = _visitor_key_from_event(event_data, visitor_ip, user_agent)
+    visitor_key = _visitor_key_from_event(event_data, visitor_ip, resolved_user_agent)
     geo_context = geo_context_from_ip(visitor_ip)
     device_context = extract_device_metadata(
         custom_data,
-        user_agent=user_agent,
+        user_agent=resolved_user_agent,
         context_device=device_metadata,
     )
 
