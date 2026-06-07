@@ -37,6 +37,7 @@ templates.env.globals["mask_secret"] = mask_secret
 templates.env.globals["display_domain_url"] = display_domain_url
 
 router = APIRouter(tags=["Client Portal"])
+CLIENT_APP_HOME = "/"
 
 
 def _safe_next_url(value: str | None) -> str:
@@ -45,6 +46,8 @@ def _safe_next_url(value: str | None) -> str:
         return ""
     if "\r" in value or "\n" in value:
         return ""
+    if value.startswith("/client/dashboard"):
+        return CLIENT_APP_HOME
     if not (value.startswith("/plugin/connect") or value.startswith("/client/dashboard")):
         return ""
     return value
@@ -99,7 +102,7 @@ async def client_login_page(
     safe_next = _safe_next_url(next_url)
     client = await get_client_from_portal_session(request, db)
     if client:
-        return RedirectResponse(url=safe_next or "/client/dashboard", status_code=303)
+        return RedirectResponse(url=safe_next or CLIENT_APP_HOME, status_code=303)
 
     return templates.TemplateResponse(
         request,
@@ -140,7 +143,7 @@ async def client_login(
                 status_code=401
             )
 
-        redirect = RedirectResponse(url=safe_next or "/client/dashboard", status_code=303)
+        redirect = RedirectResponse(url=safe_next or CLIENT_APP_HOME, status_code=303)
         user.last_login_at = datetime.datetime.now(datetime.timezone.utc)
         await _create_session(db, user, redirect, request)
         await db.commit()
@@ -261,7 +264,7 @@ async def client_signup_form(
         if starts_trial:
             await record_trial_identity(db, client, email=clean_email, source="signup")
 
-        redirect = RedirectResponse(url=safe_next or "/client/dashboard", status_code=303)
+        redirect = RedirectResponse(url=safe_next or CLIENT_APP_HOME, status_code=303)
         await _create_session(db, user, redirect, request)
         await db.commit()
         return redirect

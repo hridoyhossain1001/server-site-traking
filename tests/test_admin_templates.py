@@ -372,7 +372,7 @@ async def test_client_signup_form_creates_email_user():
         follow_redirects=False,
     )
     assert response.status_code == 303
-    assert response.headers["location"] == "/client/dashboard"
+    assert response.headers["location"] == "/"
 
     async with TestingSessionLocal() as session:
         user_r = await session.execute(
