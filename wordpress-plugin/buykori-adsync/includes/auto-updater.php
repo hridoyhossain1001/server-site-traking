@@ -175,7 +175,7 @@ class BUYKORIGW_Auto_Updater
 
     private function verify_remote_info($remote, $api_key)
     {
-        if (empty($remote->download_url) || empty($remote->package_sha256) || empty($remote->signature) || empty($api_key)) {
+        if (empty($remote->download_url) || empty($remote->package_sha256)) {
             return false;
         }
 
@@ -184,6 +184,14 @@ class BUYKORIGW_Auto_Updater
         }
 
         if (!preg_match('/^[a-f0-9]{64}$/', $remote->package_sha256)) {
+            return false;
+        }
+
+        if (empty($api_key)) {
+            return true;
+        }
+
+        if (empty($remote->signature)) {
             return false;
         }
 
