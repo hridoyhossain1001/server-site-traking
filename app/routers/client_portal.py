@@ -234,7 +234,7 @@ async def client_signup_form(
         client = Client(
             name=clean_business_name,
             pixel_id="0",
-            access_token=encrypt_token("pending_setup"),
+            access_token="",
             domain=clean_domain,
             api_key=secrets.token_urlsafe(32),
             public_key=secrets.token_urlsafe(24),

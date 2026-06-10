@@ -133,6 +133,76 @@ async def test_event_site_binding_updates_active_same_installation():
 
 
 @pytest.mark.anyio
+async def test_event_site_binding_throttles_repeated_timestamp_writes(monkeypatch):
+    class RedisThrottle:
+        async def set(self, *_args, **_kwargs):
+            return False
+
+    binding = SimpleNamespace(
+        id=1,
+        client_id=7,
+        root_domain="example.com",
+        installation_id="install-1",
+        site_host="checkout.example.com",
+        last_seen_at=None,
+        last_event_at=None,
+    )
+    db = _Db(_Result(binding))
+    event = SimpleNamespace(event_name="PageView", event_source_url="https://checkout.example.com/offer")
+    client = SimpleNamespace(id=7)
+    monkeypatch.setattr("app.services.site_binding_service.get_redis", lambda: RedisThrottle())
+
+    await validate_event_site_binding(
+        db,
+        client=client,
+        events=[event],
+        signed_site_host="checkout.example.com",
+        installation_id="install-1",
+    )
+
+    assert binding.last_event_at is None
+    assert binding.last_seen_at is None
+
+
+@pytest.mark.anyio
+async def test_event_site_binding_cache_hit_skips_active_binding_lookup():
+    from app.services import site_binding_service
+
+    site_binding_service._SITE_BINDING_VALIDATION_CACHE.clear()
+    binding = SimpleNamespace(
+        id=1,
+        client_id=7,
+        root_domain="example.com",
+        installation_id="install-1",
+        site_host="checkout.example.com",
+        last_seen_at=None,
+        last_event_at=None,
+    )
+    event = SimpleNamespace(event_name="PageView", event_source_url="https://checkout.example.com/offer")
+    client = SimpleNamespace(id=7)
+
+    await validate_event_site_binding(
+        _Db(_Result(binding)),
+        client=client,
+        events=[event],
+        signed_site_host="checkout.example.com",
+        installation_id="install-1",
+    )
+
+    db = _Db()
+    await validate_event_site_binding(
+        db,
+        client=client,
+        events=[event],
+        signed_site_host="checkout.example.com",
+        installation_id="install-1",
+    )
+
+    assert db.results == []
+    site_binding_service._SITE_BINDING_VALIDATION_CACHE.clear()
+
+
+@pytest.mark.anyio
 async def test_event_site_binding_rebinds_same_domain_installation_mismatch():
     binding = SimpleNamespace(
         id=1,

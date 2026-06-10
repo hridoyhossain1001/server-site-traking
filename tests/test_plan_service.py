@@ -132,6 +132,24 @@ def test_admin_confirm_paid_plan_sets_billing_status():
     assert client.monthly_limit == 500_000
 
 
+def test_admin_confirm_growth_does_not_carry_trial_quota():
+    client = _client(plan_tier="free", billing_status="trial", monthly_limit=TRIAL_EVENT_LIMIT)
+
+    assign_paid_plan(client, "growth", monthly_limit=TRIAL_EVENT_LIMIT, billing_status="paid")
+
+    assert client.plan_tier == "growth"
+    assert client.billing_status == "paid"
+    assert client.monthly_limit == 500_000
+
+
+def test_admin_confirm_growth_preserves_explicit_custom_quota():
+    client = _client(plan_tier="free", billing_status="trial", monthly_limit=TRIAL_EVENT_LIMIT)
+
+    assign_paid_plan(client, "growth", monthly_limit=300_000, billing_status="paid")
+
+    assert client.monthly_limit == 300_000
+
+
 def test_trial_domains_include_main_domain_for_subdomain_reuse_guard():
     assert trial_domains("https://checkout.example.com/path") == [
         "checkout.example.com",

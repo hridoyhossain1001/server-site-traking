@@ -4,7 +4,7 @@ import logging
 import os
 from typing import List
 from app.schemas.event import EventData
-from app.security import decrypt_token
+from app.security import decrypt_token, meta_credentials_configured
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +53,9 @@ async def send_to_facebook(client, events: List[EventData]) -> dict:
     Facebook CAPI-তে ইভেন্ট পাঠায়।
     Persistent connection pool ব্যবহার করে — TCP reuse + HTTP/2।
     """
+    if not meta_credentials_configured(client):
+        raise ValueError("Meta CAPI credentials are not configured.")
+
     url = (
         f"https://graph.facebook.com/{FACEBOOK_API_VERSION}"
         f"/{client.pixel_id}/events"

@@ -52,3 +52,25 @@ def decrypt_token(encrypted: str, *, allow_legacy_plaintext: bool | None = None)
     except Exception:
         logger.warning("Token decryption failed because the encrypted value is malformed.")
         raise
+
+
+PENDING_CREDENTIAL_VALUES = {"pending_setup"}
+
+
+def encrypted_credential_is_configured(encrypted: str | None) -> bool:
+    """Return true only when an encrypted field contains a real configured secret."""
+    if not encrypted:
+        return False
+    try:
+        plaintext = decrypt_token(encrypted, allow_legacy_plaintext=False).strip()
+    except Exception:
+        return False
+    return bool(plaintext) and plaintext not in PENDING_CREDENTIAL_VALUES
+
+
+def meta_credentials_configured(client) -> bool:
+    """Check Meta readiness without treating setup placeholders as credentials."""
+    pixel_id = str(getattr(client, "pixel_id", "") or "").strip()
+    return pixel_id not in {"", "0"} and encrypted_credential_is_configured(
+        getattr(client, "access_token", None)
+    )

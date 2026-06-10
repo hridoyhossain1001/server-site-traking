@@ -278,6 +278,7 @@ def client_to_api_dict(client: Client, event_total: int = 0, last_event_at=None,
         "pixel_id": client.pixel_id,
         "test_event_code": client.test_event_code,
         "monthly_limit": getattr(client, "monthly_limit", None),
+        "orders_quota": plan["ordersQuota"],
         "rate_limit": client.rate_limit,
         "daily_quota": client.daily_quota,
         "enable_facebook": getattr(client, "enable_facebook", True),
@@ -996,10 +997,6 @@ async def admin_api_update_client(
         client.name = clean_name
     if payload.domain is not None:
         client.domain = normalize_domain_input(payload.domain)
-    if payload.monthly_limit is not None:
-        if payload.monthly_limit < 0:
-            raise HTTPException(status_code=400, detail="Monthly limit cannot be negative.")
-        client.monthly_limit = payload.monthly_limit
     if payload.rate_limit is not None:
         if payload.rate_limit < 0:
             raise HTTPException(status_code=400, detail="Rate limit cannot be negative.")
@@ -1010,14 +1007,30 @@ async def admin_api_update_client(
         client.daily_quota = payload.daily_quota
     if payload.is_active is not None:
         client.is_active = payload.is_active
-    if payload.plan_tier is not None:
-        requested_tier = payload.plan_tier.strip().lower()
+    if payload.monthly_limit is not None and payload.monthly_limit < 0:
+        raise HTTPException(status_code=400, detail="Monthly limit cannot be negative.")
+
+    if payload.plan_tier is not None or payload.billing_status is not None:
+        requested_tier = (payload.plan_tier or client.plan_tier).strip().lower()
         normalized_tier = normalize_plan_tier(requested_tier)
         if requested_tier != normalized_tier:
             raise HTTPException(status_code=400, detail="Plan tier must be free, growth, scale, or agency.")
-        assign_paid_plan(client, normalized_tier, payload.monthly_limit, payload.billing_status)
-    elif payload.billing_status is not None:
-        client.billing_status = normalize_billing_status(payload.billing_status)
+        billing_status = normalize_billing_status(payload.billing_status or client.billing_status)
+        if billing_status == "trial":
+            await require_trial_available(
+                db,
+                domain=client.domain,
+                pixel_id=client.pixel_id,
+                exclude_client_id=client.id,
+            )
+            start_growth_trial(client)
+            await record_trial_identity(db, client, source="admin_edit")
+        elif billing_status == "free" or normalized_tier == "free":
+            assign_paid_plan(client, "free")
+        else:
+            assign_paid_plan(client, normalized_tier, payload.monthly_limit, billing_status)
+    elif payload.monthly_limit is not None:
+        client.monthly_limit = payload.monthly_limit
     for field in ("enable_facebook", "enable_tiktok", "enable_ga4", "deferred_purchase"):
         value = getattr(payload, field)
         if value is not None:

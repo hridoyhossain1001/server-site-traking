@@ -107,6 +107,16 @@ def default_monthly_event_limit(tier: str) -> int:
     return PLAN_EVENT_LIMITS[normalized]
 
 
+def _system_managed_monthly_event_limit(client) -> int:
+    current_limit = max(0, int(getattr(client, "monthly_limit", 0) or 0))
+    if normalize_billing_status(getattr(client, "billing_status", None)) == "trial":
+        if current_limit == TRIAL_EVENT_LIMIT:
+            return TRIAL_EVENT_LIMIT
+
+    tier = normalize_plan_tier(getattr(client, "plan_tier", None))
+    return default_monthly_event_limit(tier)
+
+
 def new_trial_values(now: datetime | None = None) -> dict:
     started_at = now or utc_now()
     return {
@@ -289,13 +299,26 @@ def assign_paid_plan(
     if normalized == "free":
         cancel_to_free(client)
         return
+
+    previous_tier = normalize_plan_tier(getattr(client, "plan_tier", None))
+    previous_billing_status = normalize_billing_status(getattr(client, "billing_status", None))
+    previous_limit = max(0, int(getattr(client, "monthly_limit", 0) or 0))
+    previous_system_limit = _system_managed_monthly_event_limit(client)
+    changes_plan = previous_tier != normalized or previous_billing_status in {"free", "trial"}
+
     client.plan_tier = normalized
     client.billing_status = normalize_billing_status(billing_status)
     client.trial_ends_at = None
-    if monthly_limit is not None:
-        client.monthly_limit = max(0, int(monthly_limit))
-    else:
+    requested_limit = max(0, int(monthly_limit)) if monthly_limit is not None else None
+    carries_previous_system_limit = (
+        changes_plan
+        and requested_limit == previous_limit
+        and previous_limit == previous_system_limit
+    )
+    if requested_limit is None or carries_previous_system_limit:
         client.monthly_limit = default_monthly_event_limit(normalized)
+    else:
+        client.monthly_limit = requested_limit
 
 
 def start_growth_trial(client, now: datetime | None = None) -> None:

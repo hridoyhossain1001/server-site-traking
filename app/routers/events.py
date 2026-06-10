@@ -3,10 +3,12 @@ import hmac
 import json
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Query, status
+from pydantic import BaseModel
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -86,12 +88,100 @@ REQUIRE_SIGNED_DOMAIN_PROOF = os.getenv("REQUIRE_SIGNED_DOMAIN_PROOF", "true").l
 TRUST_PROXY_HEADERS = os.getenv("TRUST_PROXY_HEADERS", "false").lower() in ("1", "true", "yes")
 
 
+class BrowserPixelAuditPayload(BaseModel):
+    platform: str
+    event_name: str
+    event_id: str
+    event_source_url: str
+    page_title: str | None = None
+    user_agent: str | None = None
+    device_type: str | None = None
+    device_os: str | None = None
+    device_browser: str | None = None
+    screen_width: int | None = None
+    screen_height: int | None = None
+
+
 def _request_client_ip(request: Request) -> str | None:
     if TRUST_PROXY_HEADERS:
         forwarded = request.headers.get("x-forwarded-for")
         if forwarded:
             return forwarded.split(",")[0].strip()
     return request.client.host if request.client else None
+
+
+@router.post("/events/browser-audit", status_code=status.HTTP_202_ACCEPTED)
+async def record_browser_pixel_audit(
+    request: Request,
+    payload: BrowserPixelAuditPayload,
+    client: CachedClient = Depends(get_current_client),
+    db: AsyncSession = Depends(get_db),
+):
+    """Record that a browser pixel call was fired without claiming upstream acceptance."""
+    if payload.platform.lower() != "tiktok" or payload.event_name != "PageView":
+        raise HTTPException(status_code=400, detail="Unsupported browser pixel audit.")
+    if not re.fullmatch(r"[A-Za-z0-9_.:-]{8,160}", payload.event_id):
+        raise HTTPException(status_code=400, detail="Invalid browser pixel event ID.")
+
+    declared_origin = request.headers.get("x-capi-origin", "")
+    declared_host = (urlparse(declared_origin).hostname or "").lower()
+    if not declared_host:
+        raise HTTPException(status_code=403, detail="Signed site origin required.")
+
+    raw_body = await request.body()
+    if not _verify_capi_signature(
+        raw_body,
+        client.api_key,
+        request.headers.get("x-capi-timestamp", ""),
+        request.headers.get("x-capi-signature", ""),
+    ):
+        raise HTTPException(status_code=403, detail="Invalid signed site proof.")
+
+    allowed_domains = [d.strip().lower() for d in (client.domain or "").split(",") if d.strip()]
+    if allowed_domains and not any(_is_domain_allowed(declared_host, domain) for domain in allowed_domains):
+        raise HTTPException(status_code=403, detail="Unauthorized browser audit domain.")
+
+    await validate_event_site_binding(
+        db,
+        client=client,
+        events=[payload],
+        signed_site_host=declared_origin,
+        installation_id=(request.headers.get("x-buykori-installation-id") or "").strip()[:128] or None,
+        ip_address=_request_client_ip(request),
+    )
+    await check_site_event_rate_limit(client, declared_host, 1)
+
+    stored_name = "BrowserTikTok:PageView"
+    existing = await db.execute(
+        select(EventLog.id).where(
+            EventLog.client_id == client.id,
+            EventLog.event_name == stored_name,
+            EventLog.event_id == payload.event_id,
+        )
+    )
+    if existing.scalar_one_or_none() is not None:
+        return {"accepted": True, "duplicate": True}
+
+    db.add(EventLog(
+        client_id=client.id,
+        event_name=stored_name,
+        event_id=payload.event_id,
+        event_count=0,
+        status="fired",
+        fb_response=json.dumps({
+            "channel": "TikTok Browser Pixel",
+            "state": "fired",
+            "acceptance_unverified": True,
+            "page_url": payload.event_source_url,
+        })[:5000],
+        device_type=(payload.device_type or "")[:24] or None,
+        device_os=(payload.device_os or "")[:40] or None,
+        device_browser=(payload.device_browser or "")[:40] or None,
+        screen_width=payload.screen_width,
+        screen_height=payload.screen_height,
+    ))
+    await db.commit()
+    return {"accepted": True, "duplicate": False}
 
 
 def _strip_internal_custom_data(event_dict: dict) -> dict:

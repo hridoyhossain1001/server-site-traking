@@ -5,6 +5,7 @@ from app.database import AsyncSessionLocal
 from app.models.event_log import EventLog
 from app.schemas.event import EventData
 from app.services.capi_service import send_to_facebook
+from app.security import meta_credentials_configured
 from app.services.ga4_service import send_to_ga4
 from app.services.tiktok_service import send_to_tiktok
 from app.services.webhook_service import send_webhook
@@ -208,7 +209,10 @@ def is_event_enabled_for_platform(client, event_name: str, platform: str) -> boo
     """Check if an event is enabled for a platform under client's event routing rules."""
     # First check global settings
     if platform == "meta":
-        global_enabled = bool(getattr(client, "enable_facebook", True) and client.pixel_id and client.access_token)
+        global_enabled = bool(
+            getattr(client, "enable_facebook", True)
+            and meta_credentials_configured(client)
+        )
     elif platform == "tiktok":
         global_enabled = bool(getattr(client, "enable_tiktok", True) and client.tiktok_pixel_id and client.tiktok_access_token)
     elif platform == "ga4":

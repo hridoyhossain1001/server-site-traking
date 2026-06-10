@@ -15,6 +15,7 @@ from app.services.plan_service import require_growth_access
 
 
 router = APIRouter()
+RECENT_RECOVERY_SUPPRESSION_WINDOW = timedelta(minutes=30)
 
 
 class IncompleteCheckoutUpsert(BaseModel):
@@ -74,13 +75,21 @@ async def upsert_incomplete_checkout(
             IncompleteCheckout.client_id == client.id,
             IncompleteCheckout.visitor_id == visitor_id,
             IncompleteCheckout.phone_hash == phone_hash,
-            IncompleteCheckout.status.in_(["active", "incomplete", "contacted"]),
+            IncompleteCheckout.status.in_(["active", "incomplete", "contacted", "recovered"]),
         )
-        .order_by(desc(IncompleteCheckout.id))
+        .order_by(desc(IncompleteCheckout.last_activity_at), desc(IncompleteCheckout.id))
         .limit(1)
     )
     draft = result.scalar_one_or_none()
     now = datetime.now(timezone.utc)
+    if draft and draft.status == "recovered":
+        converted_at = draft.converted_at
+        if converted_at and converted_at.tzinfo is None:
+            converted_at = converted_at.replace(tzinfo=timezone.utc)
+        if converted_at and now - converted_at <= RECENT_RECOVERY_SUPPRESSION_WINDOW:
+            return {"success": True, "id": draft.id, "status": draft.status, "suppressed": True}
+        draft = None
+
     if not draft:
         draft = IncompleteCheckout(client_id=client.id, visitor_id=visitor_id, phone=phone, phone_hash=phone_hash)
         db.add(draft)
@@ -115,15 +124,16 @@ async def convert_incomplete_checkout(
     ]
     if payload.visitor_id:
         clauses.append(IncompleteCheckout.visitor_id == payload.visitor_id.strip())
-    result = await db.execute(
-        select(IncompleteCheckout).where(and_(*clauses)).order_by(desc(IncompleteCheckout.last_activity_at)).limit(1)
-    )
-    draft = result.scalar_one_or_none()
-    if not draft:
+    result = await db.execute(select(IncompleteCheckout).where(and_(*clauses)).order_by(desc(IncompleteCheckout.last_activity_at)))
+    drafts = result.scalars().all()
+    if not drafts:
         return {"success": True, "converted": False}
-    draft.status = "recovered"
-    draft.order_id = payload.order_id.strip()
-    draft.converted_at = datetime.now(timezone.utc)
-    draft.last_activity_at = draft.converted_at
+    converted_at = datetime.now(timezone.utc)
+    order_id = payload.order_id.strip()
+    for draft in drafts:
+        draft.status = "recovered"
+        draft.order_id = order_id
+        draft.converted_at = converted_at
+        draft.last_activity_at = converted_at
     await db.commit()
-    return {"success": True, "converted": True, "id": draft.id}
+    return {"success": True, "converted": True, "id": drafts[0].id, "converted_count": len(drafts)}

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import time
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
@@ -15,6 +17,16 @@ from app.services.redis_pool import get_redis
 
 ACTIVE_STATUS = "active"
 RELEASED_STATUSES = {"released", "transferred"}
+SITE_BINDING_EVENT_TOUCH_INTERVAL_SECONDS = int(
+    os.getenv("SITE_BINDING_EVENT_TOUCH_INTERVAL_SECONDS", "30")
+)
+SITE_BINDING_VALIDATION_CACHE_SECONDS = int(
+    os.getenv("SITE_BINDING_VALIDATION_CACHE_SECONDS", "30")
+)
+SITE_BINDING_VALIDATION_CACHE_MAX_SIZE = int(
+    os.getenv("SITE_BINDING_VALIDATION_CACHE_MAX_SIZE", "10000")
+)
+_SITE_BINDING_VALIDATION_CACHE: dict[str, float] = {}
 
 
 def root_domain_for_site(site_host: str) -> str:
@@ -64,6 +76,81 @@ def _add_site_security_event(
         ip_address=ip_address,
         details=details[:2000],
     ))
+
+
+async def _should_touch_site_binding(client_id: int, root_domain: str) -> bool:
+    """Throttle noisy last_event_at writes while still validating every event."""
+    if SITE_BINDING_EVENT_TOUCH_INTERVAL_SECONDS <= 0:
+        return True
+
+    redis = get_redis()
+    if redis is None:
+        return True
+
+    try:
+        key = f"site_binding_touch:{client_id}:{root_domain}"
+        return bool(
+            await redis.set(
+                key,
+                "1",
+                nx=True,
+                ex=SITE_BINDING_EVENT_TOUCH_INTERVAL_SECONDS,
+            )
+        )
+    except Exception:
+        return True
+
+
+def _binding_validation_cache_key(
+    client_id: int,
+    root_domain: str,
+    installation_id: str | None,
+) -> str:
+    install_part = installation_id or "-"
+    return f"site_binding_valid:{client_id}:{root_domain}:{install_part}"
+
+
+async def _site_binding_cache_valid(
+    client_id: int,
+    root_domain: str,
+    installation_id: str | None,
+) -> bool:
+    if SITE_BINDING_VALIDATION_CACHE_SECONDS <= 0:
+        return False
+
+    key = _binding_validation_cache_key(client_id, root_domain, installation_id)
+    expires_at = _SITE_BINDING_VALIDATION_CACHE.get(key)
+    if not expires_at:
+        return False
+    if expires_at <= time.monotonic():
+        _SITE_BINDING_VALIDATION_CACHE.pop(key, None)
+        return False
+    return True
+
+
+async def _mark_site_binding_cache_valid(
+    client_id: int,
+    root_domain: str,
+    installation_id: str | None,
+) -> None:
+    if SITE_BINDING_VALIDATION_CACHE_SECONDS <= 0:
+        return
+
+    if len(_SITE_BINDING_VALIDATION_CACHE) >= SITE_BINDING_VALIDATION_CACHE_MAX_SIZE:
+        now = time.monotonic()
+        expired_keys = [
+            key
+            for key, expires_at in _SITE_BINDING_VALIDATION_CACHE.items()
+            if expires_at <= now
+        ]
+        for key in expired_keys[:1000]:
+            _SITE_BINDING_VALIDATION_CACHE.pop(key, None)
+        if len(_SITE_BINDING_VALIDATION_CACHE) >= SITE_BINDING_VALIDATION_CACHE_MAX_SIZE:
+            _SITE_BINDING_VALIDATION_CACHE.clear()
+
+    _SITE_BINDING_VALIDATION_CACHE[
+        _binding_validation_cache_key(client_id, root_domain, installation_id)
+    ] = time.monotonic() + SITE_BINDING_VALIDATION_CACHE_SECONDS
 
 
 async def _record_site_security_event(
@@ -212,6 +299,9 @@ async def validate_event_site_binding(
                 )
                 raise _site_forbidden_error("Event source URL does not match the connected website.")
 
+    if await _site_binding_cache_valid(int(client.id), root_domain, installation_id):
+        return
+
     binding = await get_active_site_binding(db, site_host)
     now = datetime.now(timezone.utc)
     if binding:
@@ -237,12 +327,18 @@ async def validate_event_site_binding(
                 ),
             )
             binding.installation_id = installation_id
+            should_touch = True
+        else:
+            should_touch = False
 
         if installation_id and not binding.installation_id:
             binding.installation_id = installation_id
-        binding.site_host = site_host
-        binding.last_seen_at = now
-        binding.last_event_at = now
+            should_touch = True
+        if should_touch or await _should_touch_site_binding(int(client.id), root_domain):
+            binding.site_host = site_host
+            binding.last_seen_at = now
+            binding.last_event_at = now
+        await _mark_site_binding_cache_valid(int(client.id), root_domain, installation_id)
         return
 
     latest_for_client = await get_latest_site_binding(db, site_host, int(client.id))

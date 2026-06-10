@@ -25,6 +25,8 @@ add_action( 'woocommerce_order_status_refunded', 'buykorigw_on_order_cancelled',
 // ─── 0. Attribution Snapshot: Save cookies/UTM at checkout (before redirect) ───
 add_action( 'woocommerce_checkout_update_order_meta', 'buykorigw_save_attribution_snapshot', 10, 1 );
 add_action( 'woocommerce_new_order', 'buykorigw_save_attribution_snapshot', 10, 1 );
+add_action( 'woocommerce_checkout_order_created', 'buykorigw_save_attribution_snapshot', 5, 1 );
+add_action( 'woocommerce_store_api_checkout_order_processed', 'buykorigw_save_attribution_snapshot', 5, 1 );
 add_action( 'woocommerce_checkout_order_created', 'buykorigw_send_order_initiate_checkout_fallback', 999, 1 );
 add_action( 'woocommerce_checkout_order_processed', 'buykorigw_send_order_initiate_checkout_fallback', 30, 1 );
 add_action( 'woocommerce_thankyou', 'buykorigw_send_order_initiate_checkout_fallback', 5, 1 );
@@ -52,23 +54,34 @@ function buykorigw_mark_incomplete_checkout_recovered( $order_or_id ) {
  * পেমেন্ট গেটওয়ে (bKash/Nagad/SSLCommerz) redirect-এর পরও
  * থ্যাংক ইউ পেজে ডেটা available থাকে।
  */
-function buykorigw_save_attribution_snapshot( $order_id ) {
-    // Prevent duplicate saves
-    if ( buykorigw_get_order_meta( $order_id, '_buykorigw_snapshot_saved' ) ) {
-        return;
-    }
-
-    $order = function_exists( 'wc_get_order' ) ? wc_get_order( $order_id ) : null;
+function buykorigw_save_attribution_snapshot( $order_or_id ) {
+    $order = is_a( $order_or_id, 'WC_Order' )
+        ? $order_or_id
+        : ( function_exists( 'wc_get_order' ) ? wc_get_order( $order_or_id ) : null );
     if ( ! $order ) {
         return;
     }
+
+    $current_hook = function_exists( 'current_filter' ) ? current_filter() : '';
+    $created_via = method_exists( $order, 'get_created_via' ) ? strtolower( (string) $order->get_created_via() ) : '';
+    if ( $current_hook === 'woocommerce_new_order' ) {
+        if ( is_admin() && ! wp_doing_ajax() ) {
+            return;
+        }
+        if ( $created_via && ! in_array( $created_via, array( 'checkout', 'store-api', 'rest-api' ), true ) ) {
+            return;
+        }
+    }
+
+    $wrote_snapshot = false;
 
     // Cookies
     $cookie_keys = array( '_fbp', '_fbc', '_ttp', '_ttclid', '_ga', '_buykorigw_vid', '_buykorigw_ic_sent', '_buykorigw_ic_event_id' );
     foreach ( $cookie_keys as $key ) {
         $value = isset( $_COOKIE[ $key ] ) ? sanitize_text_field( wp_unslash( $_COOKIE[ $key ] ) ) : '';
-        if ( ! empty( $value ) ) {
+        if ( ! empty( $value ) && ! $order->get_meta( '_buykorigw_snapshot' . $key ) ) {
             $order->update_meta_data( '_buykorigw_snapshot' . $key, $value );
+            $wrote_snapshot = true;
         }
     }
 
@@ -77,8 +90,9 @@ function buykorigw_save_attribution_snapshot( $order_id ) {
         if ( strpos( $key, '_ga_' ) === 0 ) {
             $ga_session_val = sanitize_text_field( wp_unslash( $val ) );
             $parts = explode( '.', $ga_session_val );
-            if ( count( $parts ) >= 3 ) {
+            if ( count( $parts ) >= 3 && ! $order->get_meta( '_buykorigw_snapshot_ga_session_id' ) ) {
                 $order->update_meta_data( '_buykorigw_snapshot_ga_session_id', $parts[2] );
+                $wrote_snapshot = true;
             }
             break;
         }
@@ -88,8 +102,9 @@ function buykorigw_save_attribution_snapshot( $order_id ) {
     $ga_cookie = isset( $_COOKIE['_ga'] ) ? sanitize_text_field( wp_unslash( $_COOKIE['_ga'] ) ) : '';
     if ( $ga_cookie ) {
         $parts = explode( '.', $ga_cookie );
-        if ( count( $parts ) >= 4 ) {
+        if ( count( $parts ) >= 4 && ! $order->get_meta( '_buykorigw_snapshot_ga_client_id' ) ) {
             $order->update_meta_data( '_buykorigw_snapshot_ga_client_id', $parts[ count( $parts ) - 2 ] . '.' . $parts[ count( $parts ) - 1 ] );
+            $wrote_snapshot = true;
         }
     }
 
@@ -97,23 +112,32 @@ function buykorigw_save_attribution_snapshot( $order_id ) {
     $utm_keys = array( 'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term' );
     foreach ( $utm_keys as $key ) {
         $val = isset( $_COOKIE[ '_buykorigw_' . $key ] ) ? sanitize_text_field( wp_unslash( $_COOKIE[ '_buykorigw_' . $key ] ) ) : '';
-        if ( ! empty( $val ) ) {
+        if ( ! empty( $val ) && ! $order->get_meta( '_buykorigw_snapshot_' . $key ) ) {
             $order->update_meta_data( '_buykorigw_snapshot_' . $key, $val );
+            $wrote_snapshot = true;
         }
     }
 
     // IP and User Agent
     $ip = function_exists( 'buykorigw_get_real_ip' ) ? buykorigw_get_real_ip() : ( $_SERVER['REMOTE_ADDR'] ?? '' );
     $ua = sanitize_text_field( $_SERVER['HTTP_USER_AGENT'] ?? '' );
-    if ( $ip ) {
+    if ( $ip && ! $order->get_meta( '_buykorigw_snapshot_ip' ) ) {
         $order->update_meta_data( '_buykorigw_snapshot_ip', $ip );
+        $wrote_snapshot = true;
     }
-    if ( $ua ) {
+    if ( $ua && ! $order->get_meta( '_buykorigw_snapshot_ua' ) ) {
         $order->update_meta_data( '_buykorigw_snapshot_ua', $ua );
+        $wrote_snapshot = true;
     }
 
-    $order->update_meta_data( '_buykorigw_snapshot_saved', 1 );
-    $order->save();
+    if (
+        $wrote_snapshot
+        || $order->get_meta( '_buykorigw_snapshot_fbp' )
+        || $order->get_meta( '_buykorigw_snapshot_buykorigw_vid' )
+    ) {
+        $order->update_meta_data( '_buykorigw_snapshot_saved', 1 );
+        $order->save();
+    }
 }
 
 function buykorigw_add_order_note( $order_id, $note ) {
@@ -989,7 +1013,7 @@ function buykorigw_send_refund_event( $order ) {
     $event_payload = array(
         'event_name'       => 'Refund',
         'event_time'       => time(),
-        'event_id'         => 'wc_refund_' . $order_id . '_' . time(),
+        'event_id'         => 'wc_refund_' . $order_id,
         'event_source_url' => $order->get_checkout_order_received_url(),
         'action_source'    => 'website',
         'user_data'        => $user_data,

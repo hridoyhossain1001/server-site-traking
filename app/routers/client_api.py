@@ -17,11 +17,12 @@ from app.models.audit_log import AuditLog
 from app.models.plugin_connect_session import PluginConnectSession
 from app.models.usage_counter import UsageCounter
 from app.routers.client_portal import get_client_from_portal_session
-from app.security import encrypt_token, decrypt_token
+from app.security import encrypt_token, decrypt_token, meta_credentials_configured
 from app.routers.deferred_events import _queue_confirmed_event
 import calendar
 from app.models.client_user import ClientUser
 from app.routers.client_auth import (
+    _clean_domain,
     _clean_name,
     _validate_email,
     _validate_password,
@@ -236,7 +237,7 @@ async def list_incomplete_checkouts(
             raise HTTPException(status_code=400, detail="Invalid incomplete checkout status.")
         stmt = stmt.where(IncompleteCheckout.status == status)
     else:
-        stmt = stmt.where(IncompleteCheckout.status.in_(["active", "incomplete", "contacted", "recovered"]))
+        stmt = stmt.where(IncompleteCheckout.status.in_(["incomplete", "contacted", "recovered"]))
     result = await db.execute(stmt.order_by(desc(IncompleteCheckout.last_activity_at)).limit(limit))
     items = [_incomplete_checkout_json(row) for row in result.scalars().all()]
     counts_result = await db.execute(
@@ -620,12 +621,13 @@ async def authorize_plugin_connect(
 @router.get("/credentials")
 async def get_credentials(client: Client = Depends(get_current_portal_client)):
     growth_enabled = has_growth_access(client)
+    meta_configured = meta_credentials_configured(client)
     return {
         "Meta CAPI": {
             "enabled": client.enable_facebook,
-            "pixelIdOrMeasurementId": client.pixel_id or "",
-            "accessToken": "EAAD" + "*" * 12 if client.access_token else "",
-            "status": "Valid" if client.pixel_id and client.access_token else "Untested",
+            "pixelIdOrMeasurementId": client.pixel_id if client.pixel_id != "0" else "",
+            "accessToken": "EAAD" + "*" * 12 if meta_configured else "",
+            "status": "Valid" if meta_configured else "Untested",
             "testEventCode": client.test_event_code or ""
         },
         "TikTok Events API": {
@@ -704,7 +706,8 @@ async def update_credentials(
     from app.dependencies import clear_client_cache
     clear_client_cache(client.api_key)
 
-    meta_status = "Valid" if client.pixel_id and client.access_token else "Untested"
+    meta_configured = meta_credentials_configured(client)
+    meta_status = "Valid" if meta_configured else "Untested"
     tiktok_status = "Valid" if client.tiktok_pixel_id and client.tiktok_access_token else "Untested"
     ga4_status = "Valid" if client.ga4_measurement_id and client.ga4_api_secret else "Untested"
 
@@ -713,8 +716,8 @@ async def update_credentials(
         "credentials": {
             "Meta CAPI": {
                 "enabled": client.enable_facebook,
-                "pixelIdOrMeasurementId": client.pixel_id or "",
-                "accessToken": "EAAD" + "*" * 12 if client.access_token else "",
+                "pixelIdOrMeasurementId": client.pixel_id if client.pixel_id != "0" else "",
+                "accessToken": "EAAD" + "*" * 12 if meta_configured else "",
                 "status": meta_status,
                 "testEventCode": client.test_event_code or ""
             },
@@ -790,6 +793,9 @@ async def get_events(
         elif platform == "TikTok Events API":
             query = query.where(EventLog.event_name.like("TikTok:%"))
             count_query = count_query.where(EventLog.event_name.like("TikTok:%"))
+        elif platform == "TikTok Browser Pixel":
+            query = query.where(EventLog.event_name.like("BrowserTikTok:%"))
+            count_query = count_query.where(EventLog.event_name.like("BrowserTikTok:%"))
         elif platform == "Webhook":
             query = query.where(EventLog.event_name.like("Webhook:%"))
             count_query = count_query.where(EventLog.event_name.like("Webhook:%"))
@@ -819,6 +825,8 @@ async def get_events(
             display_event_name = parts[1]
             if channel.lower() == "tiktok":
                 log_platform = "TikTok Events API"
+            elif channel.lower() == "browsertiktok":
+                log_platform = "TikTok Browser Pixel"
             elif channel.lower() == "ga4":
                 log_platform = "GA4"
             elif channel.lower() in ("facebook", "capi", "meta"):
@@ -826,7 +834,7 @@ async def get_events(
             elif channel.lower() == "webhook":
                 log_platform = "Webhook"
         else:
-            if getattr(client, "enable_facebook", True) and client.pixel_id and client.access_token:
+            if getattr(client, "enable_facebook", True) and meta_credentials_configured(client):
                 log_platform = "Meta CAPI"
             elif getattr(client, "enable_tiktok", True) and client.tiktok_pixel_id and client.tiktok_access_token:
                 log_platform = "TikTok Events API"
@@ -840,8 +848,8 @@ async def get_events(
             "timestamp": log.created_at.isoformat() if log.created_at else datetime.now(timezone.utc).isoformat(),
             "name": display_event_name,
             "platform": log_platform,
-            "status": "Success" if log.status == "success" else "Failed",
-            "httpCode": 200 if log.status == "success" else 400,
+            "status": "Fired" if log.status == "fired" else ("Success" if log.status == "success" else "Failed"),
+            "httpCode": 202 if log.status == "fired" else (200 if log.status == "success" else 400),
             "deduplicationKey": log.event_id or f"did_{log.id}",
             "payload": {
                 "event_name": display_event_name,
@@ -857,12 +865,16 @@ async def get_events(
                 "X-Client-IP": log.ip_address or "127.0.0.1"
             },
             "responseBody": {
+                "state": "fired",
+                "upstream_acceptance": "unverified",
+                "message": "Browser pixel call was invoked. Confirm acceptance in TikTok Events Manager."
+            } if log.status == "fired" else ({
                 "events_received": 1,
                 "status": "accepted",
                 "fb_trace_id": f"FBT_trace_{log.id}"
             } if log.status == "success" else {
                 "error": {"message": log.error_message or "API execution failed", "code": 400}
-            },
+            }),
             "latencyMs": None
         })
 
@@ -927,7 +939,7 @@ async def get_events_trend(
             elif channel in ("facebook", "capi", "meta"):
                 log_platform = "Meta CAPI"
         else:
-            if getattr(client, "enable_facebook", True) and client.pixel_id and client.access_token:
+            if getattr(client, "enable_facebook", True) and meta_credentials_configured(client):
                 log_platform = "Meta CAPI"
             elif getattr(client, "enable_tiktok", True) and client.tiktok_pixel_id and client.tiktok_access_token:
                 log_platform = "TikTok Events API"
@@ -974,7 +986,10 @@ async def get_api_logs(
 ):
     result = await db.execute(
         select(EventLog)
-        .where(EventLog.client_id == client.id)
+        .where(
+            EventLog.client_id == client.id,
+            ~EventLog.event_name.like("BrowserTikTok:%"),
+        )
         .order_by(desc(EventLog.created_at))
         .limit(limit)
     )
@@ -1003,7 +1018,7 @@ async def get_api_logs(
                 log_platform = "Webhook"
                 endpoint = client.webhook_url or "Webhook URL"
         else:
-            if getattr(client, "enable_facebook", True) and client.pixel_id and client.access_token:
+            if getattr(client, "enable_facebook", True) and meta_credentials_configured(client):
                 log_platform = "Meta CAPI"
             elif getattr(client, "enable_tiktok", True) and client.tiktok_pixel_id and client.tiktok_access_token:
                 log_platform = "TikTok Events API"
@@ -1162,6 +1177,8 @@ async def get_live_stream_pulse(
         display_event_name = parts[1]
         if channel.lower() == "tiktok":
             log_platform = "TikTok Events API"
+        elif channel.lower() == "browsertiktok":
+            log_platform = "TikTok Browser Pixel"
         elif channel.lower() == "ga4":
             log_platform = "GA4"
         elif channel.lower() == "webhook":
@@ -1173,11 +1190,14 @@ async def get_live_stream_pulse(
             "timestamp": log.created_at.isoformat(),
             "name": display_event_name,
             "platform": log_platform,
-            "status": "Success" if log.status == "success" else "Failed",
-            "httpCode": 200 if log.status == "success" else 400,
+            "status": "Fired" if log.status == "fired" else ("Success" if log.status == "success" else "Failed"),
+            "httpCode": 202 if log.status == "fired" else (200 if log.status == "success" else 400),
             "deduplicationKey": log.event_id or f"did_{log.id}",
             "payload": {"event_name": display_event_name},
-            "responseBody": {"status": "accepted"},
+            "responseBody": {
+                "state": "fired",
+                "upstream_acceptance": "unverified",
+            } if log.status == "fired" else {"status": "accepted"},
             "latencyMs": 75
         }
     }
@@ -1632,6 +1652,10 @@ class SwitchStoreRequest(BaseModel):
     target_client_id: int
 
 
+class StoreDomainUpdateRequest(BaseModel):
+    domain: str | None = None
+
+
 @router.get("/stores")
 async def list_stores(
     request: Request,
@@ -1660,6 +1684,48 @@ async def list_stores(
             })
 
     return {"stores": stores, "current_client_id": current_client.id}
+
+
+@router.patch("/store/domain")
+async def update_current_store_domain(
+    payload: StoreDomainUpdateRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Update the active store domain from the authenticated client portal session."""
+    require_allowed_origin(request)
+    user, current_client, _ = await get_client_user_from_cookie(request, db)
+
+    domain = _clean_domain(payload.domain) if payload.domain else None
+    if getattr(current_client, "trial_started_at", None):
+        await require_trial_available(
+            db,
+            domain=domain,
+            pixel_id=current_client.pixel_id,
+            exclude_client_id=current_client.id,
+        )
+
+    current_client.domain = domain
+    if getattr(current_client, "trial_started_at", None):
+        await record_trial_identity(db, current_client, source="store_domain")
+
+    db.add(AuditLog(
+        actor=user.email,
+        action="client.domain_updated",
+        client_id=current_client.id,
+        ip_address=request.client.host if request.client else None,
+        details=f"domain={domain or ''}",
+    ))
+    await db.commit()
+
+    from app.dependencies import clear_client_cache
+    clear_client_cache(current_client.api_key)
+
+    return {
+        "success": True,
+        "client_id": current_client.id,
+        "domain": current_client.domain or "",
+    }
 
 
 @router.post("/switch-store")
@@ -1732,7 +1798,7 @@ async def create_store(
     new_client = Client(
         name=business_name,
         pixel_id="0",
-        access_token=encrypt_token("pending_setup"),
+        access_token="",
         domain=domain,
         api_key=secrets.token_urlsafe(24),
         public_key=secrets.token_urlsafe(18),

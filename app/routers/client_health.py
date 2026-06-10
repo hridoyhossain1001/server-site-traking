@@ -26,6 +26,7 @@ from app.dependencies import get_current_client, CachedClient
 from app.models.event_log import EventLog
 from app.models.client import Client
 from app.routers.admin_api import verify_admin_api_key
+from app.security import decrypt_token, meta_credentials_configured
 from app.services.plan_service import (
     has_growth_access,
     plan_summary,
@@ -382,11 +383,10 @@ async def client_get_setup(
     if not c:
         raise HTTPException(status_code=404, detail="Client not found")
 
-    from app.security import decrypt_token
     # Safely decrypt access token for display (masked)
     raw_token = ""
     try:
-        raw_token = decrypt_token(c.access_token) if c.access_token and c.access_token != "pending_setup" else ""
+        raw_token = decrypt_token(c.access_token) if meta_credentials_configured(c) else ""
     except Exception:
         raw_token = ""
 

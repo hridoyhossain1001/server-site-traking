@@ -257,7 +257,7 @@ async def client_signup(
     client = Client(
         name=business_name,
         pixel_id="0",
-        access_token=encrypt_token("pending_setup"),
+        access_token="",
         domain=domain,
         api_key=os.urandom(24).hex(),
         public_key=os.urandom(18).hex(),

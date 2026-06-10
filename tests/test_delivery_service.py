@@ -2,7 +2,19 @@ import pytest
 from unittest.mock import AsyncMock, patch
 from types import SimpleNamespace
 from app.schemas.event import EventData
-from app.services.delivery_service import deliver_events_to_platforms
+from app.services.delivery_service import deliver_events_to_platforms, is_event_enabled_for_platform
+from app.security import encrypt_token
+
+
+def test_pending_meta_credentials_do_not_enable_delivery():
+    client = SimpleNamespace(
+        pixel_id="0",
+        access_token=encrypt_token("pending_setup"),
+        enable_facebook=True,
+        event_rules=None,
+    )
+
+    assert not is_event_enabled_for_platform(client, "PageView", "meta")
 
 @pytest.mark.anyio
 @patch("app.services.delivery_service.send_to_facebook", new_callable=AsyncMock)
@@ -16,7 +28,7 @@ async def test_delivery_facebook_primary(
         id=1,
         name="Test Client",
         pixel_id="123456",
-        access_token="fb-token",
+        access_token=encrypt_token("fb-token"),
         enable_facebook=True,
         tiktok_pixel_id="tiktok-pixel",
         tiktok_access_token="tiktok-token",
@@ -172,7 +184,7 @@ async def test_delivery_with_routing_rules(
         id=1,
         name="Test Rules Client",
         pixel_id="123456",
-        access_token="fb-token",
+        access_token=encrypt_token("fb-token"),
         enable_facebook=True,
         tiktok_pixel_id="tiktok-pixel",
         tiktok_access_token="tiktok-token",
@@ -227,7 +239,7 @@ async def test_delivery_with_all_events_filtered(mock_send_ga4, mock_send_tiktok
         id=1,
         name="Test Rules Client",
         pixel_id="123456",
-        access_token="fb-token",
+        access_token=encrypt_token("fb-token"),
         enable_facebook=True,
         tiktok_pixel_id="tiktok-pixel",
         tiktok_access_token="tiktok-token",

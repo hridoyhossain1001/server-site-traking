@@ -162,6 +162,12 @@ def main() -> int:
     parser.add_argument("--base", default="HEAD~1", help="Git ref to diff against")
     parser.add_argument("--working-tree", action="store_true", help="Include staged and unstaged tracked production files")
     parser.add_argument("--include-untracked", action="store_true", help="Also include untracked production files when --working-tree is set")
+    parser.add_argument(
+        "--only",
+        action="append",
+        default=[],
+        help="Limit deployment to a specific deployable path. Can be passed multiple times.",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Print planned upload/delete/restart steps without connecting")
     parser.add_argument("--skip-migrations", action="store_true")
     parser.add_argument("--skip-restart", action="store_true")
@@ -174,6 +180,13 @@ def main() -> int:
     password = os.environ.get("DO_SSH_PASSWORD")
 
     changes = changed_files(args.base, include_working_tree=args.working_tree, include_untracked=args.include_untracked)
+    if args.only:
+        selected = {path.replace("\\", "/") for path in args.only}
+        changes = [
+            (status_code, rel_path)
+            for status_code, rel_path in changes
+            if rel_path.replace("\\", "/") in selected
+        ]
     if not args.working_tree:
         local_changes = local_deployable_changes()
         if local_changes:

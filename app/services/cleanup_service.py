@@ -41,33 +41,35 @@ async def _batched_delete(db, model, condition, batch_size: int = CLEANUP_BATCH_
 async def auto_cleanup_database():
     """
     Background task to periodically delete old records.
-    Cleans: EventLogs (30d), EventDedup (30d), EventOutbox sent/dead (30d),
-    FailedEvents dead/success (30d), UsageCounters (400d).
+    Cleans: EventLogs (60d), EventDedup (60d), EventOutbox sent/dead (90d),
+    FailedEvents dead/success (90d), UsageCounters (400d).
     Uses batched deletes for large tables to prevent long table locks.
     Runs once every 24 hours.
     """
-    retention_days = 30
-    incomplete_checkout_retention_days = int(os.getenv("INCOMPLETE_CHECKOUT_RETENTION_DAYS", "30"))
+    event_log_retention_days = int(os.getenv("EVENT_LOG_RETENTION_DAYS", "60"))
+    actionable_event_retention_days = int(os.getenv("ACTIONABLE_EVENT_RETENTION_DAYS", "90"))
+    incomplete_checkout_retention_days = int(os.getenv("INCOMPLETE_CHECKOUT_RETENTION_DAYS", "180"))
     usage_retention_days = 400  # Keep monthly quota counters long enough for audits.
     sleep_duration = 86400  # 24 hours in seconds
 
     while True:
         try:
             logger.info("🧹 Starting scheduled database cleanup...")
-            cutoff_date = datetime.now(timezone.utc) - timedelta(days=retention_days)
+            event_log_cutoff = datetime.now(timezone.utc) - timedelta(days=event_log_retention_days)
+            actionable_event_cutoff = datetime.now(timezone.utc) - timedelta(days=actionable_event_retention_days)
             usage_cutoff = datetime.now(timezone.utc) - timedelta(days=usage_retention_days)
             incomplete_checkout_cutoff = datetime.now(timezone.utc) - timedelta(days=incomplete_checkout_retention_days)
 
             async with AsyncSessionLocal() as db:
-                # Delete old EventLogs (batched — can be millions of rows)
+                # Delete old EventLogs (batched — can be millions of rows).
                 logs_deleted = await _batched_delete(
-                    db, EventLog, EventLog.created_at < cutoff_date
+                    db, EventLog, EventLog.created_at < event_log_cutoff
                 )
 
                 # Delete old EventDedup (batched)
                 try:
                     dedup_deleted = await _batched_delete(
-                        db, EventDedup, EventDedup.created_at < cutoff_date
+                        db, EventDedup, EventDedup.created_at < event_log_cutoff
                     )
                 except Exception as e:
                     logger.warning(f"Could not clean EventDedup: {e}")
@@ -79,7 +81,7 @@ async def auto_cleanup_database():
                         db,
                         FailedEvent,
                         (FailedEvent.status.in_(["success", "dead"]))
-                        & (FailedEvent.created_at < cutoff_date),
+                        & (FailedEvent.created_at < actionable_event_cutoff),
                     )
                 except Exception as e:
                     logger.warning(f"Could not clean FailedEvents: {e}")
@@ -91,7 +93,7 @@ async def auto_cleanup_database():
                         db,
                         EventOutbox,
                         (EventOutbox.status.in_(["sent", "dead"]))
-                        & (EventOutbox.created_at < cutoff_date),
+                        & (EventOutbox.created_at < actionable_event_cutoff),
                     )
                 except Exception as e:
                     logger.warning(f"Could not clean EventOutbox: {e}")
@@ -102,7 +104,7 @@ async def auto_cleanup_database():
                         db,
                         CourierBookingJob,
                         (CourierBookingJob.status.in_(["sent", "dead", "cancelled"]))
-                        & (CourierBookingJob.created_at < cutoff_date),
+                        & (CourierBookingJob.created_at < actionable_event_cutoff),
                     )
                 except Exception as e:
                     logger.warning(f"Could not clean CourierBookingJobs: {e}")
@@ -124,10 +126,10 @@ async def auto_cleanup_database():
                     sessions_deleted = await _batched_delete(
                         db,
                         ClientSession,
-                        (ClientSession.expires_at < cutoff_date)
+                        (ClientSession.expires_at < event_log_cutoff)
                         | (
                             (ClientSession.revoked_at.is_not(None))
-                            & (ClientSession.created_at < cutoff_date)
+                            & (ClientSession.created_at < event_log_cutoff)
                         ),
                     )
                 except Exception as e:
@@ -151,7 +153,10 @@ async def auto_cleanup_database():
                 f"{outbox_deleted} outbox rows, {booking_jobs_deleted} booking jobs, "
                 f"{usage_deleted} usage counters, "
                 f"{sessions_deleted} sessions, {incomplete_deleted} incomplete checkouts "
-                f"(retention: {retention_days}d logs, {usage_retention_days}d counters)."
+                f"(retention: {event_log_retention_days}d logs/dedup, "
+                f"{actionable_event_retention_days}d actionable event rows, "
+                f"{incomplete_checkout_retention_days}d incomplete checkouts, "
+                f"{usage_retention_days}d counters)."
             )
 
         except Exception as e:

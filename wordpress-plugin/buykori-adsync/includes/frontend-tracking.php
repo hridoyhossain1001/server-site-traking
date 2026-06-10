@@ -147,6 +147,7 @@ function buykorigw_inject_tracker() {
     $tracker_data = array(
         'ajax_url'    => admin_url( 'admin-ajax.php' ),
         'rest_url'    => rest_url( 'buykori/v1/track' ),
+        'browser_audit_url' => rest_url( 'buykori/v1/browser-audit' ),
         'atc_receipts_url' => rest_url( 'buykori/v1/atc-receipts' ),
         'incomplete_checkout_url' => rest_url( 'buykori/v1/incomplete-checkout' ),
         'store_cart_url' => rest_url( 'wc/store/v1/cart' ),
@@ -156,6 +157,7 @@ function buykorigw_inject_tracker() {
         'content_id_format' => isset( $settings['content_id_format'] ) ? $settings['content_id_format'] : 'id',
         'currency' => function_exists( 'get_woocommerce_currency' ) ? get_woocommerce_currency() : 'BDT',
         'enable_hybrid' => isset( $settings['enable_hybrid'] ) ? (bool) $settings['enable_hybrid'] : false,
+        'enable_tiktok_pageview' => isset( $settings['enable_tiktok_pageview'] ) ? (bool) $settings['enable_tiktok_pageview'] : true,
         'enable_variations' => true,
         'fb_pixel_id'  => isset( $settings['fb_pixel_id'] ) ? trim( $settings['fb_pixel_id'] ) : '',
         'tt_pixel_id'  => isset( $settings['tt_pixel_id'] ) ? trim( $settings['tt_pixel_id'] ) : '',
@@ -300,10 +302,6 @@ function buykorigw_ajax_track_event() {
         wp_send_json_error( 'Invalid origin' );
     }
 
-    if ( buykorigw_ajax_rate_limited() ) {
-        wp_send_json_error( 'Rate limit exceeded', 429 );
-    }
-
     // ─── Whitelist allowed event names ──────────────────────────────────
     $allowed_events = array( 'PageView', 'ViewContent', 'AddToCart', 'ViewCart', 'RemoveFromCart', 'InitiateCheckout', 'AddPaymentInfo', 'Purchase', 'Lead', 'Search', 'Identify', 'Refund' );
 
@@ -334,6 +332,10 @@ function buykorigw_ajax_track_event() {
         wp_send_json_error( 'Invalid event name' );
     }
 
+    if ( buykorigw_ajax_rate_limited( $event_name ) ) {
+        wp_send_json_error( 'Rate limit exceeded', 429 );
+    }
+
     $custom_data = json_decode( $event_json, true );
     if ( ! is_array( $custom_data ) ) {
         $custom_data = array();
@@ -350,33 +352,7 @@ function buykorigw_ajax_track_event() {
         ? buykorigw_normalize_event_custom_data( $custom_data, $event_name, $settings )
         : buykorigw_add_marketing_params( $custom_data );
 
-    if ( empty( $fbp ) && ! empty( $_COOKIE['_fbp'] ) ) {
-        $fbp = sanitize_text_field( wp_unslash( $_COOKIE['_fbp'] ) );
-    }
-    if ( empty( $fbp ) ) {
-        $fbp = 'fb.1.' . (string) ( time() * 1000 ) . '.' . wp_rand( 1000000000, 9999999999 );
-    }
-    if ( empty( $fbc ) && ! empty( $_COOKIE['_fbc'] ) ) {
-        $fbc = sanitize_text_field( wp_unslash( $_COOKIE['_fbc'] ) );
-    }
-    if ( empty( $fbc ) && ! empty( $fbclid ) ) {
-        $fbc = 'fb.1.' . (string) ( time() * 1000 ) . '.' . $fbclid;
-    }
-    if ( empty( $ttp ) && ! empty( $_COOKIE['_ttp'] ) ) {
-        $ttp = sanitize_text_field( wp_unslash( $_COOKIE['_ttp'] ) );
-    }
-    if ( empty( $ttp ) ) {
-        $ttp = wp_generate_uuid4();
-    }
-    if ( empty( $ttclid ) && ! empty( $_COOKIE['_ttclid'] ) ) {
-        $ttclid = sanitize_text_field( wp_unslash( $_COOKIE['_ttclid'] ) );
-    }
-    if ( empty( $external_id ) && ! empty( $_COOKIE['_buykorigw_vid'] ) ) {
-        $external_id = sanitize_text_field( wp_unslash( $_COOKIE['_buykorigw_vid'] ) );
-    }
-    if ( empty( $external_id ) ) {
-        $external_id = 'bk.' . time() . '.' . wp_rand( 1000000000, 9999999999 );
-    }
+    buykorigw_ensure_first_party_identity( $fbp, $fbc, $ttp, $ttclid, $external_id, $fbclid );
     if ( empty( $custom_data['utm_source'] ) && ! empty( $ttclid ) ) {
         $custom_data['utm_source'] = 'tiktok';
         $custom_data['campaign_source'] = 'tiktok';
@@ -438,7 +414,9 @@ function buykorigw_ajax_track_event() {
         $event_payload['custom_data'] = $custom_data;
     }
 
-    $event_payload['event_id'] = ! empty( $event_id ) ? $event_id : 'wp_' . $event_name . '_' . time() . '_' . wp_rand( 1000, 9999 );
+    $event_payload['event_id'] = ! empty( $event_id )
+        ? $event_id
+        : buykorigw_build_fallback_event_id( $event_name, $custom_data, $page_url, $external_id );
 
     // Send to gateway
     buykorigw_send_event( $event_payload, false );
@@ -491,27 +469,62 @@ function buykorigw_normalize_campaign_value( $key, $value ) {
     return $value;
 }
 
-function buykorigw_ajax_rate_limited() {
-    $ip = sanitize_text_field( $_SERVER['REMOTE_ADDR'] ?? '' );
-    if ( empty( $ip ) ) {
+function buykorigw_ajax_rate_limited( $event_name = '' ) {
+    $critical_events = array( 'Purchase', 'InitiateCheckout', 'AddPaymentInfo', 'Refund' );
+    if ( in_array( $event_name, $critical_events, true ) ) {
         return false;
     }
 
-    $limit      = 120;
+    $visitor_id = isset( $_COOKIE['_buykorigw_vid'] ) ? sanitize_text_field( wp_unslash( $_COOKIE['_buykorigw_vid'] ) ) : '';
+    $ip         = sanitize_text_field( $_SERVER['REMOTE_ADDR'] ?? '' );
+    $identity   = $visitor_id ?: $ip;
+    if ( empty( $identity ) ) {
+        return false;
+    }
+
     $window     = 60;
-    $cache_key  = 'buykorigw_ajax_rate_' . md5( $ip );
+    $bucket     = (int) floor( time() / $window );
+    $scope      = $visitor_id ? 'vid' : 'ip';
+    $limit      = $visitor_id ? 120 : 240;
+    $cache_key  = 'buykorigw_ajax_rate_' . $scope . '_' . md5( $identity ) . '_' . $bucket;
     $hit_count  = (int) get_transient( $cache_key );
 
     if ( $hit_count >= $limit ) {
         return true;
     }
 
-    set_transient( $cache_key, $hit_count + 1, $window );
+    set_transient( $cache_key, $hit_count + 1, $window + 5 );
     return false;
 }
 
 
 // ─── WooCommerce: Purchase Event on Thank You Page (Server-Side) ───────────────
+function buykorigw_purchase_lock_key( $order_id ) {
+    return 'buykorigw_purchase_lock_' . absint( $order_id );
+}
+
+function buykorigw_acquire_purchase_lock( $order_id ) {
+    $lock_key = buykorigw_purchase_lock_key( $order_id );
+    $now      = time();
+    $stale_at = $now - ( 15 * MINUTE_IN_SECONDS );
+
+    if ( add_option( $lock_key, (string) $now, '', 'no' ) ) {
+        return true;
+    }
+
+    $existing = (int) get_option( $lock_key );
+    if ( $existing && $existing < $stale_at ) {
+        delete_option( $lock_key );
+        return add_option( $lock_key, (string) $now, '', 'no' );
+    }
+
+    return false;
+}
+
+function buykorigw_release_purchase_lock( $order_id ) {
+    delete_option( buykorigw_purchase_lock_key( $order_id ) );
+}
+
 add_action( 'woocommerce_thankyou', 'buykorigw_schedule_purchase_sync', 10, 1 );
 add_action( 'woocommerce_checkout_order_processed', 'buykorigw_track_deferred_purchase_after_checkout', 30, 1 );
 add_action( 'woocommerce_store_api_checkout_order_processed', 'buykorigw_track_deferred_purchase_after_store_api_checkout', 30, 1 );
@@ -590,6 +603,10 @@ function buykorigw_track_purchase( $order_id ) {
         return;
     }
 
+    if ( ! buykorigw_acquire_purchase_lock( $order_id ) ) {
+        return;
+    }
+
     // Clear InitiateCheckout cookies so the next checkout attempt will get a fresh event ID
     if ( function_exists( 'buykorigw_first_party_cookie_options' ) ) {
         $clear_options = buykorigw_first_party_cookie_options( -1 );
@@ -605,6 +622,7 @@ function buykorigw_track_purchase( $order_id ) {
 
     $order = wc_get_order( $order_id );
     if ( ! $order ) {
+        buykorigw_release_purchase_lock( $order_id );
         return;
     }
 
@@ -825,6 +843,7 @@ function buykorigw_track_purchase( $order_id ) {
     // Mark as tracked to prevent duplicates
     if ( ! $sent ) {
         buykorigw_update_order_meta( $order_id, '_buykorigw_confirm_status', 'send_failed' );
+        buykorigw_release_purchase_lock( $order_id );
         return;
     }
 

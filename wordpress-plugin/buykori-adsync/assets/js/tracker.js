@@ -7,6 +7,7 @@
     var pageContext = cfg.page_context || {};
     var resolvedContext = '';
     var pageInstanceId = String(Date.now()) + '_' + Math.floor(Math.random() * 1000000);
+    var tiktokPageViewSent = false;
     persistMarketingParams();
     persistTikTokClickId();
     ensureFirstPartyCookies();
@@ -25,7 +26,7 @@
     }
 
     function initializeHybridPixels() {
-        if (!cfg.enable_hybrid) return;
+        if (!cfg.enable_hybrid && !cfg.enable_tiktok_pageview) return;
 
         // Gather cached customer data for advanced matching
         var fbUserData = {};
@@ -54,7 +55,7 @@
             ttUserData.external_id = externalId;
         }
 
-        if (cfg.fb_pixel_id && !window.fbq) {
+        if (cfg.enable_hybrid && cfg.fb_pixel_id && !window.fbq) {
             !function(f,b,e,v,n,t,s)
             {if(f.fbq)return;n=f.fbq=function(){n.callMethod?
             n.callMethod.apply(n,arguments):n.queue.push(arguments)};
@@ -361,7 +362,37 @@
 
     function parsePrice(value) {
         if (value === null || value === undefined) return 0;
-        var cleaned = String(value).replace(/[^0-9.,-]+/g, '').replace(/,/g, '');
+        var digitMap = {
+            '০': '0', '১': '1', '২': '2', '৩': '3', '৪': '4',
+            '৫': '5', '৬': '6', '৭': '7', '৮': '8', '৯': '9',
+            '٠': '0', '١': '1', '٢': '2', '٣': '3', '٤': '4',
+            '٥': '5', '٦': '6', '٧': '7', '٨': '8', '٩': '9'
+        };
+        var cleaned = String(value)
+            .replace(/[০-৯٠-٩]/g, function(digit) { return digitMap[digit] || digit; })
+            .replace(/\s+/g, '')
+            .replace(/[^0-9.,-]+/g, '');
+
+        var lastComma = cleaned.lastIndexOf(',');
+        var lastDot = cleaned.lastIndexOf('.');
+        if (lastComma !== -1 && lastDot !== -1) {
+            var decimalSeparator = lastComma > lastDot ? ',' : '.';
+            cleaned = cleaned.replace(/[,.]/g, function(separator, index) {
+                return separator === decimalSeparator && index === cleaned.lastIndexOf(decimalSeparator) ? '.' : '';
+            });
+        } else if (lastComma !== -1) {
+            var commaParts = cleaned.split(',');
+            if (commaParts.length > 2 || (commaParts[commaParts.length - 1] || '').length === 3) {
+                cleaned = commaParts.join('');
+            } else {
+                cleaned = commaParts.join('.');
+            }
+        } else if ((cleaned.match(/\./g) || []).length > 1) {
+            var dotParts = cleaned.split('.');
+            var decimal = dotParts.pop();
+            cleaned = dotParts.join('') + '.' + decimal;
+        }
+
         var parsed = parseFloat(cleaned);
         return isNaN(parsed) ? 0 : parsed;
     }
@@ -579,8 +610,13 @@
 
     var lastAddToCartIntentAt = 0;
 
+    function createClientEventId(prefix) {
+        return String(prefix || 'wp_evt') + '_' + pageInstanceId + '_' + Date.now() + '_' + Math.floor(Math.random() * 1000000);
+    }
+
     function markAddToCartIntent() {
         lastAddToCartIntentAt = Math.floor(Date.now() / 1000);
+        setCookieLocal('_buykorigw_atc_event_id', createClientEventId('wc_atc'), 0.0014); // About 2 minutes
         setCookieLocal('_buykorigw_atc_intent', String(Math.floor(Date.now() / 1000)), 0.0014); // About 2 minutes
         clearCheckoutMarkers();
     }
@@ -689,6 +725,9 @@
 
     function sendEvent(eventName, eventData, synchronous) {
         eventData = normalizeEventData(eventData || {});
+        var explicitEventId = eventData._buykorigw_event_id || eventData.event_id || '';
+        delete eventData._buykorigw_event_id;
+        delete eventData.event_id;
 
         var ga4ClientId = getGA4ClientId();
         var ga4SessionId = getGA4SessionId();
@@ -704,7 +743,12 @@
         });
 
         var eventId = '';
-        if (eventName === 'InitiateCheckout') {
+        if (explicitEventId) {
+            eventId = String(explicitEventId);
+            if (eventName === 'InitiateCheckout') {
+                markInitiateCheckoutSent(eventId);
+            }
+        } else if (eventName === 'InitiateCheckout') {
             // A new customer intent gets a fresh event ID. The cookie stores the
             // latest ID only so the later order-created fallback can deduplicate
             // against this browser event.
@@ -773,7 +817,10 @@
     }
 
     function triggerHybridPixel(eventName, eventData, eventId) {
-        if (!cfg.enable_hybrid || eventName === 'Identify') return;
+        if (eventName === 'Identify') return;
+        var hybridEnabled = !!cfg.enable_hybrid;
+        var tiktokPageViewEnabled = !!cfg.enable_tiktok_pageview;
+        if (!hybridEnabled && !(tiktokPageViewEnabled && eventName === 'PageView')) return;
         var browserParams = {};
         if (eventData.value !== undefined) browserParams.value = parseFloat(eventData.value);
         if (eventData.currency !== undefined) browserParams.currency = eventData.currency;
@@ -783,16 +830,45 @@
         if (eventData.contents !== undefined) browserParams.contents = eventData.contents;
         if (eventData.num_items !== undefined) browserParams.num_items = eventData.num_items;
 
-        if (window.fbq && cfg.fb_pixel_id) {
+        if (hybridEnabled && window.fbq && cfg.fb_pixel_id) {
             fbq('track', eventName, browserParams, { eventID: eventId });
         }
         if (window.ttq && cfg.tt_pixel_id) {
-            if (eventName === 'PageView' && typeof ttq.page === 'function') {
+            if (eventName === 'PageView' && tiktokPageViewEnabled && typeof ttq.page === 'function' && !tiktokPageViewSent) {
+                tiktokPageViewSent = true;
                 ttq.page();
-            } else {
+                reportBrowserPixelFired('TikTok', eventName, eventId);
+            } else if (hybridEnabled && eventName !== 'PageView') {
                 ttq.track(eventName, browserParams, { event_id: eventId });
             }
         }
+    }
+
+    function reportBrowserPixelFired(platform, eventName, eventId) {
+        if (!cfg.browser_audit_url || !window.fetch || !eventId) return;
+        var device = getDeviceContext();
+        fetch(cfg.browser_audit_url, {
+            method: 'POST',
+            credentials: 'same-origin',
+            keepalive: true,
+            headers: {
+                'Content-Type': 'application/json',
+                'X-WP-Nonce': cfg.rest_nonce || ''
+            },
+            body: JSON.stringify({
+                platform: platform,
+                event_name: eventName,
+                event_id: eventId,
+                event_source_url: window.location.href,
+                page_title: document.title,
+                user_agent: navigator.userAgent || '',
+                device_type: device._bk_device_type || '',
+                device_os: device._bk_device_os || '',
+                device_browser: device._bk_device_browser || '',
+                screen_width: device._bk_screen_width || 0,
+                screen_height: device._bk_screen_height || 0
+            })
+        }).catch(function() {});
     }
 
     function acknowledgeAtcReceipts(eventIds) {
@@ -810,7 +886,10 @@
     function syncAtcReceipts(fallbackPayload, attempt) {
         attempt = attempt || 0;
         if (!cfg.atc_receipts_url || !window.fetch) {
-            if (fallbackPayload) sendEvent('AddToCart', fallbackPayload);
+            if (fallbackPayload) {
+                fallbackPayload._buykorigw_event_id = getCookie('_buykorigw_atc_event_id') || '';
+                sendEvent('AddToCart', fallbackPayload);
+            }
             return;
         }
         if (atcReceiptSyncInFlight) {
@@ -839,6 +918,7 @@
                 if (fallbackPayload && attempt < 2) {
                     setTimeout(function() { syncAtcReceipts(fallbackPayload, attempt + 1); }, (attempt + 1) * 450);
                 } else if (fallbackPayload) {
+                    fallbackPayload._buykorigw_event_id = getCookie('_buykorigw_atc_event_id') || '';
                     sendEvent('AddToCart', fallbackPayload);
                 }
             }).catch(function() {
@@ -846,13 +926,14 @@
                 if (fallbackPayload && attempt < 2) {
                     setTimeout(function() { syncAtcReceipts(fallbackPayload, attempt + 1); }, (attempt + 1) * 450);
                 } else if (fallbackPayload) {
+                    fallbackPayload._buykorigw_event_id = getCookie('_buykorigw_atc_event_id') || '';
                     sendEvent('AddToCart', fallbackPayload);
                 }
             });
     }
 
     function sendViaRestWithRetry(jsonBody, eventName, eventData, eventId, attempt) {
-        queueRestEvent(jsonBody);
+        if ((attempt || 0) === 0) queueRestEvent(jsonBody);
         var headers = {'Content-Type': 'application/json'};
         if (cfg.rest_nonce) headers['X-WP-Nonce'] = cfg.rest_nonce;
         fetch(cfg.rest_url, {
@@ -895,10 +976,19 @@
         try {
             var payload = JSON.parse(jsonBody);
             if (!payload || !payload.event_id) return;
+            var existing = null;
             var queue = getQueuedEvents().filter(function(item) {
-                return item && item.event_id !== payload.event_id;
+                if (item && item.event_id === payload.event_id) {
+                    existing = item;
+                    return false;
+                }
+                return !!item;
             });
-            queue.push({ event_id: payload.event_id, body: jsonBody, queued_at: Date.now() });
+            queue.push({
+                event_id: payload.event_id,
+                body: jsonBody,
+                queued_at: existing && existing.queued_at ? existing.queued_at : Date.now()
+            });
             localStorage.setItem('buykorigw_event_queue', JSON.stringify(queue.slice(-20)));
         } catch(e) {}
     }
@@ -950,9 +1040,13 @@
     function sendViaAjax(eventName, eventData, eventId) {
         var fd = buildAjaxFormData(eventName, eventData, eventId);
         if (navigator.sendBeacon) {
-            navigator.sendBeacon(cfg.ajax_url, fd);
+            if (navigator.sendBeacon(cfg.ajax_url, fd)) {
+                removeQueuedEvent(eventId);
+            }
         } else {
-            fetch(cfg.ajax_url, { method: 'POST', body: fd, keepalive: true });
+            fetch(cfg.ajax_url, { method: 'POST', body: fd, keepalive: true }).then(function(response) {
+                if (response && response.ok) removeQueuedEvent(eventId);
+            }).catch(function() {});
         }
     }
 
@@ -984,6 +1078,9 @@
             if (!out.content_ids.length) delete out.content_ids;
         }
 
+        if (out.value !== undefined) out.value = parsePrice(out.value);
+        if (out.price !== undefined) out.price = parsePrice(out.price);
+
         if (out.contents && Array.isArray(out.contents)) {
             out.contents = out.contents.map(function(item) {
                 if (!item) return false;
@@ -994,15 +1091,17 @@
                 item.content_type = item.content_type || 'product';
                 item.quantity = Math.max(1, parseInt(item.quantity || 1, 10));
                 if (item.item_price === undefined && item.price !== undefined) {
-                    item.item_price = parseFloat(item.price) || 0;
+                    item.item_price = parsePrice(item.price);
                 }
+                if (item.item_price !== undefined) item.item_price = parsePrice(item.item_price);
+                if (item.price !== undefined) item.price = parsePrice(item.price);
                 return item;
             }).filter(Boolean);
             if (!out.contents.length) delete out.contents;
         }
 
         if (!out.contents && out.content_ids && out.content_ids.length) {
-            var fallbackPrice = out.content_ids.length === 1 ? (parseFloat(out.value || 0) || 0) : 0;
+            var fallbackPrice = out.content_ids.length === 1 ? parsePrice(out.value || 0) : 0;
             out.contents = out.content_ids.map(function(id) {
                 return {
                     id: String(id),
@@ -1237,50 +1336,8 @@
             sendViewContentOnce();
         }
 
-        // Variation change dynamic trigger
-        if (typeof jQuery !== 'undefined' && cfg.enable_variations) {
-            jQuery(document.body).on('found_variation', function(e, variation) {
-                if (variation && variation.variation_id) {
-                    var varId = String(variation.variation_id);
-                    if (eventOnce('ViewContentVar:' + varId + ':' + currentPathKey(), 300)) {
-                        var contentIdFormat = cfg.content_id_format || 'id';
-                        var productId = (contentIdFormat === 'sku' && variation.sku) ? variation.sku : varId;
-                        var productPrice = parseFloat(variation.display_price || cfg.product.price);
-
-                        var attributes = {};
-                        if (variation.attributes) {
-                            Object.keys(variation.attributes).forEach(function(k) {
-                                attributes[k.replace('attribute_', '')] = variation.attributes[k];
-                            });
-                        }
-
-                        var item = {
-                            id: productId,
-                            content_id: productId,
-                            content_type: 'product',
-                            content_name: cfg.product.name,
-                            content_category: cfg.product.category || '',
-                            quantity: 1,
-                            item_price: productPrice,
-                            price: productPrice
-                        };
-                        if (Object.keys(attributes).length) {
-                            item.attributes = attributes;
-                        }
-
-                        sendEvent('ViewContent', {
-                            content_ids: [productId],
-                            contents: [item],
-                            content_name: cfg.product.name,
-                            content_type: 'product',
-                            content_category: cfg.product.category || '',
-                            value: productPrice,
-                            currency: cfg.product.currency
-                        });
-                    }
-                }
-            });
-        }
+        // Variant selections update AddToCart/checkout payloads, but they should
+        // not create extra ViewContent events for the same product page view.
     }
 
     function observeLandingProductCards() {
@@ -1628,16 +1685,19 @@
     }
 
     var incompleteCheckoutTimer = null;
-    function scheduleIncompleteCheckoutCapture() {
+    var lastIncompleteCheckoutSignature = '';
+    var lastIncompleteCheckoutAt = 0;
+
+    function scheduleIncompleteCheckoutCapture(delayMs) {
         if (!cfg.incomplete_checkout_url || !window.fetch || isThankYouFlowPage()) return;
         clearTimeout(incompleteCheckoutTimer);
-        incompleteCheckoutTimer = setTimeout(captureIncompleteCheckout, 1200);
+        incompleteCheckoutTimer = setTimeout(captureIncompleteCheckout, delayMs === undefined ? 5000 : delayMs);
     }
 
-    function captureIncompleteCheckout() {
+    function buildIncompleteCheckoutPayload() {
         var customer = getCustomerData();
         var phone = normalizeRecoveryPhone(customer.ph || '');
-        if (!phone) return;
+        if (!phone) return null;
         var checkout = checkoutPayload('incomplete_checkout_capture');
         var campaignData = {};
         ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term'].forEach(function(key) {
@@ -1650,26 +1710,79 @@
             getFieldValue(['#billing_city', 'input[name="billing_city"]']),
             getFieldValue(['#billing_state', 'select[name="billing_state"], input[name="billing_state"]'])
         ].filter(Boolean);
+
+        return {
+            visitor_id: getExternalId(),
+            phone: phone,
+            customer_name: [customer.fn || '', customer.ln || ''].join(' ').trim(),
+            email: customer.em || '',
+            address: addressParts.join(', '),
+            products: checkout.contents || [],
+            amount: checkout.value || 0,
+            currency: checkout.currency || 'BDT',
+            page_url: window.location.href,
+            campaign_data: campaignData
+        };
+    }
+
+    function postIncompleteCheckoutPayload(payload, synchronous) {
+        if (!payload || !cfg.incomplete_checkout_url) return false;
+        var body = JSON.stringify(payload);
+
+        if (synchronous && navigator.sendBeacon) {
+            try {
+                var blob = new Blob([body], { type: 'application/json' });
+                if (navigator.sendBeacon(cfg.incomplete_checkout_url, blob)) return true;
+            } catch(e) {}
+        }
+
+        if (synchronous) {
+            try {
+                var xhr = new XMLHttpRequest();
+                xhr.open('POST', cfg.incomplete_checkout_url, false);
+                xhr.setRequestHeader('Content-Type', 'application/json');
+                if (cfg.rest_nonce) xhr.setRequestHeader('X-WP-Nonce', cfg.rest_nonce);
+                xhr.send(body);
+                return true;
+            } catch(e) {
+                return false;
+            }
+        }
+
+        if (!window.fetch) return false;
         fetch(cfg.incomplete_checkout_url, {
             method: 'POST',
             credentials: 'same-origin',
+            keepalive: true,
             headers: {
                 'Content-Type': 'application/json',
                 'X-WP-Nonce': cfg.rest_nonce || ''
             },
-            body: JSON.stringify({
-                visitor_id: getExternalId(),
-                phone: phone,
-                customer_name: [customer.fn || '', customer.ln || ''].join(' ').trim(),
-                email: customer.em || '',
-                address: addressParts.join(', '),
-                products: checkout.contents || [],
-                amount: checkout.value || 0,
-                currency: checkout.currency || 'BDT',
-                page_url: window.location.href,
-                campaign_data: campaignData
-            })
+            body: body
         }).catch(function() {});
+        return true;
+    }
+
+    function captureIncompleteCheckout(options) {
+        options = options || {};
+        var payload = buildIncompleteCheckoutPayload();
+        if (!payload) return;
+
+        var signature = [
+            payload.visitor_id,
+            payload.phone,
+            payload.amount,
+            (payload.products || []).map(function(item) {
+                return String(item.id || item.content_id || '') + ':' + String(item.quantity || 1);
+            }).join('|')
+        ].join('::');
+        var now = Date.now();
+        if (!options.force && signature === lastIncompleteCheckoutSignature && now - lastIncompleteCheckoutAt < 5000) {
+            return;
+        }
+        lastIncompleteCheckoutSignature = signature;
+        lastIncompleteCheckoutAt = now;
+        postIncompleteCheckoutPayload(payload, !!options.synchronous);
     }
 
     var initiateCheckoutSent = false;
@@ -1764,7 +1877,7 @@
             if (hasTrustedCheckoutInput(target)) {
                 sendInitiateCheckoutOnce('checkout_field_input');
             }
-            scheduleIncompleteCheckoutCapture();
+            scheduleIncompleteCheckoutCapture(target.matches('input[type="tel"], input[name*="phone"], #billing_phone, #shipping_phone, #phone') ? 5000 : 8000);
         }
 
         document.addEventListener('input', maybeFireFromField, true);
@@ -1805,10 +1918,21 @@
                 } else if (isPhone && validatePhone(val)) {
                     sendEvent('Identify', { ph: val });
                     sendInitiateCheckoutOnce('checkout_phone_blur');
-                    scheduleIncompleteCheckoutCapture();
+                    scheduleIncompleteCheckoutCapture(5000);
                 }
             }
         }, true);
+
+        window.addEventListener('pagehide', function() {
+            clearTimeout(incompleteCheckoutTimer);
+            captureIncompleteCheckout({ synchronous: true, force: true });
+        });
+
+        document.addEventListener('visibilitychange', function() {
+            if (document.visibilityState !== 'hidden') return;
+            clearTimeout(incompleteCheckoutTimer);
+            captureIncompleteCheckout({ synchronous: true, force: true });
+        });
     }
 
     function isCheckoutFlowPage() {

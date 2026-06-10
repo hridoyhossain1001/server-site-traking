@@ -711,6 +711,70 @@ async def test_admin_api_client_intelligence_support_notes_and_server_health():
 
 
 @pytest.mark.anyio
+async def test_admin_client_edit_syncs_trial_and_paid_growth_quotas():
+    async with TestingSessionLocal() as session:
+        client_row = Client(
+            name="Plan Sync Store",
+            api_key="plan-sync-api-key",
+            portal_key="plan-sync-portal-key",
+            pixel_id="987654321",
+            access_token=encrypt_token("fb-token"),
+            domain="plan-sync.example.com",
+            is_active=True,
+            billing_status="paid",
+            plan_tier="growth",
+            monthly_limit=500_000,
+        )
+        session.add(client_row)
+        await session.commit()
+        await session.refresh(client_row)
+        client_id = client_row.id
+
+    api_client = TestClient(app)
+    headers = {"X-Admin-API-Key": "test-admin-api-key"}
+
+    trial = api_client.patch(
+        f"/api/v1/admin/api/clients/{client_id}",
+        headers=headers,
+        json={
+            "plan_tier": "growth",
+            "billing_status": "trial",
+            "monthly_limit": 500_000,
+        },
+    )
+    assert trial.status_code == 200
+    assert trial.json()["client"]["billing_status"] == "trial"
+    assert trial.json()["client"]["monthly_limit"] == 25_000
+    assert trial.json()["client"]["orders_quota"] == 300
+
+    paid = api_client.patch(
+        f"/api/v1/admin/api/clients/{client_id}",
+        headers=headers,
+        json={
+            "plan_tier": "growth",
+            "billing_status": "paid",
+            "monthly_limit": 25_000,
+        },
+    )
+    assert paid.status_code == 200
+    assert paid.json()["client"]["billing_status"] == "paid"
+    assert paid.json()["client"]["monthly_limit"] == 500_000
+    assert paid.json()["client"]["orders_quota"] == 2_000
+
+    custom = api_client.patch(
+        f"/api/v1/admin/api/clients/{client_id}",
+        headers=headers,
+        json={
+            "plan_tier": "growth",
+            "billing_status": "paid",
+            "monthly_limit": 750_000,
+        },
+    )
+    assert custom.status_code == 200
+    assert custom.json()["client"]["monthly_limit"] == 750_000
+
+
+@pytest.mark.anyio
 async def test_admin_api_events_endpoint():
     from app.models.event_log import EventLog
     

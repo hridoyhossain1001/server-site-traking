@@ -16,6 +16,7 @@ from app.routers.events import _is_domain_allowed, _verify_capi_signature
 from app.routers.webhook import _client_api_key_from_request
 from app.main import _is_tracker_path
 from app.services.auth_service import verify_admin_password
+from app.security import encrypt_token, encrypted_credential_is_configured, meta_credentials_configured
 from app import limiter as limiter_module
 from starlette.requests import Request
 from fastapi.testclient import TestClient
@@ -169,6 +170,26 @@ def test_mask_secret_keeps_edges_only():
     assert masked.startswith("abcdef")
     assert masked.endswith("7890")
     assert "123456" not in masked
+
+
+def test_pending_meta_credentials_are_not_configured():
+    client = type("Client", (), {
+        "pixel_id": "0",
+        "access_token": encrypt_token("pending_setup"),
+    })()
+
+    assert not encrypted_credential_is_configured(client.access_token)
+    assert not meta_credentials_configured(client)
+
+
+def test_real_meta_credentials_are_configured():
+    client = type("Client", (), {
+        "pixel_id": "123456789",
+        "access_token": encrypt_token("real-meta-token"),
+    })()
+
+    assert encrypted_credential_is_configured(client.access_token)
+    assert meta_credentials_configured(client)
 
 
 def test_plugin_update_signature_contract():
