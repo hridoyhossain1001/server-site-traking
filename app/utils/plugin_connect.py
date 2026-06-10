@@ -11,7 +11,8 @@ from fastapi import HTTPException, Request
 
 TOKEN_RE = re.compile(r"^[A-Za-z0-9._~-]{16,160}$")
 PUBLIC_GATEWAY_BASE_URL = os.getenv("PUBLIC_GATEWAY_BASE_URL", "").rstrip("/")
-ALLOWED_GATEWAY_HOSTS = {
+DEFAULT_GATEWAY_HOSTS = {"api.buykori.app", "track.buykori.app"}
+ALLOWED_GATEWAY_HOSTS = DEFAULT_GATEWAY_HOSTS | {
     h.strip().lower()
     for h in os.getenv("ALLOWED_GATEWAY_HOSTS", "").split(",")
     if h.strip()

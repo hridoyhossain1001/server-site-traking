@@ -66,7 +66,8 @@ PLUGIN_DOWNLOAD_URL = os.getenv("PLUGIN_DOWNLOAD_URL", "")
 PLUGIN_PROTECTED_PACKAGE = plugin_protection_enabled()
 PLUGIN_PRECONFIGURED_DOWNLOADS = os.getenv("PLUGIN_PRECONFIGURED_DOWNLOADS", "false").lower() in {"1", "true", "yes"}
 PUBLIC_GATEWAY_BASE_URL = os.getenv("PUBLIC_GATEWAY_BASE_URL", "").rstrip("/")
-ALLOWED_GATEWAY_HOSTS = {
+DEFAULT_GATEWAY_HOSTS = {"api.buykori.app", "track.buykori.app"}
+ALLOWED_GATEWAY_HOSTS = DEFAULT_GATEWAY_HOSTS | {
     h.strip().lower()
     for h in os.getenv("ALLOWED_GATEWAY_HOSTS", "").split(",")
     if h.strip()
